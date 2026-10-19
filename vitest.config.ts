@@ -6,8 +6,10 @@ export default defineConfig({
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     environment: "node",
     globals: true,
-    maxWorkers: 4,
-    // Windows CI 并发采集覆盖率时，真实 SQLite/文件系统测试可能超过默认 5 秒。
+    // 每个测试 worker 还会启动 PDF/OCR/崩溃恢复子进程；Windows CI 同时运行
+    // 多个文件会让冷启动争抢 CPU/磁盘，触发应用自身的解析期限。串行保留真实期限。
+    maxWorkers: process.platform === "win32" ? 1 : 4,
+    // Windows CI 采集覆盖率时，真实 SQLite/文件系统测试可能超过默认 5 秒。
     testTimeout: process.platform === "win32" ? 30_000 : 5_000,
     coverage: {
       provider: "v8",
