@@ -2008,7 +2008,7 @@ describe("隔离 SQLite 暂存", () => {
     } finally {
       execSpy.mockRestore();
     }
-    expect(calls).toContain("BEGIN");
+    expect(calls).toContain("BEGIN IMMEDIATE");
     expect(calls).toContain("ROLLBACK");
     expect(calls).not.toContain("COMMIT");
   });
@@ -2168,7 +2168,7 @@ describe("隔离 SQLite 暂存", () => {
     await expectRejectedAndClean(chunksOf(serializeJsonRecords(fixture)), /外键/);
   });
 
-  it("暂存事务在完整校验后提交并最后开启外键", async () => {
+  it("暂存事务包含所有建表并在完整校验后提交，最后开启外键", async () => {
     const fixture = await exportedBytes();
     const calls: string[] = [];
     const originalExec = DatabaseSync.prototype.exec;
@@ -2183,14 +2183,43 @@ describe("隔离 SQLite 暂存", () => {
       execSpy.mockRestore();
     }
     try {
-      expect(calls).toContain("BEGIN");
+      expect(calls).toContain("BEGIN IMMEDIATE");
       expect(calls).toContain("COMMIT");
-      expect(calls.indexOf("PRAGMA foreign_keys = OFF")).toBeLessThan(calls.indexOf("BEGIN"));
-      expect(calls.indexOf("BEGIN")).toBeLessThan(calls.indexOf("COMMIT"));
+      const schemaCalls = calls.filter((sql) => /^CREATE TABLE\b/i.test(sql));
+      expect(schemaCalls).toHaveLength(backup.TABLES_INSERT_ORDER.length);
+      expect(calls.indexOf("PRAGMA foreign_keys = OFF")).toBeLessThan(calls.indexOf("BEGIN IMMEDIATE"));
+      for (const sql of schemaCalls) {
+        expect(calls.indexOf("BEGIN IMMEDIATE")).toBeLessThan(calls.indexOf(sql));
+        expect(calls.indexOf(sql)).toBeLessThan(calls.indexOf("COMMIT"));
+      }
       expect(calls.indexOf("COMMIT")).toBeLessThan(calls.indexOf("PRAGMA foreign_keys = ON"));
     } finally {
       staged?.dispose();
     }
+  });
+
+  it("复制表结构中途失败时回滚已建表并清理暂存目录", async () => {
+    const fixture = await exportedBytes();
+    const schemaError = new Error("injected schema copy failure");
+    const originalExec = DatabaseSync.prototype.exec;
+    let createdTables = 0;
+    let tablesAfterRollback: unknown[] | undefined;
+    const execSpy = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql: string) {
+      if (/^CREATE TABLE\b/i.test(sql) && ++createdTables === 2) throw schemaError;
+      const result = originalExec.call(this, sql);
+      if (sql === "ROLLBACK") {
+        tablesAfterRollback = this.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
+      }
+      return result;
+    });
+    try {
+      await expect(staging.stageBackupRecordStream(sourceOf(fixture), sourceDatabase)).rejects.toBe(schemaError);
+    } finally {
+      execSpy.mockRestore();
+    }
+    expect(createdTables).toBe(2);
+    expect(tablesAfterRollback).toEqual([]);
+    await expectRestoreDirectoriesToClear();
   });
 
   it("解析主错误不被 rmSync 清理失败覆盖", async () => {

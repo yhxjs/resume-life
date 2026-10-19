@@ -6,6 +6,8 @@ import { afterEach, expect, it } from "vitest";
 
 const directories: string[] = [];
 const root = process.cwd();
+// Windows CI 的冷启动包含 TypeScript 转译与真实数据库/文件落盘。
+const subprocessTimeout = process.platform === "win32" ? 60_000 : 20_000;
 // 子进程必须执行真实数据库/文件代码，且硬退出不能被测试运行器的 finally 截获。
 const loader = `
 const fs = require('node:fs'), path = require('node:path');
@@ -25,10 +27,17 @@ console.info = console.warn = () => {};
 `;
 
 function run(directory: string, source: string) {
-  return spawnSync(process.execPath, ["-e", loader + source], {
-    cwd: root, encoding: "utf8", timeout: 20_000,
+  const result = spawnSync(process.execPath, ["-e", loader + source], {
+    cwd: root, encoding: "utf8", timeout: subprocessTimeout,
     env: { ...process.env, RESUME_LIFE_DATA_DIR: directory, NODE_ENV: "production" },
   });
+  if (result.error) {
+    throw new Error(
+      `备份恢复子进程执行失败：${result.error.message} (timeout=${subprocessTimeout}ms, status=${result.status}, signal=${result.signal})\n${result.stderr}`,
+      { cause: result.error },
+    );
+  }
+  return result;
 }
 
 afterEach(() => {
@@ -38,6 +47,7 @@ afterEach(() => {
   }
 });
 
+// 部分阶段需要崩溃、恢复中断、再次启动，共三个子进程。
 it.each(["manifest-before", "manifest-after", "quarantine-before", "quarantine-after", "promote-before", "promote-after", "commit-before", "commit-after", "rollback-after-copy", "cleanup-after-manifest"])(
   "恢复在 %s 硬退出后，重启自动恢复数据库与头像一致", (phase) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "resume-life-crash-test-"));
@@ -126,7 +136,7 @@ console.log(JSON.stringify({
       incoming: committed ? "new-photo" : null,
       pending: 0, snapshots: 1,
     });
-  }, 40_000,
+  }, subprocessTimeout * 3 + 10_000,
 );
 
 it("合法头像文件名与恢复目录前缀相同不会阻止数据库重启", () => {
@@ -147,4 +157,4 @@ db.close();
 `);
   expect(restarted.status, restarted.stderr).toBe(0);
   expect(restarted.stdout.trim()).toBe("valid-photo");
-});
+}, subprocessTimeout * 2 + 10_000);

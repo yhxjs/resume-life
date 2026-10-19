@@ -178,6 +178,10 @@ export async function stageBackupRecordStream(
     stagingDatabase = new DatabaseSync(path.join(temporaryDirectory, "staging.db"));
     if (process.platform !== "win32") fs.chmodSync(path.join(temporaryDirectory, "staging.db"), 0o600);
     stagingDatabase.exec("PRAGMA foreign_keys = OFF");
+    // 建表与导入共用事务，避免每张表独立提交在 Windows 上反复同步磁盘。
+    // 先登记事务状态，复制表结构或准备语句失败时也能统一回滚。
+    stagingDatabase.exec("BEGIN IMMEDIATE");
+    transactionOpen = true;
 
     const tables = [...TABLES_CLEAR_ORDER];
     const allowedTables = new Set<string>(tables);
@@ -188,8 +192,6 @@ export async function stageBackupRecordStream(
       const sql = `INSERT INTO ${quoteIdentifier(table)} (${columns.map((column) => quoteIdentifier(column.name)).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`;
       return [table, stagingDatabase!.prepare(sql)] as const;
     }));
-    stagingDatabase.exec("BEGIN");
-    transactionOpen = true;
 
     function validateValue(value: unknown): { record: BackupRecord; apply: () => void } {
       if (!isRecord(value) || typeof value.kind !== "string") {
