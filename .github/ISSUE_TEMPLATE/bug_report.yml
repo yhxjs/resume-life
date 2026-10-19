@@ -1,0 +1,29 @@
+name: Bug report
+description: 报告可复现的问题
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请不要上传真实简历、数据库、备份、头像、API Key 或包含个人信息的截图。
+  - type: input
+    id: runtime
+    attributes:
+      label: Node.js 与操作系统
+      placeholder: "Node 24.21.0 / Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 脱敏复现步骤
+      description: 请提供最小复现步骤和预期/实际结果。
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: 已运行的验证
+      description: 请列出定向测试、日志 requestId 和其他检查结果，不要粘贴敏感正文。
+    validations:
+      required: true

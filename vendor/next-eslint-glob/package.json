@@ -1,0 +1,11 @@
+{
+  "name": "@resume-life/next-eslint-glob",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "main": "index.cjs",
+  "dependencies": {
+    "picomatch": "4.0.7",
+    "tinyglobby": "0.2.17"
+  }
+}

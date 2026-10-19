@@ -1,0 +1,94 @@
+name: Release checks
+on: [push, pull_request]
+# 同一分支的连续推送只保留最新一次检查，取消已过时的 run，避免 job 叠加
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Cache Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - name: Generate SBOM and checksums
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          npm sbom --sbom-format cyclonedx > artifacts/resume-life-sbom.cdx.json
+          sha256sum package-lock.json artifacts/resume-life-sbom.cdx.json > artifacts/supply-chain.sha256
+      - name: Upload supply chain evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: supply-chain-evidence
+          path: artifacts/
+      - run: npm run setup:ocr
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check:release
+      - name: Unit tests with coverage gate
+        run: npm run test:coverage
+      # 门禁失败时把 lcov 报告留成 artifact，免得只能在本地复现才能定位缺口
+      - name: Upload coverage report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+      - name: Page coverage metric
+        run: npm run check:page-coverage
+      - run: npm audit --omit=dev --audit-level=moderate
+      # dev 依赖在 CI 中同样会被执行（playwright / vitest / eslint / tsc），
+      # 因此完整依赖链也必须通过 high 门槛。
+      - run: npm audit --audit-level=high
+
+  # 制品证明只在受信任的默认分支推送中执行，普通 PR 只需要读权限即可完成检查。
+  attest:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: supply-chain-evidence
+          path: artifacts/
+      - name: Attest SBOM provenance
+        uses: actions/attest-build-provenance@9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad # v2
+        with:
+          subject-path: artifacts/resume-life-sbom.cdx.json
+
+  # Windows 覆盖 SQLite 文件锁、生产构建和关键真实后端浏览器冒烟。
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run setup:ocr
+      - run: npx playwright install chromium
+      - run: npm run test:coverage
+      - run: npm run check:page-coverage
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run check:build-trace
+      - run: npx playwright test tests/e2e/real-backend-pagination.spec.ts --grep "真实 API：题库游标分页"

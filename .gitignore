@@ -1,0 +1,61 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+
+# testing
+/coverage
+/test-results/
+/playwright-report/
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+credentials.json
+secrets.*
+.htpasswd
+service-account*.json
+vault.yml
+
+# debug
+*.log
+*.log.*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# local database
+/data/
+
+# runtime server logs
+/server.log
+/server-err.log
+
+# 用户上传的头像：真实个人照片，绝不入库
+public/uploads/
+
+# 离线 OCR 模型
+*.traineddata
+
+# 本地工具目录：截图与草稿可能含真实简历内容，绝不入库
+.impeccable/
+.claude/
+
