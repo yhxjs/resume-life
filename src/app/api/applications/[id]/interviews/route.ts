@@ -1,14 +1,16 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import {
   ApplicationInputError,
-  INTERVIEW_ROUND_STATUSES,
+  assertApplicationInterviewTextInput,
+  parseInterviewRoundStatus,
   createApplicationInterview,
   getApplicationById,
   listApplicationInterviews,
   parseInterviewReminderMinutes,
-  type InterviewRoundStatus,
+  parseInterviewAdvanceStage,
 } from "@/lib/applications";
 
 async function handleGet(
@@ -16,7 +18,7 @@ async function handleGet(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: rawId } = await params;
-  const id = Number(rawId);
+  const id = parseCanonicalPositiveId(rawId);
   if (!Number.isInteger(id)) {
     return NextResponse.json({ error: "无效的投递 ID" }, { status: 400 });
   }
@@ -35,7 +37,7 @@ async function handlePost(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: rawId } = await params;
-  const id = Number(rawId);
+  const id = parseCanonicalPositiveId(rawId);
   if (!Number.isInteger(id)) {
     return NextResponse.json({ error: "无效的投递 ID" }, { status: 400 });
   }
@@ -59,7 +61,7 @@ async function handlePost(
     advance_stage?: unknown;
   } | null;
 
-  if (!body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
     return NextResponse.json({ error: "请求数据无效" }, { status: 400 });
   }
 
@@ -68,25 +70,18 @@ async function handlePost(
     return NextResponse.json({ error: "面试轮次名称不能为空" }, { status: 400 });
   }
 
-  let status: InterviewRoundStatus = "scheduled";
-  if (body.status !== undefined && body.status !== null && body.status !== "") {
-    if (typeof body.status !== "string" || !INTERVIEW_ROUND_STATUSES.includes(body.status as InterviewRoundStatus)) {
-      return NextResponse.json({ error: "面试轮次状态无效" }, { status: 400 });
-    }
-    status = body.status as InterviewRoundStatus;
-  }
-
   try {
+    assertApplicationInterviewTextInput(body);
     const interview = createApplicationInterview(id, {
       round_name: roundName,
       interview_time: typeof body.interview_time === "string" ? body.interview_time : "",
-      status,
+      status: parseInterviewRoundStatus(body.status, "scheduled"),
       interviewer: typeof body.interviewer === "string" ? body.interviewer : "",
       location: typeof body.location === "string" ? body.location : "",
       meeting_url: typeof body.meeting_url === "string" ? body.meeting_url : "",
       reminder_minutes: parseInterviewReminderMinutes(body.reminder_minutes),
       notes: typeof body.notes === "string" ? body.notes : "",
-    }, { advanceStage: Boolean(body.advance_stage) });
+    }, { advanceStage: parseInterviewAdvanceStage(body.advance_stage) });
 
     return NextResponse.json(interview, { status: 201 });
   } catch (err) {

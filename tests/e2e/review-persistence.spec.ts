@@ -96,7 +96,7 @@ test("首页停留跨日自动刷新当地待复习队列", async ({ page }) => 
     loads++;
     expect(new URL(route.request().url()).searchParams.get("time_zone")).toBe("America/Los_Angeles");
     const nextDay = loads > 1;
-    const result: ReviewList = { items: nextDay ? [{ id: 91, source: "notebook", source_id: 1, source_label: "跨日验证", question: "跨日后到期的复习题", mastery: "learning", interval_days: 1, ease_factor: 250, repetitions: 1, review_count: 1, lapses: 0, next_review_date: "2026-09-28", last_reviewed_at: "2026-09-27T08:00:00Z" }] : [], nextCursor: null, summary: { date: nextDay ? "2026-09-28" : "2026-09-27", total: 1, due: nextDay ? 1 : 0, notebook: nextDay ? 1 : 0, remedial: 0, overdue: 0, completed_today: 0 } };
+    const result: ReviewList = { items: nextDay ? [{ id: 91, source: "notebook", source_id: 1, source_label: "跨日验证", question: "跨日后到期的复习题", mastery: "learning", interval_days: 1, ease_factor: 250, repetitions: 1, review_count: 1, lapses: 0, next_review_date: "2026-09-28", sort_date: "2026-09-28", last_reviewed_at: "2026-09-27T08:00:00Z" }] : [], nextCursor: null, summary: { date: nextDay ? "2026-09-28" : "2026-09-27", total: 1, due: nextDay ? 1 : 0, notebook: nextDay ? 1 : 0, remedial: 0, overdue: 0, completed_today: 0 } };
     return route.fulfill({ json: result });
   });
   await page.goto("/");

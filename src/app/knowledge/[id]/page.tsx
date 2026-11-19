@@ -11,13 +11,16 @@ import { ScanRepoModal } from "./scan-repo-modal";
 import { useProjectDetail } from "./use-project-detail";
 import { useProjectRepoPaths } from "./use-project-repo-paths";
 import { ProjectSummaryHistory } from "./project-summary-history";
-import { compareProjectSummaries } from "@/lib/project-summary-diff";
-import { normalizeSummary } from "@/lib/summary";
 
 export default function ProjectDetailPage() {
   const params = useParams<{ id: string }>();
-  const view = useProjectDetail(params.id);
-  const repoPathsManager = useProjectRepoPaths(params.id);
+  // 参数切换立即更换整份编辑会话，旧项目内容不能在新项目读取期间继续操作。
+  return <ProjectDetailSession key={params.id} id={params.id} />;
+}
+
+function ProjectDetailSession({ id }: { id: string }) {
+  const view = useProjectDetail(id);
+  const repoPathsManager = useProjectRepoPaths(id);
   const [scanModalOpen, setScanModalOpen] = useState(false);
 
   if (view.error && !view.data) return <LoadError message={view.error} onRetry={view.retryLoad} />;
@@ -60,13 +63,19 @@ export default function ProjectDetailPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <ProjectSummaryWorkbench
           summaryDraft={summary.summaryDraft}
+          savedSummary={data.summary}
           pendingDraft={summary.pendingDraft}
           proposal={summary.proposal}
           selectedKeys={summary.selectedKeys}
           canConfirmDraft={summary.canConfirmDraft}
           summarizing={summary.summarizing}
           savingSummary={summary.savingSummary}
+          saveRecovery={summary.saveRecovery}
+          onRetrySaveCheck={summary.retrySaveCheck}
           sumStatus={summary.sumStatus}
+          refreshError={summary.refreshError}
+          refreshingSummary={summary.refreshingSummary}
+          onRefreshSummary={summary.refreshSummary}
           typewriter={summary.typewriter}
           materialCount={data.materials_total ?? data.materials.length}
           onSummarize={summary.summarize}
@@ -102,14 +111,9 @@ export default function ProjectDetailPage() {
         onPathsChange={repoPathsManager.setRepoPaths}
         onClose={() => setScanModalOpen(false)}
         onSuccess={(scanned, repoPath) => {
-          const generated = normalizeSummary(scanned.summary);
           summary.applyDraft(
             {
-              summary: generated,
-              comparison: scanned.comparison ?? compareProjectSummaries(data.summary, generated, {}),
-              materialChanges: scanned.materialChanges ?? [],
-              materialFingerprint: scanned.materialFingerprint ?? "",
-              revisionId: scanned.revisionId ?? data.summary_revision_id ?? 0,
+              ...scanned,
               source: "repo",
             },
             `已通过扫描仓库「${repoPath}」提炼出五维 STAR 项目亮点！请在下方核验，确认后才会写入项目档案`

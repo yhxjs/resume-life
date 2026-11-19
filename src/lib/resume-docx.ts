@@ -7,6 +7,8 @@ import {
 import { getOrderedBasicKeys, type BasicContent, CustomItem, EducationItem, ModuleData, ProjectItem, SkillsContent, SummaryContent, WorkItem } from "@/lib/modules";
 import { parseRichTextToNodes, type RichTextNode } from "@/lib/rich-text";
 import { DEFAULT_STYLE, type ResumeStyle } from "@/lib/templates";
+import { SKILL_PILL_ALPHA_HEX } from "@/lib/template-styles";
+import { splitResumeColumns } from "@/lib/resume-column-layout";
 
 type Entry = Partial<EducationItem & WorkItem & ProjectItem & CustomItem>;
 type Block = Paragraph | Table;
@@ -35,10 +37,12 @@ function wordColor(color: string): string | undefined {
   return rgb ? rgb.slice(1, 4).map((v) => Math.min(255, Number(v)).toString(16).padStart(2, "0")).join("").toUpperCase() : undefined;
 }
 
-function lightTint(color: string): string {
+function lightTint(color: string, background = "#ffffff"): string {
   const hex = wordColor(color) ?? "000000";
+  const base = wordColor(background) ?? "FFFFFF";
+  const alpha = Number.parseInt(SKILL_PILL_ALPHA_HEX, 16) / 255;
   return [0, 2, 4].map((offset) =>
-    Math.round(255 * (1 - 31 / 255) + Number.parseInt(hex.slice(offset, offset + 2), 16) * 31 / 255)
+    Math.round(Number.parseInt(base.slice(offset, offset + 2), 16) * (1 - alpha) + Number.parseInt(hex.slice(offset, offset + 2), 16) * alpha)
       .toString(16).padStart(2, "0")
   ).join("").toUpperCase();
 }
@@ -206,7 +210,7 @@ function entryHeading(entry: Entry, type: "education" | "work" | "projects" | "c
   ], [width - dateWidth, dateWidth]);
 }
 
-function moduleBlocks(mod: ModuleData, style: ResumeStyle, width: number, nextListInstance: () => number): Block[] {
+function moduleBlocks(mod: ModuleData, style: ResumeStyle, width: number, nextListInstance: () => number, background?: string): Block[] {
   const body: Block[] = [];
   if (mod.type === "basic") {
     const basic = (mod.content ?? {}) as Partial<BasicContent>;
@@ -249,7 +253,7 @@ function moduleBlocks(mod: ModuleData, style: ResumeStyle, width: number, nextLi
       body.push(new Paragraph({ children: plainRuns(items.join(" ｜ ")) }));
     } else if (items.length && style.skillStyle === "pill") {
       body.push(new Paragraph({ children: items.flatMap((item) => [
-        ...plainRuns(item, { color: wordColor(style.accent), shading: { fill: lightTint(style.accent) } }),
+        ...plainRuns(item, { color: wordColor(style.accent), shading: { fill: lightTint(style.accent, background) } }),
         new TextRun("  "),
       ]) }));
     } else {
@@ -286,19 +290,37 @@ export async function resumeToDocx(title: string, modules: ModuleData[], options
 
   if (style.layout === "twocol") {
     const asideWidth = mm(style.asideWidth);
-    const mainWidth = contentWidth - asideWidth;
-    const main: Block[] = [];
-    const aside: Block[] = [];
-    for (const mod of visibleModules) {
-      const entry = mod.type === "education" || mod.type === "work" || mod.type === "projects" || mod.type === "custom";
-      (entry ? main : aside).push(...moduleBlocks(mod, style, entry ? mainWidth : asideWidth, nextListInstance));
-    }
-    children.push(table([
-      new TableCell({ children: main.length ? main : [new Paragraph("")], width: { size: mainWidth, type: WidthType.DXA }, margins: { left: 0, right: px(12), top: 0, bottom: 0 } }),
-      new TableCell({ children: aside.length ? aside : [new Paragraph("")], width: { size: asideWidth, type: WidthType.DXA },
-        borders: { left: { style: BorderStyle.SINGLE, color: "E2E2E2", size: 6 } },
-        margins: { left: px(12), right: 0, top: 0, bottom: 0 } }),
-    ], [mainWidth, asideWidth], false));
+    const gapWidth = px(style.asideGap ?? 20);
+    const mainWidth = contentWidth - asideWidth - gapWidth;
+    const isLeftAside = style.asidePosition === "left";
+    const border = !style.asideBorder || style.asideBorder === "auto" ? (isLeftAside ? "right" : "left") : style.asideBorder;
+    const borderLeft = border === "left" || border === "both";
+    const borderRight = border === "right" || border === "both";
+    const padding = px(style.asidePadding ?? 16);
+    const asideMargins = {
+      top: style.asideBg ? padding : 0, bottom: style.asideBg ? padding : 0,
+      left: style.asideBg || borderLeft ? padding : 0,
+      right: style.asideBg || borderRight ? padding : 0,
+    };
+    const asideInnerWidth = asideWidth - asideMargins.left - asideMargins.right - px(Number(borderLeft) + Number(borderRight));
+    const { main: mainModules, aside: asideModules } = splitResumeColumns(
+      visibleModules.map(module => ({ moduleKey: module.key || module.type, moduleType: module.type, module })), style.asideModules,
+    );
+    const main = mainModules.flatMap(({ module }) => moduleBlocks(module, style, mainWidth, nextListInstance));
+    const aside = asideModules.flatMap(({ module }) => moduleBlocks(module, style, asideInnerWidth, nextListInstance, style.asideBg));
+    const borderOptions = { style: BorderStyle.SINGLE, color: wordColor(style.asideBorderColor || "#e2e2e2"), size: 6 };
+    const mainCell = new TableCell({ children: main.length ? main : [new Paragraph("")],
+      width: { size: mainWidth, type: WidthType.DXA }, margins: { left: 0, right: 0, top: 0, bottom: 0 } });
+    const asideCell = new TableCell({ children: aside.length ? aside : [new Paragraph("")],
+      width: { size: asideWidth, type: WidthType.DXA }, margins: asideMargins,
+      shading: style.asideBg ? { fill: wordColor(style.asideBg) } : undefined,
+      borders: borderLeft || borderRight ? { ...(borderLeft ? { left: borderOptions } : {}), ...(borderRight ? { right: borderOptions } : {}) } : undefined,
+    });
+    // 独立空白列保留网页栏间距，不把 gap 算入带底色侧栏的外宽或内边距。
+    const gapCells = gapWidth ? [new TableCell({ children: [new Paragraph({ spacing: { after: 0 } })],
+      width: { size: gapWidth, type: WidthType.DXA }, margins: { left: 0, right: 0, top: 0, bottom: 0 } })] : [];
+    children.push(table(isLeftAside ? [asideCell, ...gapCells, mainCell] : [mainCell, ...gapCells, asideCell],
+      isLeftAside ? [asideWidth, ...(gapWidth ? [gapWidth] : []), mainWidth] : [mainWidth, ...(gapWidth ? [gapWidth] : []), asideWidth], false));
   } else {
     for (const mod of visibleModules) children.push(...moduleBlocks(mod, style, contentWidth, nextListInstance));
   }

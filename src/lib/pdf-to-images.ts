@@ -73,7 +73,8 @@ export async function processImageBufferToPage(imageBuffer: Buffer, signal?: Abo
       ctx.drawImage(image, 0, 0, width, height);
       const pixels = ctx.getImageData(0, 0, width, height).data;
       let hasVisualContent = false;
-      for (let i = 0; i < pixels.length; i += 64) {
+      // 逐像素检查；固定间隔抽样会将落在采样列之间的窄字形误判为空白。
+      for (let i = 0; i < pixels.length; i += 4) {
         if (pixels[i + 3] > 10 && (pixels[i] < 245 || pixels[i + 1] < 245 || pixels[i + 2] < 245)) {
           hasVisualContent = true; break;
         }
@@ -108,13 +109,22 @@ export async function processImageBufferToPage(imageBuffer: Buffer, signal?: Abo
   );
 }
 
-/** 将最多 MAX_OCR_PAGES 页的 PDF 逐页渲染为高保真 PNG，超限明确拒绝。 */
+/** 渲染全部或指定的原始页码，单次最多 MAX_OCR_PAGES 页，超限明确拒绝。 */
 export async function renderPdfPagesToImages(
   pdfBuffer: Buffer,
   maxPages = MAX_OCR_PAGES,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  pageNumbers?: readonly number[]
 ): Promise<PdfPageImage[]> {
+  signal?.throwIfAborted();
   const pagesToRender = Math.min(MAX_OCR_PAGES, Math.max(0, Math.floor(maxPages)));
+  // 只把已校验的升序整数嵌入沙箱源码，禁止截断、排序或去重掩盖调用错误。
+  const selectedPages = pageNumbers === undefined ? undefined : [...pageNumbers];
+  if (selectedPages) {
+    if (!selectedPages.length || selectedPages.some((page, index) => !Number.isSafeInteger(page) || page < 1 ||
+        (index > 0 && page <= selectedPages[index - 1]!))) throw new FileFormatError("PDF 选择页码无效");
+    if (selectedPages.length > pagesToRender) throw new FileFormatError(`PDF 待检查页面最多支持 ${pagesToRender} 页，请拆分文件后重新导入`);
+  }
   const pdfjsPath = path.resolve(process.cwd(), "node_modules/pdfjs-dist/legacy/build/pdf.mjs");
   const childSource = `
     const path = require("node:path");
@@ -136,11 +146,17 @@ export async function renderPdfPagesToImages(
       }).promise;
       const pages = [];
       try {
-        if (doc.numPages > ${MAX_OCR_PAGES}) {
+        const selectedPages = ${JSON.stringify(selectedPages ?? null)};
+        if (!selectedPages && doc.numPages > ${MAX_OCR_PAGES}) {
           process.stdout.write(JSON.stringify({ error: "扫描 PDF 共 " + doc.numPages + " 页，OCR 最多支持 ${MAX_OCR_PAGES} 页，请拆分文件后重新导入" }));
           return;
         }
-        for (let p = 1; p <= Math.min(doc.numPages, ${pagesToRender}); p++) {
+        if (selectedPages?.some((page) => page > doc.numPages)) {
+          process.stdout.write(JSON.stringify({ error: "PDF 选择页码超出文档范围" }));
+          return;
+        }
+        const pageNumbers = selectedPages || Array.from({ length: Math.min(doc.numPages, ${pagesToRender}) }, (_, index) => index + 1);
+        for (const p of pageNumbers) {
           const page = await doc.getPage(p);
           const base = page.getViewport({ scale: 1 });
           if (!Number.isFinite(base.width) || !Number.isFinite(base.height) || base.width <= 0 || base.height <= 0) {
@@ -159,7 +175,8 @@ export async function renderPdfPagesToImages(
           await page.render({ canvasContext, viewport, canvas }).promise;
           const pixels = canvasContext.getImageData(0, 0, width, height).data;
           let hasVisualContent = false;
-          for (let i = 0; i < pixels.length; i += 64) {
+          // 逐像素检查；固定间隔抽样会将落在采样列之间的窄字形误判为空白。
+          for (let i = 0; i < pixels.length; i += 4) {
             if (pixels[i + 3] > 10 && (pixels[i] < 245 || pixels[i + 1] < 245 || pixels[i + 2] < 245)) {
               hasVisualContent = true;
               break;
@@ -190,9 +207,11 @@ export async function renderPdfPagesToImages(
         pages?: { pageNumber?: unknown; width?: unknown; height?: unknown; hasVisualContent?: unknown; png?: unknown }[];
       };
       if (typeof result.error === "string") throw new FileFormatError(result.error);
-      if (!Array.isArray(result.pages) || result.pages.length > pagesToRender) throw new FileFormatError("PDF 渲染结果无效");
+      if (!Array.isArray(result.pages) || result.pages.length > pagesToRender ||
+          (selectedPages && result.pages.length !== selectedPages.length)) throw new FileFormatError("PDF 渲染结果无效");
       return result.pages.map((page, index) => {
-        if (page.pageNumber !== index + 1 || typeof page.width !== "number" || typeof page.height !== "number"
+        const pageNumber = selectedPages?.[index] ?? index + 1;
+        if (page.pageNumber !== pageNumber || typeof page.width !== "number" || typeof page.height !== "number"
           || page.width < 1 || page.height < 1 || page.width > MAX_DIMENSION || page.height > MAX_DIMENSION
           || page.width * page.height > MAX_RENDER_PIXELS || typeof page.png !== "string"
           || typeof page.hasVisualContent !== "boolean") {
@@ -201,7 +220,7 @@ export async function renderPdfPagesToImages(
         const buffer = Buffer.from(page.png, "base64");
         if (buffer.length > MAX_PAGE_PNG_BYTES) throw new FileFormatError("PDF 页面图像超过大小上限");
         return {
-          pageNumber: index + 1,
+          pageNumber,
           buffer,
           base64: `data:image/png;base64,${page.png}`,
           width: page.width,
@@ -210,6 +229,6 @@ export async function renderPdfPagesToImages(
         };
       });
     },
-    { signal, maxStdoutBytes: Math.ceil(MAX_PAGE_PNG_BYTES * 4 / 3) * pagesToRender + 16_384 }
+    { signal, maxStdoutBytes: Math.ceil(MAX_PAGE_PNG_BYTES * 4 / 3) * (selectedPages?.length ?? pagesToRender) + 16_384 }
   );
 }

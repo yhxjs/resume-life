@@ -1,26 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { confirmDialog, alertDialog } from "@/components/common/confirm-dialog";
+import { ToolHistoryDeletionFeedback } from "@/components/common/tool-history-deletion-feedback";
 import { Combobox } from "@/components/common/combobox";
 import { InlineError } from "@/components/common/inline-error";
 import { Empty, Loading } from "@/components/common/ui-bits";
-import { BANK_KINDS, MAX_BANK_IMPORT } from "@/lib/bank";
+import { BANK_KINDS, MAX_BANK_IMPORT, readBankDirections, readBankListPage, type BankEntry } from "@/lib/bank";
 import { jsonFetch } from "@/lib/fetcher";
 import { btnDanger, btnPrimary, inputCls, textareaCls, labelCls } from "@/lib/ui";
 import { useCursorList } from "@/hooks/use-cursor-list";
 import { useCompositionInput } from "@/hooks/use-composition-input";
+import { useBankImport } from "@/hooks/use-bank-import";
+import { useBankDeletion } from "@/hooks/use-bank-deletion";
 import { errorMessage } from "@/lib/error-message";
 
 type DirectionStat = { direction: string; count: number };
-type BankItem = {
-  id: number;
-  direction: string;
-  kind: string;
-  question: string;
-  created_at: string;
-};
-
 function kindLabel(kind: string): string {
   return BANK_KINDS.find((k) => k.key === kind)?.label ?? kind;
 }
@@ -36,13 +30,6 @@ const SAMPLE_BEHAVIOR_QUESTIONS = `请介绍一次你在团队中与产品经理
 
 export default function BankPage() {
   const [directions, setDirections] = useState<DirectionStat[]>([]);
-
-  // 导入表单
-  const [importDirection, setImportDirection] = useState("");
-  const [importKind, setImportKind] = useState<"tech" | "behavior">("tech");
-  const [importText, setImportText] = useState("");
-  const [importing, setImporting] = useState(false);
-  const [importNotice, setImportNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // 列表筛选（防抖刷新）
   const [filterDirection, setFilterDirection] = useState("");
@@ -60,9 +47,10 @@ export default function BankPage() {
     failedCursor,
     loadMore: loadItems,
     reload: reloadList,
-  } = useCursorList<BankItem>({
-    queryKey: `bank:${filterDirection}:${filterKind}:${keyword.trim()}`,
+  } = useCursorList<BankEntry>({
+    queryKey: JSON.stringify(["bank", filterDirection, filterKind, keyword.trim()]),
     delay: 250,
+    validatePage: (page, cursor) => { readBankListPage(page, { direction: filterDirection, kind: filterKind, keyword, cursor }); },
     buildUrl: (cursor) => {
       const params = new URLSearchParams();
       if (filterDirection) params.set("direction", filterDirection);
@@ -74,15 +62,21 @@ export default function BankPage() {
     },
   });
 
-  const draftCount = new Set(importText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)).size;
-  const totalCount = directions.reduce((acc, d) => acc + d.count, 0);
+  function refreshBank() { reloadList(); setDirectionsReloadVersion(version => version + 1); }
+  const deletion = useBankDeletion(refreshBank);
+  const { draft, change, count: draftCount, locked: importLocked, phase, notice: importNotice, recovery, submit: importQuestions, reread, allowRetry, canStart: canImport } = useBankImport(refreshBank, deletion.canStart);
+  const locked = importLocked || deletion.busy;
+  const visibleItems = items?.filter(item => !deletion.deletedIds.has(item.id)) ?? null;
+  const { direction: importDirection, kind: importKind, text: importText } = draft;
+  const importing = phase === "submitting";
 
   useEffect(() => {
     let cancelled = false;
-    jsonFetch<DirectionStat[]>("/api/bank/directions")
-      .then((list) => {
+    const controller = new AbortController();
+    jsonFetch<unknown>("/api/bank/directions", { signal: controller.signal, cache: "no-store" })
+      .then((value) => {
         if (cancelled) return;
-        setDirections(list);
+        setDirections(readBankDirections(value));
         setDirectionsError("");
       })
       .catch((reason) => {
@@ -91,46 +85,16 @@ export default function BankPage() {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [importNotice, directionsReloadVersion]);
+  }, [directionsReloadVersion]);
 
-  async function importQuestions() {
-    if (!importText.trim() || importing) return;
-    if (draftCount > MAX_BANK_IMPORT) {
-      setImportNotice({ kind: "err", text: `每次最多导入 ${MAX_BANK_IMPORT} 道题，请分批导入` });
-      return;
-    }
-    setImporting(true);
-    setImportNotice(null);
-    try {
-      const data = await jsonFetch<{ count?: number }>("/api/bank", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ direction: importDirection.trim(), kind: importKind, text: importText }),
-      });
-      setImportText("");
-      setImportNotice({ kind: "ok", text: `成功导入 ${data.count ?? 0} 道题${importDirection.trim() ? `（方向：${importDirection.trim()}）` : ""}` });
-      reloadList();
-    } catch (err) {
-      setImportNotice({ kind: "err", text: errorMessage(err) });
-    } finally {
-      setImporting(false);
-    }
-  }
-
-  async function remove(id: number) {
-    if (!(await confirmDialog({ title: "删除题目", message: "确定从题库中删除这道题？", danger: true }))) return;
-    try {
-      await jsonFetch(`/api/bank/${id}`, { method: "DELETE" });
-    } catch (err) {
-      await alertDialog({ title: "删除失败", message: errorMessage(err) });
-      return;
-    }
-    reloadList();
+  function remove(entry: BankEntry) {
+    if (canImport()) void deletion.remove(entry);
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8">
+    <div className="mx-auto min-w-0 max-w-7xl space-y-8 [overflow-wrap:anywhere]">
       {/* 顶部标题栏 */}
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-line pb-5">
         <div>
@@ -141,28 +105,27 @@ export default function BankPage() {
             结构化沉淀技术八股与行为考题；在「题目练习」按 JD/方向出题时，AI 将把此题库作为底层参考题源。
           </p>
         </div>
-        {items !== null && (
+        {visibleItems !== null && (
           <div className="flex items-center gap-2 text-xs text-muted">
-            <span>当前筛选显示：<strong className="font-mono text-ink font-bold text-sm">{items.length}</strong> 题</span>
+            <span>当前筛选显示：<strong className="font-mono text-ink font-bold text-sm">{visibleItems.length}</strong> 题</span>
           </div>
         )}
       </div>
 
       {/* 录入工作台 */}
       <div className="rounded-2xl border border-line bg-card p-6 shadow-card-subtle space-y-4">
+        <fieldset disabled={locked} aria-label="批量录入考题" className="min-w-0 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/70 pb-3">
           <div className="flex items-center gap-2">
             <span aria-hidden className="h-[9px] w-[9px] rounded-[1px] bg-primary" />
             <h2 className="text-sm font-serif font-bold text-ink">批量录入考题</h2>
           </div>
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-muted">快速填入示例：</span>
             <button
               type="button"
               onClick={() => {
-                setImportDirection("前端开发");
-                setImportKind("tech");
-                setImportText(SAMPLE_TECH_QUESTIONS);
+                change({ direction: "前端开发", kind: "tech", text: SAMPLE_TECH_QUESTIONS });
               }}
               className="text-primary hover:underline font-medium"
             >
@@ -172,9 +135,7 @@ export default function BankPage() {
             <button
               type="button"
               onClick={() => {
-                setImportDirection("通用行为");
-                setImportKind("behavior");
-                setImportText(SAMPLE_BEHAVIOR_QUESTIONS);
+                change({ direction: "通用行为", kind: "behavior", text: SAMPLE_BEHAVIOR_QUESTIONS });
               }}
               className="text-primary hover:underline font-medium"
             >
@@ -189,7 +150,7 @@ export default function BankPage() {
             <div className="mt-1">
               <Combobox
                 value={importDirection}
-                onChange={setImportDirection}
+                onChange={direction => change({ direction })}
                 options={directions.map((d) => d.direction)}
                 placeholder="如：前端 / Java 后端 / Go"
                 ariaLabel="导入方向"
@@ -203,7 +164,7 @@ export default function BankPage() {
                 <button
                   key={k.key}
                   type="button"
-                  onClick={() => setImportKind(k.key)}
+                  onClick={() => change({ kind: k.key })}
                   aria-pressed={importKind === k.key}
                   className={`rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors ${
                     importKind === k.key
@@ -225,26 +186,26 @@ export default function BankPage() {
             className={`${textareaCls} mt-1 font-sans text-xs sm:text-sm`}
             value={importText}
             onChange={(e) => {
-              setImportText(e.target.value);
-              setImportNotice(null);
+              change({ text: e.target.value });
             }}
             placeholder={"粘贴考题文本，每行一题，自动识别分割，例如：\n讲讲浏览器从输入 URL 到页面渲染的完整过程\n谈谈你在团队冲突中的一次处理经历"}
           />
         </label>
 
-        <p className="text-xs text-muted">每次最多导入 {MAX_BANK_IMPORT} 道题，重复题目自动合并；超过上限请分批导入。</p>
+        <p className="text-xs text-muted">每次最多导入 {MAX_BANK_IMPORT} 道题，同一批次内重复题目自动合并；不同批次再次导入仍会新增题目，超过上限请分批导入。</p>
 
-        <div className="flex items-center justify-between pt-1">
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
           <span className="text-xs text-muted font-mono">
             {draftCount > 0 ? `已识别 ${draftCount} 道有效题目` : "每行识别为独立一道考题"}
           </span>
-          <button className={btnPrimary} onClick={importQuestions} disabled={importing || draftCount === 0}>
+          <button type="button" className={btnPrimary} onClick={importQuestions} disabled={locked || draftCount === 0}>
             {importing ? "正在存入题库…" : `导入 ${draftCount > 0 ? `${draftCount} 道考题` : "题目"}`}
           </button>
         </div>
+        </fieldset>
 
         {importNotice && (
-          <div className={`rounded-xl border p-3 text-xs ${
+          <div role={importNotice.kind === "ok" ? "status" : "alert"} className={`rounded-xl border p-3 text-xs ${
             importNotice.kind === "ok"
               ? "border-primary/30 bg-primary-soft text-primary"
               : "border-danger/30 bg-danger-wash text-danger"
@@ -252,16 +213,36 @@ export default function BankPage() {
             {importNotice.text}
           </div>
         )}
+        {phase === "checking" && <p role="status" className="text-xs text-muted">正在只读读取题库，导入原稿已锁定…</p>}
+        {(phase === "unknown" || phase === "checking" || phase === "confirming") && (
+          <div className="flex flex-wrap gap-3">
+            <button type="button" className={btnPrimary} onClick={reread} disabled={phase !== "unknown"}>重新读取题库</button>
+            {recovery && <button type="button" className={btnDanger} onClick={allowRetry} disabled={phase !== "unknown" && phase !== "confirming"}>保留原稿并允许再次导入</button>}
+          </div>
+        )}
+        {recovery && (
+          <section aria-label="导入结果核对快照" className="space-y-3 rounded-xl border border-line bg-surface p-4 text-xs">
+            <h3 className="font-semibold text-ink">当前题库只读快照</h3>
+            <p className="text-muted">题型：{kindLabel(importKind)}；{importDirection.trim() ? `方向：${importDirection.trim()}` : "未指定方向，读取此题型的全部方向"}。仅展示最近一页、最多 50 道题；这不是本批次的写入回执。{recovery.nextCursor ? "仍有更早题目，请到下方目录继续筛选核对。" : ""}</p>
+            {recovery.items.length === 0 ? <p>当前筛选暂未读到题目；上次请求仍可能稍后完成。</p> : (
+              <ul className="max-h-72 space-y-3 overflow-y-auto">
+                {recovery.items.map(item => <li key={item.id} className="space-y-1 border-t border-line pt-2"><p className="text-muted">#{item.id} · {item.direction || "未指定方向"} · {kindLabel(item.kind)}</p><p className="whitespace-pre-wrap text-ink">{item.question}</p></li>)}
+              </ul>
+            )}
+          </section>
+        )}
       </div>
 
       {/* 题库检索与卡片列表 */}
       <div className="space-y-4">
+        <ToolHistoryDeletionFeedback deletion={deletion} deletingLabel="正在删除题目…" />
         {/* 快捷方向筛选药丸组 */}
-        {directions.length > 0 && (
+        {(directions.length > 0 || filterDirection) && (
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <span className="text-xs text-faint mr-1">方向速选:</span>
             <button
               type="button"
+              aria-pressed={filterDirection === ""}
               onClick={() => setFilterDirection("")}
               className={`rounded-full px-3 py-1 text-xs transition-all ${
                 filterDirection === ""
@@ -269,12 +250,13 @@ export default function BankPage() {
                   : "border border-line bg-card text-muted hover:text-ink hover:border-line-strong"
               }`}
             >
-              全部方向 ({totalCount})
+              全部方向
             </button>
             {directions.map((d) => (
               <button
                 key={d.direction}
                 type="button"
+                aria-pressed={filterDirection === d.direction}
                 onClick={() => setFilterDirection(filterDirection === d.direction ? "" : d.direction)}
                 className={`rounded-full px-3 py-1 text-xs transition-all ${
                   filterDirection === d.direction
@@ -285,6 +267,9 @@ export default function BankPage() {
                 {d.direction} ({d.count})
               </button>
             ))}
+            {filterDirection && !directions.some(item => item.direction === filterDirection) && (
+              <span className="text-xs text-muted">当前方向：{filterDirection}</span>
+            )}
           </div>
         )}
 
@@ -343,68 +328,69 @@ export default function BankPage() {
             )}
           </div>
         )}
-        {items === null ? !loadError && (
+        {visibleItems === null ? !loadError && (
           <Loading label="正在检索题库数据…" />
-        ) : items.length === 0 ? (
+        ) : visibleItems.length === 0 ? (
           <Empty>
-            {filterDirection || filterKind || keyword.trim()
+            {nextCursor
+              ? "当前已加载的题目均已删除，可继续加载更早题目。"
+              : filterDirection || filterKind || keyword.trim()
               ? "没有匹配的考题，试试切换或清除筛选条件。"
               : "题库还是空的。在上方粘贴题目文本导入第一批，再到「题目练习」按方向出题！"}
           </Empty>
         ) : (
-          <>
-            <ul className="divide-y divide-line rounded-2xl border border-line bg-card shadow-card-subtle overflow-hidden">
-              {items.map((item) => (
-                <li key={item.id} className="flex items-start justify-between gap-4 p-4 sm:p-5 transition-colors hover:bg-surface/40">
-                  <div className="min-w-0 space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-mono font-medium ${
-                        item.kind === "tech"
-                          ? "border border-primary/25 bg-primary-soft text-primary"
-                          : "border border-accent/25 bg-accent-wash text-accent"
-                      }`}>
-                        {kindLabel(item.kind)}
+          <ul className="divide-y divide-line rounded-2xl border border-line bg-card shadow-card-subtle overflow-hidden">
+            {visibleItems.map((item) => (
+              <li key={item.id} className="flex items-start justify-between gap-4 p-4 sm:p-5 transition-colors hover:bg-surface/40">
+                <div className="min-w-0 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-mono font-medium ${
+                      item.kind === "tech"
+                        ? "border border-primary/25 bg-primary-soft text-primary"
+                        : "border border-accent/25 bg-accent-wash text-accent"
+                    }`}>
+                      {kindLabel(item.kind)}
+                    </span>
+                    {item.direction && (
+                      <span className="inline-flex rounded-full border border-line bg-surface px-2.5 py-0.5 text-[10px] font-medium text-muted">
+                        {item.direction}
                       </span>
-                      {item.direction && (
-                        <span className="inline-flex rounded-full border border-line bg-surface px-2.5 py-0.5 text-[10px] font-medium text-muted">
-                          {item.direction}
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-1 text-sm sm:text-[15px] leading-relaxed text-ink font-serif font-bold">
-                      {item.question}
-                    </p>
-                    <p className="text-[11px] text-faint font-mono">
-                      录入时间：{new Date(item.created_at).toLocaleString()}
-                    </p>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => remove(item.id)}
-                    className={`${btnDanger} shrink-0 text-xs`}
-                  >
-                    删除
-                  </button>
-                </li>
-              ))}
-            </ul>
-            {nextCursor && (
-              <div className="flex justify-center pt-2">
+                  <p className="mt-1 whitespace-pre-wrap text-sm sm:text-[15px] leading-relaxed text-ink font-serif font-bold">
+                    {item.question}
+                  </p>
+                  <p className="text-[11px] text-faint font-mono">
+                    录入时间：{new Date(item.created_at).toLocaleString()}
+                  </p>
+                </div>
                 <button
                   type="button"
-                  className={btnPrimary}
-                  onClick={loadItems}
-                  disabled={loadingMore}
+                  onClick={() => remove(item)}
+                  disabled={locked}
+                  className={`${btnDanger} shrink-0 text-xs`}
                 >
-                  {loadingMore
-                    ? "正在加载"
-                    : failedCursor === nextCursor
-                      ? "重试加载更多"
-                      : "加载更多"}
+                  删除
                 </button>
-              </div>
-            )}
-          </>
+              </li>
+            ))}
+          </ul>
+        )}
+        {visibleItems !== null && nextCursor && (
+          <div className="flex justify-center pt-2">
+            <button
+              type="button"
+              className={btnPrimary}
+              onClick={loadItems}
+              disabled={loadingMore}
+            >
+              {loadingMore
+                ? "正在加载"
+                : failedCursor === nextCursor
+                  ? "重试加载更多"
+                  : "加载更多"}
+            </button>
+          </div>
         )}
       </div>
     </div>

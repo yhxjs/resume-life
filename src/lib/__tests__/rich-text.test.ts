@@ -13,10 +13,45 @@ import {
   isValidCssColor,
   decodeHtmlEntities,
   hasHtmlEntity,
+  escapePlainTextToRichHtml,
 } from "../rich-text";
 import { segmentsToHtml } from "../metric-highlight";
 
+describe("纯文本写入与富文本渲染的一致性", () => {
+  it.each([
+    "封装 Array<T> 与 Map<K, V>",
+    "维护 <template>、<strong> 与 <script>alert(1)</script> 字面代码",
+    "记录 &amp;、&lt;tag&gt;、&#39; 与 R&D",
+    "首行\r\n第二行\r第三行\n末行",
+  ])("保留原始字符与换行：%s", (plain) => {
+    const stored = escapePlainTextToRichHtml(plain);
+    const normalized = plain.replace(/\r\n?|\n/g, "\n");
+    expect(stripRichText(stored)).toBe(normalized);
+    expect(richTextToMarkdown(stored)).toBe(normalized);
+    expect(sanitizeRichText(stored)).toBe(stored);
+    const rendered = renderToStaticMarkup(createElement(RichText, { content: stored }));
+    expect(stripRichText(rendered)).toBe(normalized);
+    expect(rendered).not.toMatch(/<(?:script|template|strong)\b/);
+  });
+
+  it("真实格式标签保留，已转义的标签只作为文本显示", () => {
+    const content = "<strong>泛型 Array&lt;T&gt;</strong> 与 &lt;strong&gt; 字面标签";
+    const rendered = renderToStaticMarkup(createElement(RichText, { content }));
+    expect(rendered).toContain('<strong style="font-weight:600">泛型 Array&lt;T&gt;</strong>');
+    expect(stripRichText(rendered)).toBe("泛型 Array<T> 与 <strong> 字面标签");
+  });
+});
+
 describe("浏览器富文本段落边界", () => {
+  it("反斜杠和转义后的 br 字面量不是段落边界，真实格式节点仍分行", () => {
+    const first = String.raw`维护 C:\new\resume，处理 /\r\n|\n/g，记录 <br> 与 &amp;`;
+    const html = `<strong>${escapePlainTextToRichHtml(first)}<br>第二行</strong>`;
+    const lines = splitRichTextToLines(html);
+    expect(lines).toEqual([`<strong>${escapePlainTextToRichHtml(first)}</strong>`, "<strong>第二行</strong>"]);
+    expect(lines.map(stripRichText)).toEqual([first, "第二行"]);
+    expect(splitRichTextToLines(lines.join("\n"))).toEqual(lines);
+  });
+
   it.each([
     ["first<div>second</div>", "first<br>second"],
     ["<div>first</div>second", "first<br>second"],
@@ -235,6 +270,14 @@ describe("rich-text utility", () => {
     expect(md).toBe("主导开发 **前端组件库**，覆盖率 90%");
   });
 
+  it.each([
+    ["1) 原文", "原文"],
+    ["<strong>2) 加粗原文</strong>", "<strong>加粗原文</strong>"],
+    ["123) 保留正文", "123) 保留正文"],
+  ])("splits numbered parentheses without changing body text: %s", (input, expected) => {
+    expect(splitRichTextToLines(input)).toEqual([expected]);
+  });
+
   it("splits rich text to lines properly with prefix stripping", () => {
     const multi = `• 负责<strong>核心链路</strong>架构
 - 提升性能 <span style="color: #1d4ed8">30%</span>
@@ -245,6 +288,18 @@ describe("rich-text utility", () => {
       '提升性能 <span style="color: #1d4ed8">30%</span>',
       "降低故障率",
     ]);
+  });
+
+  it.each([
+    "2023.07 接手接口维护，至今尚未上线",
+    "3.14 秒为测试环境耗时",
+    "-10% 为测试环境的变化，未上线",
+    "<strong>2023.07</strong> 接手接口维护",
+    "<strong>-10%</strong> 为测试环境变化",
+  ])("列表整理保留日期、小数和负数正文：%s", (text) => {
+    expect(splitRichTextToLines(text)).toEqual([text]);
+    expect(splitRichTextToLines(`1. ${text}`)).toEqual([text]);
+    expect(splitRichTextToLines(splitRichTextToLines(text).join("\n"))).toEqual([text]);
   });
 
   it("formats plain text with newlines to rich html while preserving existing html", () => {

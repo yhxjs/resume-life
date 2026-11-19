@@ -1,12 +1,13 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { NextResponse } from "next/server";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
-import { PreparationInputError, preparationApplication, parsePreparationKind, listPreparationResources, linkPreparationResource, unlinkPreparationResource } from "@/lib/application-preparation";
+import { PreparationInputError, preparationApplication, parsePreparationKind, listPreparationResources, linkPreparationResourceWithSnapshot, unlinkPreparationResourceWithSnapshot } from "@/lib/application-preparation";
 import { parsePaginationParams } from "@/lib/cursor-pagination";
 
 async function handle(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const id = Number((await params).id);
+    const id = parseCanonicalPositiveId((await params).id);
     preparationApplication(id);
     if (req.method === "GET") {
       const query = new URL(req.url).searchParams;
@@ -20,9 +21,10 @@ async function handle(req: Request, { params }: { params: Promise<{ id: string }
     const kind = parsePreparationKind(parsed.data?.kind);
     const resourceId = parsed.data?.id;
     if (typeof resourceId !== "number" || !Number.isSafeInteger(resourceId) || resourceId <= 0) throw new PreparationInputError("无效的资料 ID");
-    if (req.method === "POST") linkPreparationResource(id, kind, resourceId);
-    else unlinkPreparationResource(id, kind, resourceId);
-    return NextResponse.json({ ok: true });
+    const preparation = req.method === "POST"
+      ? linkPreparationResourceWithSnapshot(id, kind, resourceId)
+      : unlinkPreparationResourceWithSnapshot(id, kind, resourceId);
+    return NextResponse.json({ ok: true, preparation });
   } catch (error) {
     if (error instanceof PreparationInputError) return NextResponse.json({ error: error.message }, { status: error.status });
     throw error;

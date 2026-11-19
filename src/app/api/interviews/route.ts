@@ -5,35 +5,21 @@ import { parseApiJson } from "@/lib/api-request";
 import { checkModelField } from "@/lib/llm-input-budget";
 import { NextResponse } from "next/server";
 import { escapeLike, getDb, inTransaction, now } from "@/lib/db";
-import { extractJson, LlmConfigError } from "@/lib/llm";
-import { getInterviewStyle, interviewStyleOf } from "@/lib/interview";
+import { LlmConfigError } from "@/lib/llm";
+import { DEFAULT_INTERVIEW_ROUNDS, INTERVIEW_ROUNDS_ERROR, isInterviewRounds, getInterviewStyle, interviewStyleOf } from "@/lib/interview";
 import { loadResumeContext } from "@/lib/resumes";
-import { ResumeNotFoundError } from "@/lib/resume-errors";
+import { ResumeContextError, ResumeNotFoundError } from "@/lib/resume-errors";
 import { createSseResponse } from "@/lib/sse";
 import {
   checkSafeModelInput,
   LLM_FEATURES,
   safeChatStream,
-  type PromptPart,
-  type SafeMessage,
 } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
 import { logServerError, requestIdFrom } from "@/lib/server-errors";
 import { createCursorPage, parsePaginationParams } from "@/lib/cursor-pagination";
-
-const FIRST_QUESTION_PROMPT = (style: string, persona: string) => {
-  if (style === "mining") {
-    return `你是经历挖掘访谈官（你的人设：${persona}）。候选人往往只记得“做过这个项目”，但说不清难点、决策和具体贡献。
-你的任务是启动经历挖掘的第一阶段【背景与业务痛点】：
-请根据【候选人简历】挑选一个重点项目（或结合【岗位要求】挑出最契合的经历），以亲切、启发式的口吻，引导候选人回顾该项目的发起背景：当时团队或业务遇到了什么核心痛点/瓶颈？预期的目标是什么？候选人在其中承担的具体角色是什么？
-提示：给出 1-2 个常见业务场景线索帮助打开思路，降低回忆门槛，一次只出一道引导题。
-输出 JSON：{"question": "题目文本"}。只输出 JSON。`;
-  }
-  return `你是面试官（你的人设：${persona}），正在进行一场针对候选人的模拟面试。出题、追问与点评都要符合这个人设。
-请根据【岗位要求】与【候选人简历】出第一道面试题。
-出题策略：优先从简历上的项目/工作经历深挖，也可结合岗位要求出相关基础题；一次只出一道题。
-输出 JSON：{"question": "题目文本"}。只输出 JSON。`;
-};
+import { ModelProtocolError, validateInterviewQuestion } from "@/lib/model-protocol";
+import { buildFirstInterviewQuestionMessages, firstInterviewQuestionPrompt } from "@/lib/interview-question-llm";
 
 async function handlePost(req: Request) {
   const parsedBody = await parseApiJson<unknown>(req);
@@ -47,13 +33,14 @@ async function handlePost(req: Request) {
     mode?: unknown;
     application_id?: unknown;
   } | null;
-  const resumeId = Number(body?.resume_id);
+  const resumeId = body?.resume_id;
   const jd = typeof body?.jd === "string" ? body.jd.trim() : "";
-  const rounds = Math.min(Math.max(Number(body?.rounds) || 8, 1), 30);
+  const rounds = body?.rounds === undefined ? DEFAULT_INTERVIEW_ROUNDS : body.rounds;
+  if (!isInterviewRounds(rounds)) return NextResponse.json({ error: INTERVIEW_ROUNDS_ERROR }, { status: 400 });
   const seriesMode = body?.mode === "series";
   // 进阶模式三轮人设固定（一面技术面/二面主管面/三面 HR 面），首题由一面技术深挖开场
   const style = seriesMode ? "deep" : getInterviewStyle(body?.style);
-  if (!Number.isInteger(resumeId)) {
+  if (typeof resumeId !== "number" || !Number.isSafeInteger(resumeId) || resumeId <= 0) {
     return NextResponse.json({ error: "请选择简历" }, { status: 400 });
   }
   if (!jd) {
@@ -83,15 +70,8 @@ async function handlePost(req: Request) {
     return NextResponse.json({ error: errorMessage(err) }, { status: 404 });
   }
 
-  const parts: PromptPart[] = [
-    { trust: "trusted", text: "【岗位要求】\n" },
-    { trust: "untrusted", tag: "job_description", text: jd },
-    { trust: "trusted", text: "\n\n【候选人简历】\n" },
-    { trust: "untrusted", tag: "candidate_resume", text: resumeContext },
-    { trust: "trusted", text: "\n\n请出第一道面试题。" },
-  ];
-  const systemPrompt = FIRST_QUESTION_PROMPT(style, interviewStyleOf(style).persona);
-  const messages: SafeMessage[] = [{ role: "user", parts }];
+  const systemPrompt = firstInterviewQuestionPrompt(style, interviewStyleOf(style).persona);
+  const messages = buildFirstInterviewQuestionMessages(jd, resumeContext);
   try { checkSafeModelInput(systemPrompt, messages); }
   catch (error) {
     return NextResponse.json({ error: errorMessage(error) }, { status: 413 });
@@ -107,10 +87,8 @@ async function handlePost(req: Request) {
         { feature: LLM_FEATURES.interviewCreate, entity: { type: "resume", id: resumeId } },
         systemPrompt,
         messages,
-        (delta) => {
-          emitter.sendDelta(delta);
-        },
-        { signal: emitter.signal, requestId }
+        () => {},
+        { signal: emitter.signal, requestId, requireJson: "strict" }
       );
     } catch (err) {
       if (err instanceof LlmConfigError) {
@@ -124,45 +102,65 @@ async function handlePost(req: Request) {
 
     let question = "";
     try {
-      const parsed = extractJson<{ question?: unknown }>(raw);
-      if (typeof parsed.question === "string" && parsed.question.trim()) {
-        question = parsed.question.trim();
+      const parsed: { question?: unknown } = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, "question")) {
+        throw new ModelProtocolError("AI 出题结果包含未声明字段");
       }
-    } catch {
-      question = "";
-    }
-
-    if (!question) {
-      emitter.sendError("AI 没有生成有效题目，请重试");
+      question = validateInterviewQuestion(parsed.question);
+    } catch (error) {
+      emitter.sendError(error instanceof ModelProtocolError ? error.message : "AI 没有生成有效题目，请重试");
       return;
     }
 
     const db = getDb();
     const ts = now();
-    const { interviewId, seriesId } = inTransaction(() => {
-      if (applicationId !== null) resolvePreparationApplication(body, { resumeId, resumeVersionId, jd });
-      let newSeriesId: number | null = null;
-      if (seriesMode) {
-        newSeriesId = Number(
-          db
-            .prepare("INSERT INTO interview_series (resume_id, resume_version_id, jd, rounds, created_at) VALUES (?, ?, ?, ?, ?)")
-            .run(resumeId, resumeVersionId, jd, rounds, ts).lastInsertRowid
-        );
+    const contextConflict = "参考简历或所选发布版本已变化或删除，请核对材料后重新生成";
+    let created: { interviewId: number; seriesId: number | null };
+    try {
+      created = inTransaction(() => {
+        emitter.signal.throwIfAborted();
+        req.signal.throwIfAborted();
+        // 本次已固定发布版；提交时只复核实际职业材料，不改用后来发布的版本。
+        resolveResumeVersionId(resumeId, resumeVersionId);
+        if (loadResumeContext(resumeId, resumeVersionId) !== resumeContext) {
+          throw new ResumeVersionError(contextConflict, 409);
+        }
+        if (applicationId !== null) resolvePreparationApplication(body, { resumeId, resumeVersionId, jd });
+        let newSeriesId: number | null = null;
+        if (seriesMode) {
+          newSeriesId = Number(
+            db
+              .prepare("INSERT INTO interview_series (resume_id, resume_version_id, jd, rounds, created_at) VALUES (?, ?, ?, ?, ?)")
+              .run(resumeId, resumeVersionId, jd, rounds, ts).lastInsertRowid
+          );
+        }
+        const result = db
+          .prepare(
+            "INSERT INTO interviews (resume_id, resume_version_id, jd, rounds, style, series_id, round_no, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'ongoing', ?)"
+          )
+          .run(resumeId, resumeVersionId, jd, rounds, style, newSeriesId, seriesMode ? 1 : 0, ts);
+        const newId = Number(result.lastInsertRowid);
+        db.prepare(
+          "INSERT INTO interview_turns (interview_id, idx, kind, question) VALUES (?, 1, 'question', ?)"
+        ).run(newId, question);
+        if (applicationId !== null) linkPreparationResource(applicationId, newSeriesId === null ? "interview" : "series", newSeriesId ?? newId);
+        return { interviewId: newId, seriesId: newSeriesId };
+      });
+    } catch (error) {
+      if (error instanceof ResumeVersionError || error instanceof ResumeNotFoundError || error instanceof ResumeContextError) {
+        emitter.sendError(contextConflict);
+        return;
       }
-      const result = db
-        .prepare(
-          "INSERT INTO interviews (resume_id, resume_version_id, jd, rounds, style, series_id, round_no, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'ongoing', ?)"
-        )
-        .run(resumeId, resumeVersionId, jd, rounds, style, newSeriesId, seriesMode ? 1 : 0, ts);
-      const newId = Number(result.lastInsertRowid);
-      db.prepare(
-        "INSERT INTO interview_turns (interview_id, idx, kind, question) VALUES (?, 1, 'question', ?)"
-      ).run(newId, question);
-      if (applicationId !== null) linkPreparationResource(applicationId, newSeriesId === null ? "interview" : "series", newSeriesId ?? newId);
-      return { interviewId: newId, seriesId: newSeriesId };
-    });
+      if (error instanceof PreparationInputError) {
+        emitter.sendError(error.message);
+        return;
+      }
+      throw error;
+    }
 
-    emitter.sendDone({ id: interviewId, series_id: seriesId, question });
+    // Only expose a validated, persisted question to the typewriter.
+    emitter.sendDelta(question);
+    emitter.sendDone({ id: created.interviewId, series_id: created.seriesId, question });
   }, requestId);
 }
 

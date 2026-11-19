@@ -4,6 +4,8 @@ import Link from "next/link";
 import type { DrillItem, ProjectBrief } from "@/hooks/use-drills-page";
 import { btnDanger, btnPrimary, inputCls } from "@/lib/ui";
 import { LoadError } from "@/components/common/ui-bits";
+import { ToolHistoryDeletionFeedback } from "@/components/common/tool-history-deletion-feedback";
+import type { useDrillDeletion } from "@/hooks/use-drill-deletion";
 
 function drillTitle(drill: DrillItem): string {
   if (drill.source === "project") return drill.project_name ?? "未命名项目";
@@ -30,6 +32,8 @@ export function DrillHistory({
   onKeywordChange,
   onLoad,
   onRemove,
+  deletion,
+  starting,
 }: {
   projects: ProjectBrief[] | null;
   drills: DrillItem[] | null;
@@ -42,16 +46,19 @@ export function DrillHistory({
   onFilterProjectChange: (projectId: number | "") => void;
   onKeywordChange: (keyword: string) => void;
   onLoad: (cursor?: string) => void;
-  onRemove: (id: number) => void;
+  onRemove: (drill: DrillItem) => void;
+  deletion: ReturnType<typeof useDrillDeletion>;
+  starting: boolean;
 }) {
   return (
     <>
+      <ToolHistoryDeletionFeedback deletion={deletion} deletingLabel="正在删除练习…" />
       {loadError && (
         <LoadError message={loadError} onRetry={() => onLoad(failedCursor ?? undefined)} />
       )}
 
       {/* 练习记录卡片阵列 */}
-      {drills !== null && (drills.length > 0 || filterProject !== "" || keyword.trim() !== "") && (
+      {drills !== null && (drills.length > 0 || nextCursor !== null || filterProject !== "" || keyword.trim() !== "") && (
         <div className="mt-10 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
             <div className="flex items-center gap-2">
@@ -93,8 +100,9 @@ export function DrillHistory({
             <>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 {drills.map((drill) => (
-                  <div
+                  <article
                     key={drill.id}
+                    aria-label={`练习 #${drill.id}`}
                     className="group flex flex-col justify-between rounded-xl border border-line bg-card p-4 shadow-card-subtle transition-all duration-150 hover:border-primary/40 hover:bg-surface/30"
                   >
                     <div className="space-y-2">
@@ -132,7 +140,8 @@ export function DrillHistory({
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => onRemove(drill.id)}
+                          onClick={() => onRemove(drill)}
+                          disabled={deletion.busy || starting}
                           className={btnDanger}
                         >
                           删除
@@ -142,28 +151,19 @@ export function DrillHistory({
                         </Link>
                       </div>
                     </div>
-                  </div>
+                  </article>
                 ))}
               </div>
-              {nextCursor && (
-                <div className="flex justify-center pt-2">
-                  <button
-                    type="button"
-                    className={btnPrimary}
-                    onClick={() => onLoad(failedCursor ?? nextCursor)}
-                    disabled={loadingMore}
-                  >
-                    {loadingMore
-                      ? "正在加载"
-                      : failedCursor === nextCursor
-                        ? "重试加载更多"
-                        : "加载更多"}
-                  </button>
-                </div>
-              )}
             </>
           ) : (
-            <p className="mt-3 text-sm text-faint">没有匹配的练习记录，试试调整项目或关键词。</p>
+            <p className="mt-3 text-sm text-faint">{nextCursor ? "本页记录已移除，可以继续加载更早的练习。" : "没有匹配的练习记录，试试调整项目或关键词。"}</p>
+          )}
+          {nextCursor && (
+            <div className="flex justify-center pt-2">
+              <button type="button" className={btnPrimary} onClick={() => onLoad(failedCursor ?? nextCursor)} disabled={loadingMore}>
+                {loadingMore ? "正在加载" : failedCursor === nextCursor ? "重试加载更多" : "加载更多"}
+              </button>
+            </div>
           )}
         </div>
       )}

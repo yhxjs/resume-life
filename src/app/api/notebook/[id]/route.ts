@@ -1,21 +1,23 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction, now } from "@/lib/db";
 
 export const GET = withRouteErrorHandling("GET /api/notebook/[id]", async (_req, { params }) => {
-  const id = Number((await params).id);
+  const id = parseCanonicalPositiveId((await params).id);
   if (!Number.isSafeInteger(id) || id <= 0) return NextResponse.json({ error: "无效的错题 ID" }, { status: 400 });
   const db = getDb();
-  const row = db.prepare("SELECT id, question, answer, comment, reference FROM notebook_entries WHERE id = ?").get(id);
-  return row ? NextResponse.json(row) : NextResponse.json({ error: "错题不存在或已删除" }, { status: 404 });
+  const row = db.prepare("SELECT id, question, answer, comment, reference, category_id FROM notebook_entries WHERE id = ?").get(id);
+  return row ? NextResponse.json(row, { headers: { "Cache-Control": "no-store" } })
+    : NextResponse.json({ error: "错题不存在或已删除" }, { status: 404, headers: { "Cache-Control": "no-store" } });
 });
 
 /** PATCH：调整错题分类（category_id 传 null 表示移到「未分类」） */
 async function handlePatch(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const entryId = Number(id);
-  if (!Number.isInteger(entryId)) {
+  const entryId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(entryId) || entryId <= 0) {
     return NextResponse.json({ error: "无效的错题 ID" }, { status: 400 });
   }
   const parsedBody = await parseApiJson<unknown>(req);
@@ -53,8 +55,8 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
 
 async function handleDelete(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const entryId = Number(id);
-  if (!Number.isInteger(entryId)) {
+  const entryId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(entryId) || entryId <= 0) {
     return NextResponse.json({ error: "无效的错题 ID" }, { status: 400 });
   }
   const db = getDb();

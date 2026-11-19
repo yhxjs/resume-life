@@ -1,6 +1,7 @@
 import { normalizeContent } from "@/lib/modules";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DatabaseSync } from "node:sqlite";
+import type { ApplicationPreparation } from "@/lib/application-preparation-types";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -38,6 +39,32 @@ afterEach(() => {
 });
 
 describe("投递准备资料", () => {
+  it.each([
+    'not-json', 'null', '{}', '[]', '["historical text"]',
+    JSON.stringify([{ text: "完整第一句", comment: "点评" }, { text: " ", comment: "异常原项" }]),
+    JSON.stringify([{ text: "正文", comment: { unsafe: true } }]),
+  ])("异常自我介绍原稿不阻断准备页或候选列表，也不展示筛选后的摘要：%s", async (raw) => {
+    db.prepare("INSERT INTO intro_versions (intro_id, kind, sentences, updated_at) VALUES (1, '30s', ?, '')").run(raw);
+    const before = db.prepare("SELECT * FROM intro_versions").all();
+    const prep = await import("@/lib/application-preparation");
+    const candidate = prep.listPreparationResources(first, "intro", { candidates: true }).items.find((item) => item.id === 1);
+    expect(candidate).toMatchObject({ summary: "30 秒版原稿数据异常，请打开原稿查看", href: "/intros/1" });
+    prep.linkPreparationResourceWithSnapshot(first, "intro", 1);
+    expect(prep.getApplicationPreparation(first).resources.intro.items[0]).toMatchObject({ ...candidate, linked: true });
+    expect(db.prepare("SELECT * FROM intro_versions").all()).toEqual(before);
+  });
+
+  it("正常历史长原稿完整解析后才截取摘要，缺少短版时保留通用提示", async () => {
+    const text = "  历史正文 <API>\n" + "长".repeat(801);
+    const raw = JSON.stringify([{ text, comment: "点评".repeat(301) }, ...Array.from({ length: 60 }, () => ({ text: "后句" }))]);
+    db.prepare("INSERT INTO intro_versions (intro_id, kind, sentences, updated_at) VALUES (1, '30s', ?, '')").run(raw);
+    const prep = await import("@/lib/application-preparation");
+    const items = prep.listPreparationResources(first, "intro", { candidates: true }).items;
+    expect(items.find((item) => item.id === 1)?.summary).toBe(text.slice(0, 400));
+    expect(items.find((item) => item.id === 2)?.summary).toBe("30 秒 / 2 分钟双版");
+    expect(db.prepare("SELECT sentences FROM intro_versions WHERE intro_id = 1").get()).toMatchObject({ sentences: raw });
+  });
+
   it("关联已有模考时保存旧错题归属，编辑投递绑定模考也生效", async () => {
     db.exec("INSERT INTO interviews (id, resume_id, jd, created_at) VALUES (1, 1, 'JD', ''); INSERT INTO interview_turns (id, interview_id, idx, question) VALUES (1, 1, 1, '旧问题'); INSERT INTO notebook_entries (id, source, source_id, question, created_at, updated_at) VALUES (1, 'interview', 1, '旧问题', '', '')");
     const prep = await import("@/lib/application-preparation");
@@ -91,6 +118,15 @@ describe("投递准备资料", () => {
     expect(prep.listPreparationResources(first, "intro", { candidates: true, limit: 1, cursor: 2 }).items.map((item) => item.id)).toEqual([1]);
     prep.linkPreparationResource(first, "intro", 2);
     expect(prep.listPreparationResources(first, "intro", { candidates: true }).items.map((item) => item.id)).toEqual([1]);
+  });
+
+  it("错题候选的 linked 标记表示尚未归属，不能把候选误报成可取消的已关联记录", async () => {
+    db.exec("INSERT INTO notebook_entries (id, source, source_id, question, comment, created_at, updated_at) VALUES (1, 'drill', 0, '独立错题', '', '', '')");
+    const prep = await import("@/lib/application-preparation");
+    const candidate = prep.listPreparationResources(first, "notebook", { candidates: true }).items.find((item) => item.id === 1);
+    expect(candidate).toMatchObject({ id: 1, linked: false });
+    prep.linkPreparationResource(first, "notebook", 1);
+    expect(prep.listPreparationResources(first, "notebook").items.find((item) => item.id === 1)).toMatchObject({ linked: true });
   });
 
   it("删除资料自动清理关联，删除投递不删除共享的原资料", async () => {
@@ -158,7 +194,7 @@ describe("投递准备 API", () => {
   });
 
   it("从准备页生成的自我介绍在同一事务中关联到投递", async () => {
-    model.stream.mockResolvedValue(JSON.stringify({ versions: [{ kind: "30s", sentences: [{ text: "我擅长前端开发", comment: "清楚" }] }, { kind: "2min", sentences: [{ text: "我有项目经验", comment: "具体" }] }] }));
+    model.stream.mockResolvedValue(JSON.stringify({ versions: [{ kind: "30s", sentences: [{ text: "我擅长前端开发。", comment: "清楚" }] }, { kind: "2min", sentences: [{ text: "我有项目经验。", comment: "具体" }] }] }));
     const route = await import("@/app/api/intros/route");
     const response = await route.POST(new Request("http://localhost/api/intros", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ application_id: first, resume_id: 1, jd: "同一份 JD" }) }));
     const text = await response.text();
@@ -178,7 +214,7 @@ describe("投递准备 API", () => {
   it("生成过程中投递发生变更时回滚新资料与关联", async () => {
     model.stream.mockImplementation(async () => {
       db.prepare("UPDATE applications SET jd = '变更后的 JD' WHERE id = ?").run(first);
-      return JSON.stringify({ versions: [{ kind: "30s", sentences: [{ text: "自我介绍", comment: "" }] }, { kind: "2min", sentences: [{ text: "详细介绍", comment: "" }] }] });
+      return JSON.stringify({ versions: [{ kind: "30s", sentences: [{ text: "自我介绍", comment: "明确定位" }] }, { kind: "2min", sentences: [{ text: "详细介绍", comment: "展开相关经历" }] }] });
     });
     const route = await import("@/app/api/intros/route");
     const response = await route.POST(new Request("http://localhost/api/intros", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ application_id: first, resume_id: 1, jd: "同一份 JD" }) }));
@@ -214,5 +250,35 @@ describe("投递准备 API", () => {
     expect((await route.DELETE(request("DELETE", { id: task.id }), context(first))).status).toBe(200);
     expect((await route.POST(request("POST", { title: " " }), context(first))).status).toBe(400);
     expect((await overview.GET(new Request("http://localhost/api/preparation"), context(999))).status).toBe(404);
+  });
+
+  it("关联写入和取消返回同事务的完整快照，取消面试不会丢失已归属错题或共享源资料", async () => {
+    const route = await import("@/app/api/applications/[id]/preparation/resources/route");
+    const context = { params: Promise.resolve({ id: String(first) }) };
+    const request = (method: string, body: unknown) => new Request("http://localhost/api/preparation/resources", {
+      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+
+    const linked = await route.POST(request("POST", { kind: "intro", id: 1 }), context);
+    expect(linked.status).toBe(200);
+    const linkedSnapshot = (await linked.json()).preparation as ApplicationPreparation;
+    expect(linkedSnapshot.resources.intro).toMatchObject({ total: 1, items: [{ id: 1, linked: true }] });
+
+    const unlinked = await route.DELETE(request("DELETE", { kind: "intro", id: 1 }), context);
+    expect(unlinked.status).toBe(200);
+    const unlinkedSnapshot = (await unlinked.json()).preparation as ApplicationPreparation;
+    expect(unlinkedSnapshot.resources.intro).toMatchObject({ total: 0, items: [] });
+    expect(db.prepare("SELECT id FROM intros WHERE id = 1").get()).toBeDefined();
+
+    db.exec("INSERT INTO interviews (id, resume_id, jd, created_at) VALUES (1, 1, '同一份 JD', ''); INSERT INTO interview_turns (id, interview_id, idx, question) VALUES (1, 1, 1, '持久错题'); INSERT INTO notebook_entries (id, source, source_id, question, created_at, updated_at) VALUES (1, 'interview', 1, '持久错题', '', '')");
+    const applications = await import("@/lib/applications");
+    applications.updateApplication(first, { interview_id: 1 });
+    const interviewUnlinked = await route.DELETE(request("DELETE", { kind: "interview", id: 1 }), context);
+    expect(interviewUnlinked.status).toBe(200);
+    const interviewSnapshot = (await interviewUnlinked.json()).preparation as ApplicationPreparation;
+    expect(interviewSnapshot.application.interview_id).toBeNull();
+    expect(interviewSnapshot.resources.interview).toMatchObject({ total: 0, items: [] });
+    expect(interviewSnapshot.resources.notebook.items).toEqual([expect.objectContaining({ id: 1, title: "持久错题" })]);
+    expect(db.prepare("SELECT id FROM interviews WHERE id = 1").get()).toBeDefined();
   });
 });

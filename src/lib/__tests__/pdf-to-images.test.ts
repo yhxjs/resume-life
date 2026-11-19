@@ -24,6 +24,34 @@ function createTestPdf(pageCount = 2, mediaBox = "[0 0 100 100]"): Buffer {
 }
 
 describe("pdf-to-images.ts PDF 渲染为图像", () => {
+  it("窄字形的扫描 PDF 页面不能被判为空白", async () => {
+    const { createCanvas } = getCanvasModule();
+    const canvas = createCanvas(128, 64);
+    const ctx = canvas.getContext("2d") as { fillStyle: string; font: string; fillRect: (x: number, y: number, width: number, height: number) => void; fillText: (text: string, x: number, y: number) => void };
+    ctx.fillStyle = "white"; ctx.fillRect(0, 0, 128, 64);
+    ctx.fillStyle = "black"; ctx.font = "20px Arial"; ctx.fillText("I", 3, 36);
+    const jpeg = canvas.toBuffer("image/jpeg");
+    const commands = Buffer.from("q 128 0 0 64 0 0 cm /Im1 Do Q");
+    const objects = [
+      Buffer.from("<< /Type /Catalog /Pages 2 0 R >>"),
+      Buffer.from("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+      Buffer.from("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 128 64] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>"),
+      Buffer.concat([Buffer.from(`<< /Type /XObject /Subtype /Image /Width 128 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`), jpeg, Buffer.from("\nendstream")]),
+      Buffer.concat([Buffer.from(`<< /Length ${commands.length} >>\nstream\n`), commands, Buffer.from("\nendstream")]),
+    ];
+    const chunks = [Buffer.from("%PDF-1.4\n")];
+    const offsets: number[] = [];
+    let offset = chunks[0]!.length;
+    objects.forEach((object, index) => {
+      offsets.push(offset);
+      const chunk = Buffer.concat([Buffer.from(`${index + 1} 0 obj\n`), object, Buffer.from("\nendobj\n")]);
+      chunks.push(chunk); offset += chunk.length;
+    });
+    chunks.push(Buffer.from(`xref\n0 6\n0000000000 65535 f \n${offsets.map(value => `${String(value).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${offset}\n%%EOF`));
+    const [page] = await renderPdfPagesToImages(Buffer.concat(chunks));
+    expect(page!.hasVisualContent).toBe(true);
+  });
+
   it("默认最多处理前 MAX_OCR_PAGES (5) 页", () => {
     expect(MAX_OCR_PAGES).toBe(5);
   });
@@ -54,6 +82,25 @@ describe("pdf-to-images.ts PDF 渲染为图像", () => {
     await expect(renderPdfPagesToImages(createTestPdf(6))).rejects.toThrow(/共 6 页.*最多支持 5 页.*拆分/);
   });
 
+  it("从长文档选择少量页面时保留原页号和完整 PNG", async () => {
+    const images = await renderPdfPagesToImages(createTestPdf(8), MAX_OCR_PAGES, undefined, [2, 8]);
+    expect(images.map(page => page.pageNumber)).toEqual([2, 8]);
+    for (const page of images) {
+      expect(page.buffer.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      expect(page.base64).toBe(`data:image/png;base64,${page.buffer.toString("base64")}`);
+      expect(page.hasVisualContent).toBe(false);
+    }
+  });
+
+  it.each([[], [0], [-1], [1.5], [NaN], [2, 2], [3, 1], [1, 2, 3, 4, 5, 6]].map(selected => ({ selected })))("拒绝无效或超预算的选择页码 $selected", async ({ selected }) => {
+    await expect(renderPdfPagesToImages(createTestPdf(8), MAX_OCR_PAGES, undefined, selected)).rejects.toThrow(/页码|最多.*5.*页/);
+  });
+
+  it("选择页码不得超出文档页数或显式渲染数量", async () => {
+    await expect(renderPdfPagesToImages(createTestPdf(2), MAX_OCR_PAGES, undefined, [3])).rejects.toThrow(/页码/);
+    await expect(renderPdfPagesToImages(createTestPdf(3), 1, undefined, [1, 2])).rejects.toThrow(/最多.*1.*页/);
+  });
+
   it("极大 MediaBox 渲染后仍不超过画布尺寸和像素预算", async () => {
     const images = await renderPdfPagesToImages(createTestPdf(1, "[0 0 6400 6400]"));
     expect(images).toHaveLength(1);
@@ -63,6 +110,18 @@ describe("pdf-to-images.ts PDF 渲染为图像", () => {
   }, 15_000);
 
   describe("processImageBufferToPage 单图预处理", () => {
+    it.each(["white", "transparent"])("%s 背景上的窄字形保留，实际空白仍为空白", async background => {
+      const { createCanvas } = getCanvasModule();
+      const canvas = createCanvas(128, 64);
+      const ctx = canvas.getContext("2d") as { fillStyle: string; font: string; fillRect: (x: number, y: number, width: number, height: number) => void; fillText: (text: string, x: number, y: number) => void };
+      if (background === "white") { ctx.fillStyle = "white"; ctx.fillRect(0, 0, 128, 64); }
+      expect((await processImageBufferToPage(canvas.toBuffer("image/png"))).hasVisualContent).toBe(false);
+      ctx.fillStyle = "black"; ctx.font = "20px Arial"; ctx.fillText("I", 3, 36);
+      const page = await processImageBufferToPage(canvas.toBuffer("image/png"));
+      expect(page.hasVisualContent).toBe(true);
+      expect([page.width, page.height]).toEqual([128, 64]);
+    });
+
     it("能正确解析图片尺寸并检测视觉笔迹", async () => {
       const { createCanvas } = getCanvasModule();
       const canvas = createCanvas(120, 80);

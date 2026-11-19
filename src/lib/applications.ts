@@ -38,6 +38,75 @@ export * from "@/lib/applications-types";
  */
 export class ApplicationInputError extends Error {}
 
+/** 只有创建入口传 fallback：保留省略/null/空串默认值；PATCH 显式提供必须合法。 */
+export function parseApplicationStage(value: unknown, fallback?: ApplicationStage): ApplicationStage {
+  if (fallback !== undefined && (value === undefined || value === null || value === "")) return fallback;
+  if (typeof value !== "string" || !APPLICATION_STAGES.includes(value as ApplicationStage)) {
+    throw new ApplicationInputError("投递阶段无效");
+  }
+  return value as ApplicationStage;
+}
+
+export function parseInterviewRoundStatus(value: unknown, fallback?: InterviewRoundStatus): InterviewRoundStatus {
+  if (fallback !== undefined && (value === undefined || value === null || value === "")) return fallback;
+  if (typeof value !== "string" || !INTERVIEW_ROUND_STATUSES.includes(value as InterviewRoundStatus)) {
+    throw new ApplicationInputError("面试轮次状态无效");
+  }
+  return value as InterviewRoundStatus;
+}
+
+/** HTTP 与领域入口共用，错误类型不能被转换为空值或当作未更新。 */
+export function assertApplicationTextInput(input: {
+  company?: unknown; role?: unknown; salary_range?: unknown;
+  jd?: unknown; next_interview_at?: unknown; notes?: unknown;
+}): void {
+  for (const field of ["company", "role", "salary_range", "jd", "next_interview_at", "notes"] as const) {
+    if (input[field] !== undefined && typeof input[field] !== "string") {
+      throw new ApplicationInputError("公司、岗位、薪资、JD、面试时间和备注必须是字符串");
+    }
+  }
+}
+
+export function assertApplicationInterviewTextInput(input: {
+  round_name?: unknown; interview_time?: unknown; interviewer?: unknown;
+  location?: unknown; meeting_url?: unknown; notes?: unknown;
+}): void {
+  for (const field of ["round_name", "interview_time", "interviewer", "location", "meeting_url", "notes"] as const) {
+    if (input[field] !== undefined && typeof input[field] !== "string") {
+      throw new ApplicationInputError("轮次名称、面试时间、面试官、地点、会议链接和备注必须是字符串");
+    }
+  }
+}
+
+export function parseInterviewAdvanceStage(value: unknown): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") throw new ApplicationInputError("推进投递阶段必须是布尔值");
+  return value;
+}
+
+type ApplicationRelatedIds = Pick<CreateApplicationInput,
+  "resume_id" | "resume_version_id" | "interview_id" | "interview_series_id">;
+
+/** undefined=未提供，null/空字符串=清空，其余必须是数字类型的正安全整数。 */
+function parseOptionalRelatedId(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new ApplicationInputError("关联记录 ID 无效");
+  }
+  return value;
+}
+
+/** HTTP 与领域写入共用，禁止把布尔值、字符串或数组转换成其他记录 ID。 */
+export function parseApplicationRelatedIds(input: { [Key in keyof ApplicationRelatedIds]?: unknown }): ApplicationRelatedIds {
+  return {
+    resume_id: parseOptionalRelatedId(input.resume_id),
+    resume_version_id: parseOptionalRelatedId(input.resume_version_id),
+    interview_id: parseOptionalRelatedId(input.interview_id),
+    interview_series_id: parseOptionalRelatedId(input.interview_series_id),
+  };
+}
+
 /** HTTP 与领域写入共用，保证成功保存的 INTEGER 值始终可备份。 */
 export function parseInterviewReminderMinutes(value: unknown): number {
   if (value === undefined) return 15;
@@ -253,7 +322,7 @@ function attachInterviews(apps: Application[]): Application[] {
   const placeholders = ids.map(() => "?").join(",");
   const rows = db
     .prepare(
-      `SELECT * FROM application_interviews WHERE application_id IN (${placeholders}) ORDER BY interview_time ASC, id ASC`
+      `SELECT * FROM application_interviews WHERE application_id IN (${placeholders}) ORDER BY julianday(interview_time) IS NULL, julianday(interview_time), id ASC`
     )
     .all(...ids) as RawApplicationInterviewRow[];
 
@@ -346,7 +415,7 @@ export function listApplications(options?: {
 
   if (options?.upcomingOnly) {
     const currentIso = new Date().toISOString();
-    sql += ` AND a.next_interview_at >= ?`;
+    sql += ` AND julianday(a.next_interview_at) >= julianday(?)`;
     params.push(currentIso);
   }
 
@@ -394,6 +463,8 @@ export function getApplicationById(id: number): Application | null {
 }
 
 export function createApplication(input: CreateApplicationInput): Application {
+  assertApplicationTextInput(input);
+  input = { ...input, stage: parseApplicationStage(input.stage, "interested"), ...parseApplicationRelatedIds(input) };
   return inTransaction(() => {
     const app = insertApplication(input);
     linkApplicationNotebooks(getDb(), app.id);
@@ -433,12 +504,12 @@ function insertApplication(input: CreateApplicationInput): Application {
 
   const stage = input.stage || "interested";
   const salaryRange = input.salary_range?.trim() || "";
-  const resumeId = input.resume_id ? Number(input.resume_id) : null;
+  const resumeId = input.resume_id ?? null;
   if (resumeId === null && input.resume_version_id != null) throw new ApplicationInputError("请选择版本所属的简历");
   const resumeVersionId = resumeId === null ? null : resolveResumeVersionId(resumeId, input.resume_version_id);
   const jd = input.jd?.trim() || "";
-  const interviewId = input.interview_id ? Number(input.interview_id) : null;
-  const seriesId = input.interview_series_id ? Number(input.interview_series_id) : null;
+  const interviewId = input.interview_id ?? null;
+  const seriesId = input.interview_series_id ?? null;
   const nextInterviewAt = input.next_interview_at?.trim() || "";
   const notes = input.notes?.trim() || "";
   const ts = now();
@@ -479,6 +550,9 @@ export function updateApplication(
   id: number,
   partial: Partial<CreateApplicationInput>
 ): Application {
+  assertApplicationTextInput(partial);
+  if (partial.stage !== undefined) parseApplicationStage(partial.stage);
+  partial = { ...partial, ...parseApplicationRelatedIds(partial) };
   return inTransaction(() => {
     const existing = getApplicationById(id);
     if (!existing) throw new ApplicationInputError("未找到对应投递记录");
@@ -542,12 +616,12 @@ function updateApplicationFields(
 
   if (partial.interview_id !== undefined) {
     fields.push("interview_id = ?");
-    params.push(partial.interview_id ? Number(partial.interview_id) : null);
+    params.push(partial.interview_id ?? null);
   }
 
   if (partial.interview_series_id !== undefined) {
     fields.push("interview_series_id = ?");
-    params.push(partial.interview_series_id ? Number(partial.interview_series_id) : null);
+    params.push(partial.interview_series_id ?? null);
   }
 
   if (typeof partial.next_interview_at === "string") {
@@ -586,7 +660,7 @@ export function listApplicationInterviews(applicationId: number): ApplicationInt
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT * FROM application_interviews WHERE application_id = ? ORDER BY interview_time ASC, id ASC`
+      `SELECT * FROM application_interviews WHERE application_id = ? ORDER BY julianday(interview_time) IS NULL, julianday(interview_time), id ASC`
     )
     .all(applicationId) as RawApplicationInterviewRow[];
   return rows.map(mapInterviewRow);
@@ -608,8 +682,8 @@ export function syncApplicationNextInterview(applicationId: number): void {
     const pendingRow = db
       .prepare(
         `SELECT interview_time FROM application_interviews
-         WHERE application_id = ? AND status = 'scheduled' AND interview_time != ''
-         ORDER BY CASE WHEN interview_time >= ? THEN 0 ELSE 1 END, interview_time ASC
+         WHERE application_id = ? AND status = 'scheduled' AND interview_time != '' AND julianday(interview_time) IS NOT NULL
+         ORDER BY CASE WHEN julianday(interview_time) >= julianday(?) THEN 0 ELSE 1 END, julianday(interview_time), id
          LIMIT 1`
       )
       .get(applicationId, nowIso) as { interview_time: string } | undefined;
@@ -628,6 +702,8 @@ export function createApplicationInterview(
   input: CreateApplicationInterviewInput,
   options: { advanceStage?: boolean } = {},
 ): ApplicationInterview {
+  assertApplicationInterviewTextInput(input);
+  const advanceStage = parseInterviewAdvanceStage(options.advanceStage);
   return inTransaction(() => {
     const app = getApplicationById(applicationId);
     if (!app) throw new ApplicationInputError("未找到对应投递记录");
@@ -635,10 +711,7 @@ export function createApplicationInterview(
     const roundName = input.round_name?.trim();
     if (!roundName) throw new ApplicationInputError("面试轮次名称不能为空");
 
-    const status = input.status || "scheduled";
-    if (!INTERVIEW_ROUND_STATUSES.includes(status)) {
-      throw new ApplicationInputError("面试轮次状态无效");
-    }
+    const status = parseInterviewRoundStatus(input.status, "scheduled");
 
     const interviewTime = input.interview_time?.trim() || "";
     const interviewer = input.interviewer?.trim() || "";
@@ -661,7 +734,7 @@ export function createApplicationInterview(
     syncApplicationNextInterview(applicationId);
 
     // 轮次、下次面试时间、阶段及阶段历史属于一次用户操作，共享外层事务。
-    if (options.advanceStage && ["interested", "applied", "interviewing"].includes(app.stage)) {
+    if (advanceStage && ["interested", "applied", "interviewing"].includes(app.stage)) {
       updateApplication(applicationId, { stage: "interview" });
     }
 
@@ -675,6 +748,8 @@ export function updateApplicationInterview(
   id: number,
   partial: UpdateApplicationInterviewInput
 ): ApplicationInterview {
+  assertApplicationInterviewTextInput(partial);
+  if (partial.status !== undefined) parseInterviewRoundStatus(partial.status);
   return inTransaction(() => {
     const existing = getApplicationInterviewById(id);
     if (!existing) throw new ApplicationInputError("未找到对应面试轮次记录");
@@ -691,9 +766,6 @@ export function updateApplicationInterview(
     }
 
     if (typeof partial.status === "string") {
-      if (!INTERVIEW_ROUND_STATUSES.includes(partial.status as InterviewRoundStatus)) {
-        throw new ApplicationInputError("面试轮次状态无效");
-      }
       fields.push("status = ?");
       params.push(partial.status);
     }
@@ -771,8 +843,17 @@ export function getApplicationStats(): ApplicationStats {
   const upcomingRows = db
     .prepare(
       `
+    WITH candidates AS (
     SELECT
       ${APPLICATION_COLUMNS},
+      CASE
+        WHEN EXISTS (SELECT 1 FROM application_interviews any_round WHERE any_round.application_id = a.id)
+          THEN (SELECT i2.interview_time FROM application_interviews i2
+                WHERE i2.application_id = a.id AND i2.status = 'scheduled' AND julianday(i2.interview_time) IS NOT NULL
+                  AND julianday(i2.interview_time) >= julianday(?)
+                ORDER BY julianday(i2.interview_time), i2.id LIMIT 1)
+        ELSE a.next_interview_at
+      END AS stats_next_interview_at,
       COALESCE(json_extract(rv.snapshot, '$.title'), r.title) AS resume_title, rv.version AS resume_version, rv.name AS resume_version_name,
       i.rounds AS interview_rounds,
       i.status AS interview_status,
@@ -783,18 +864,23 @@ export function getApplicationStats(): ApplicationStats {
     LEFT JOIN resume_versions rv ON a.resume_version_id = rv.id
     LEFT JOIN interviews i ON a.interview_id = i.id
     LEFT JOIN interview_series s ON a.interview_series_id = s.id
-    WHERE a.next_interview_at >= ? AND a.next_interview_at <= ? AND a.stage != 'rejected'
-    ORDER BY a.next_interview_at ASC
+    WHERE a.stage != 'rejected'
+    )
+    SELECT * FROM candidates
+    WHERE julianday(stats_next_interview_at) BETWEEN julianday(?) AND julianday(?)
+    ORDER BY julianday(stats_next_interview_at), id
   `
     )
-    .all(nowIso, future7d) as RawApplicationRow[];
+    .all(nowIso, nowIso, future7d) as (RawApplicationRow & { stats_next_interview_at: string })[];
+
+  const upcomingApplications = upcomingRows.map(row => ({ ...mapRow(row), next_interview_at: row.stats_next_interview_at }));
 
   return {
     counts,
     totalActive,
     funnel,
     batchStats: calculateBatchFunnelMetrics(applications),
-    upcomingInterviews: attachInterviews(upcomingRows.map(mapRow)),
+    upcomingInterviews: attachInterviews(upcomingApplications),
     rates: {
       appliedRate,
       interviewRate,

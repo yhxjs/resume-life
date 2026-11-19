@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction } from "@/lib/db";
@@ -17,7 +18,7 @@ function loadJdPortrait(id: number) {
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const portraitId = Number(id);
+  const portraitId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(portraitId)) {
     return NextResponse.json({ error: "无效的记录 ID" }, { status: 400 });
   }
@@ -28,7 +29,7 @@ async function handleGet(_req: Request, { params }: { params: Promise<{ id: stri
 
 async function handleDelete(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const portraitId = Number(id);
+  const portraitId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(portraitId)) {
     return NextResponse.json({ error: "无效的记录 ID" }, { status: 400 });
   }

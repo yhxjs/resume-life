@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readApplicationStats } from "@/lib/application-stats";
 
 let tempDir: string;
 let db: DatabaseSync;
@@ -92,6 +93,7 @@ describe("application lifecycle tracking", () => {
     createApplication({ company: "秋招 Offer", role: "工程师", stage: "offer", batch_name: "秋招" });
     expect(listApplications().items).toHaveLength(50);
     const stats = getApplicationStats();
+    expect(readApplicationStats(stats)).toEqual(stats);
     expect(stats.funnel!.totalApplications).toBe(54);
     expect(stats.batchStats!.find(b => b.batchName === "春招")).toMatchObject({ totalActive: 53, totalRejected: 0, totalOffers: 0 });
     expect(stats.batchStats!.find(b => b.batchName === "秋招")).toMatchObject({ totalActive: 0, totalOffers: 1 });

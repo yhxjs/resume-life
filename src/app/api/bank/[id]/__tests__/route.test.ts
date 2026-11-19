@@ -58,6 +58,7 @@ describe("DELETE /api/bank/[id] 题库条目删除", () => {
     expect(data.ok).toBe(true);
     const rows = db?.prepare("SELECT COUNT(*) AS n FROM bank_entries").get() as { n: number } | undefined;
     expect(rows?.n).toBe(0);
+    expect((await route.GET(new Request("http://127.0.0.1/api/bank/1"), idContext(id))).status).toBe(404);
   });
 
   it("删除不存在的题目返回 404", async () => {
@@ -68,11 +69,42 @@ describe("DELETE /api/bank/[id] 题库条目删除", () => {
     expect(data.error).toContain("题目不存在");
   });
 
-  it("非法 id 返回 400", async () => {
+  it.each(["NaN", "0", "-1", "1.5", "9007199254740992", "Infinity", ""])("非法 id %s 的读写均返回 400，不触及其他题目", async id => {
+    const savedId = seedEntry();
     const route = await import("../route");
-    const res = await route.DELETE(request(), idContext(Number.NaN));
-    expect(res.status).toBe(400);
-    const data = (await res.json()) as { error: string };
-    expect(data.error).toContain("无效的题目 ID");
+    for (const method of [route.GET, route.DELETE]) {
+      const res = await method(request(), idContext(id));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toContain("无效的题目 ID");
+    }
+    expect(db!.prepare("SELECT id FROM bank_entries").all()).toEqual([{ id: savedId }]);
+  });
+
+  it("只读详情逐字返回历史长题目，不改写另一题", async () => {
+    const id = seedEntry(); const otherId = seedEntry();
+    const question = "  C++ / C# <T> &amp;\n内部  空格".repeat(1000);
+    db!.prepare("UPDATE bank_entries SET question = ?, direction = '' WHERE id = ?").run(question, id);
+    const before = db!.prepare("SELECT * FROM bank_entries ORDER BY id").all();
+    const route = await import("../route");
+    const response = await route.GET(new Request(`http://127.0.0.1/api/bank/${id}`), idContext(id));
+    expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ id, direction: "", kind: "tech", question, created_at: "2026-01-01T00:00:00.000Z" });
+    expect(db!.prepare("SELECT * FROM bank_entries ORDER BY id").all()).toEqual(before);
+    expect((await route.GET(new Request("http://127.0.0.1/api/bank/999"), idContext(999))).status).toBe(404);
+    expect(otherId).not.toBe(id);
+  });
+
+  it("题目删除失败时标题清理与删除一并回滚，另一题与计量不变", async () => {
+    const id = seedEntry(); const otherId = seedEntry();
+    db!.prepare("INSERT INTO llm_call_logs (created_at,feature,entity_type,entity_id,entity_label,task,model,api_format,status,input_tokens) VALUES ('','test','bank_entry',?,'原题标题','evaluate','test','openai_chat','ok',12)").run(id);
+    db!.exec(`CREATE TRIGGER block_bank_delete BEFORE DELETE ON bank_entries WHEN old.id = ${id} BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`);
+    const route = await import("../route");
+    expect((await route.DELETE(request(), idContext(id))).status).toBe(500);
+    expect(db!.prepare("SELECT id FROM bank_entries ORDER BY id").all()).toEqual([{ id }, { id: otherId }]);
+    expect(db!.prepare("SELECT entity_label,input_tokens FROM llm_call_logs WHERE entity_type = 'bank_entry' AND entity_id = ?").get(id)).toEqual({ entity_label: "原题标题", input_tokens: 12 });
+    db!.exec("DROP TRIGGER block_bank_delete");
+    expect((await route.DELETE(request(), idContext(id))).status).toBe(200);
+    expect(db!.prepare("SELECT entity_label,input_tokens FROM llm_call_logs WHERE entity_type = 'bank_entry' AND entity_id = ?").get(id)).toEqual({ entity_label: "", input_tokens: 12 });
+    expect(db!.prepare("SELECT id FROM bank_entries").all()).toEqual([{ id: otherId }]);
   });
 });

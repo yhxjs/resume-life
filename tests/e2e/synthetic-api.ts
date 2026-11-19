@@ -1,8 +1,9 @@
 import type { Page } from "@playwright/test";
 import type { ModuleData } from "../../src/lib/modules";
-import type { Application, ApplicationStage, ApplicationStats } from "../../src/lib/applications-types";
-import { calculateBatchFunnelMetrics, calculateFunnelMetrics } from "../../src/lib/application-funnel";
+import type { Application, ApplicationStage } from "../../src/lib/applications-types";
+import { applicationStatsFixture } from "../support/application-stats";
 import type { ResumeStyleOverrides } from "../../src/lib/templates";
+import { getReviewDate } from "../../src/lib/spaced-repetition";
 
 export function syntheticResume() {
   return {
@@ -62,7 +63,10 @@ export async function mockApi(page: Page, applications: Application[] = []) {
       response = resume;
     } else if (path === "/api/resumes") response = [{ ...resume.resume, versions: [{ id: 90001, version: 1, name: "测试发布版本" }] }];
     else if (path === "/api/templates") response = { items: [] };
-    else if (path === "/api/reviews") response = { items: [], nextCursor: null, summary: { date: "2026-09-27", total: 0, due: 0, notebook: 0, remedial: 0, overdue: 0, completed_today: 0 } };
+    else if (path === "/api/reviews") {
+      const date = getReviewDate(new Date(await page.evaluate(() => Date.now())), url.searchParams.get("time_zone") ?? undefined);
+      response = { items: [], nextCursor: null, summary: { date, total: 0, due: 0, notebook: 0, remedial: 0, overdue: 0, completed_today: 0 } };
+    }
     else if (path === "/api/applications/stats") {
       controls.applicationStatsRequests += 1;
       if (controls.failNextApplicationStatsRequests > 0) {
@@ -70,40 +74,7 @@ export async function mockApi(page: Page, applications: Application[] = []) {
         await route.fulfill({ status: 503, json: { error: "合成统计失败" } });
         return;
       }
-      const counts: Record<ApplicationStage, number> = {
-        interested: 0,
-        applied: 0,
-        interviewing: 0,
-        interview: 0,
-        reviewing: 0,
-        offer: 0,
-        rejected: 0,
-      };
-      for (const application of applicationData) counts[application.stage] += 1;
-      const totalLeads = counts.interested + counts.applied + counts.interviewing + counts.interview + counts.reviewing + counts.offer;
-      const appliedTotal = counts.applied + counts.interviewing + counts.interview + counts.reviewing + counts.offer;
-      const interviewingTotal = counts.interviewing + counts.interview + counts.reviewing + counts.offer;
-      const funnelApplications = applicationData.map(({ id, stage, batch_name, hiring_stage, terminal_stage, terminal_reason, stage_history }) => ({
-        id,
-        stage,
-        batch_name,
-        hiring_stage,
-        terminal_stage,
-        terminal_reason,
-        stage_history,
-      }));
-      response = {
-        counts,
-        totalActive: totalLeads,
-        upcomingInterviews: [],
-        rates: {
-          appliedRate: totalLeads > 0 ? Math.round((appliedTotal / totalLeads) * 100) : 0,
-          interviewRate: appliedTotal > 0 ? Math.round((interviewingTotal / appliedTotal) * 100) : 0,
-          offerRate: interviewingTotal > 0 ? Math.round((counts.offer / interviewingTotal) * 100) : 0,
-        },
-        funnel: calculateFunnelMetrics(funnelApplications),
-        batchStats: calculateBatchFunnelMetrics(funnelApplications),
-      } satisfies ApplicationStats;
+      response = applicationStatsFixture(applicationData);
     }
     else if (path === "/api/applications" && method === "GET") {
       controls.applicationListRequests.push(url.toString());
@@ -188,6 +159,7 @@ export async function mockApi(page: Page, applications: Application[] = []) {
     }
     else if (path === "/api/settings/configured") response = { configured: false };
     else if (path === "/api/projects" && method === "GET") response = [];
+    else if (/^\/api\/projects\/\d+\/summary-history$/.test(path) && method === "GET") response = { projectId: Number(path.split("/")[3]), items: [], nextCursor: null };
     else if (path === "/api/bank/directions" && method === "GET") response = [];
     else if (path === "/api/bank" && method === "GET") response = { items: [], nextCursor: null };
     else if (path === "/api/interviews" || path === "/api/interviews/series") response = { items: [], nextCursor: null, total: 0 };

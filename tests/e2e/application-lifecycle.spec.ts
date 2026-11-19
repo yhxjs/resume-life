@@ -59,7 +59,8 @@ test("真实投递：批次筛选、终止表单、履历与重开口径一致",
     await expect(screening.getByRole("cell")).toHaveText(["1", "0", "0", "— 未结算"]);
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByLabel("投递批次", { exact: true })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(pageWidth, `页面宽度 ${pageWidth}px 超出视口 ${390}px`).toBeLessThanOrEqual(390);
   } finally {
     // 超时会关闭 request；临时数据库仍由测试服务器清理，不遮蔽原始失败。
     await Promise.allSettled(ids.map(id => request.delete(`/api/applications/${id}`)));
@@ -72,6 +73,7 @@ test("已终止记录编辑批次和备注时保留当前归因", async ({ page 
     batch_name: "", hiring_stage: "hr_interview", stage_changed_at: "2026-09-01T00:00:00.000Z", terminal_stage: "hr_interview", terminal_reason: "岗位关闭", terminal_at: "2026-09-01T00:00:00.000Z",
     salary_range: "", resume_id: null, jd: "", interview_id: null, interview_series_id: null,
     next_interview_at: "", notes: "", created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z",
+    interviews: [], stage_history: [], preparation_tasks: [],
   };
   const api = await mockApi(page, [terminated]);
   await page.goto("/applications");

@@ -5,7 +5,7 @@ import type { ResumeSnapshot } from "@/lib/resume-version-types";
 import { compareResumeVersions, type ResumeDiffRow } from "@/lib/resume-version-diff";
 import { previewChanges, type PreviewChange } from "@/lib/resume-preview-changes";
 import { changedTextRanges, type TextRange } from "@/lib/resume-inline-diff";
-import { decodeHtmlEntities, stripRichText } from "@/lib/rich-text";
+import { stripRichText } from "@/lib/rich-text";
 import { prepare, ResumeDoc } from "@/components/resume/doc";
 import { RichText } from "@/components/resume/rich-text";
 
@@ -82,10 +82,11 @@ function SnapshotPreview({ snapshot, changes, paperRef }: { snapshot: ResumeSnap
 function Cell({ row, side }: { row: ResumeDiffRow; side: "before" | "after" }) {
   const text = row[side];
   if (text === null) return <span className="text-muted">— 无此内容</span>;
-  if (row.status !== "changed") return <RichText content={text} />;
-  const visibleText = (value: string) => stripRichText(value.includes("&lt;") && value.includes("&gt;") ? decodeHtmlEntities(value) : value);
-  const beforeText = visibleText(row.before ?? "");
-  const afterText = visibleText(row.after ?? "");
+  const richText = side === "before" ? row.beforeRichText : row.afterRichText;
+  if (row.status !== "changed") return richText ? <RichText content={text} /> : <>{text}</>;
+  // 富文本只由解析器解码一次；纯文本字段不解析标签或实体，避免漏掉真实改动。
+  const beforeText = row.beforeRichText ? stripRichText(row.before ?? "") : row.before ?? "";
+  const afterText = row.afterRichText ? stripRichText(row.after ?? "") : row.after ?? "";
   const content = side === "before" ? beforeText : afterText;
   const spans = changedTextRanges(beforeText, afterText)[side];
   const parts = spans.flatMap(({ start, end }, index) => {

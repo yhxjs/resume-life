@@ -469,7 +469,7 @@ export function ResumeEditorPreview({
                 <Link
                   href={`/tools/defense?resumeId=${id}`}
                   className="inline-flex items-center gap-1 rounded-lg border border-danger/30 bg-danger/5 px-2 py-1.5 text-xs font-medium text-danger shadow-xs transition-colors hover:bg-danger/10 hover:border-danger/50"
-                  title="让毒舌大厂面试官逐行扫描这份简历的高危软肋与防御预案"
+                  title="检查简历中待核实的表述，并练习回答可能的追问"
                 >
                   <span>💣 简历排雷</span>
                 </Link>

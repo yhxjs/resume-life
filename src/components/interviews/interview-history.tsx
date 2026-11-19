@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import type { InterviewItem, SeriesItem } from "@/hooks/use-interviews-page";
+import type { InterviewItem, SeriesItem, useInterviewsPage } from "@/hooks/use-interviews-page";
+import { ToolHistoryDeletionFeedback } from "@/components/common/tool-history-deletion-feedback";
 import { ResumeVersionBadge } from "@/components/resume/resume-version-badge";
 import { interviewStyleOf } from "@/lib/interview";
 import { btnDanger, btnPrimary, inputCls } from "@/lib/ui";
@@ -28,6 +29,8 @@ export function InterviewHistory({
   onKeywordChange,
   onRemove,
   onRemoveSeries,
+  deletion,
+  starting = false,
 }: {
   items: InterviewItem[] | null;
   seriesItems: SeriesItem[] | null;
@@ -45,24 +48,26 @@ export function InterviewHistory({
   onKeywordChange: (keyword: string) => void;
   onRemove: (id: number) => void;
   onRemoveSeries: (id: number) => void;
+  deletion: ReturnType<typeof useInterviewsPage>["deletion"];
+  starting?: boolean;
 }) {
   const rows: ListRow[] = [
     ...(items ?? []).map((item): ListRow => ({ kind: "single", ts: item.created_at, it: item })),
     ...(seriesItems ?? []).map((item): ListRow => ({ kind: "series", ts: item.created_at, it: item })),
   ].sort((left, right) => right.ts.localeCompare(left.ts));
   const recordsLoaded = items !== null && seriesItems !== null;
+  // 确认阶段保留触发按钮，以便取消后归还焦点；同步互斥由删除命令负责。
+  const deletionBlocksButtons = deletion.busy && deletion.single.phase !== "confirming" && deletion.series.phase !== "confirming";
 
   return (
     <>
+      <ToolHistoryDeletionFeedback deletion={deletion.single} deletingLabel="正在删除面试…" />
+      <ToolHistoryDeletionFeedback deletion={deletion.series} deletingLabel="正在删除进阶面试…" />
       {loadError && <LoadError message={loadError} onRetry={onRetry} />}
 
       {/* 加载中：骨架占位，避免首屏慢时误以为功能缺失 */}
       {!recordsLoaded && !loadError && (
-        <div className="mt-10 space-y-4" role="status" aria-live="polite">
-          <div className="flex items-center gap-2 border-b border-line pb-3">
-            <span aria-hidden className="h-[9px] w-[9px] rounded-[1px] bg-primary" />
-            <h2 className="font-serif text-base font-bold text-ink">历史实战与模考复盘</h2>
-          </div>
+        <div className="mt-10 space-y-4" role="status" aria-label="面试记录加载中" aria-live="polite">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div aria-hidden className="h-24 animate-pulse rounded-xl bg-surface" />
             <div aria-hidden className="h-24 animate-pulse rounded-xl bg-surface" />
@@ -78,8 +83,7 @@ export function InterviewHistory({
       )}
 
       {/* 历史实战记录区（卡片网格化） */}
-      {(items !== null || seriesItems !== null) && (rows.length > 0 || keyword.trim() !== "") && (
-        <div className="mt-10 space-y-4">
+      <div className="mt-10 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
             <div className="flex items-center gap-2">
               <span aria-hidden className="h-[9px] w-[9px] rounded-[1px] bg-primary" />
@@ -147,6 +151,7 @@ export function InterviewHistory({
                       <button
                         type="button"
                         onClick={() => onRemove(row.it.id)}
+                        disabled={deletionBlocksButtons || starting}
                         className={btnDanger}
                       >
                         删除
@@ -201,6 +206,7 @@ export function InterviewHistory({
                       <button
                         type="button"
                         onClick={() => onRemoveSeries(row.it.id)}
+                        disabled={deletionBlocksButtons || starting}
                         className={btnDanger}
                       >
                         删除
@@ -213,9 +219,9 @@ export function InterviewHistory({
                 </div>
               ))}
             </div>
-          ) : (
+          ) : recordsLoaded && !loadError && keyword.trim() !== "" ? (
             <p className="mt-3 text-sm text-faint">没有匹配的面试记录，换个关键词试试。</p>
-          )}
+          ) : null}
           {(itemsHasMore || seriesHasMore) && (
             <div className="flex flex-wrap justify-center gap-3">
               {itemsHasMore && (
@@ -230,18 +236,8 @@ export function InterviewHistory({
               )}
             </div>
           )}
-        </div>
-      )}
+      </div>
 
-      {!recordsLoaded && !loadError && (
-        <div className="mt-10" role="status" aria-label="面试记录加载中">
-          <div className="skeleton h-6 w-32 rounded-md" />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-            <div className="skeleton h-32 w-full rounded-xl" />
-            <div className="skeleton h-32 w-full rounded-xl" />
-          </div>
-        </div>
-      )}
     </>
   );
 }

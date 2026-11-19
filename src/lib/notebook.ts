@@ -2,7 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { now } from "@/lib/db";
 
 export type NotebookSnapshotData = {
-  answer?: string;
+  // 原答是反馈归属依据；尚未作答时显式传空字符串。
+  answer: string;
   comment?: string;
   reference?: string;
   scores?: string;
@@ -11,6 +12,7 @@ export type NotebookSnapshotData = {
 /**
  * 当练习题或模拟面试题目更新/生成了答案、点评、参考答案或分数时，
  * 只补齐已收藏快照中的空字段，已有内容不随源题更新（ADR-0003）。
+ * 非空原答必须逐字相同，不能把另一次重答的反馈拼接到旧原答上。
  *
  * @returns 是否补齐了字段（未收藏或没有可补齐的字段则返回 false）
  */
@@ -39,12 +41,14 @@ export function syncNotebookSnapshot(
   sets.push("updated_at = ?");
   params.push(timestamp);
 
-  params.push(source, sourceId);
+  params.push(source, sourceId, snapshot.answer);
 
   const res = db.prepare(
     `UPDATE notebook_entries
      SET ${sets.join(", ")}
-     WHERE source = ? AND source_id = ? AND (${missing.join(" OR ")})`
+     WHERE source = ? AND source_id = ?
+       AND (answer IS NULL OR answer = '' OR answer = ?)
+       AND (${missing.join(" OR ")})`
   ).run(...params);
 
   return res.changes > 0;

@@ -1,6 +1,7 @@
 import { readSettings, type ApiFormat } from "./settings";
 import { DEFAULT_MAX_OUTPUT_TOKENS, resolveMaxOutputTokens } from "./settings-constants";
 import { checkModelInput } from "./llm-input-budget";
+import { DuplicateModelJsonKeyError, parseModelJson } from "./model-json";
 import type { LlmSource } from "./llm-source";
 import { recordLlmCall } from "./llm-call-log";
 import { logServerEvent } from "./server-errors";
@@ -9,6 +10,7 @@ import { proxyConfigFromSettings, type ProxyConfig } from "./proxy-config";
 import { proxyFetchInit } from "./proxy-dispatcher";
 import { EMPTY_USAGE, mergeUsage, parseNonStreamUsage, type LlmUsage } from "./llm-adapter";
 import { acquireLlmLease, releaseLlmLease } from "./shared-budgets";
+import { observeLlmRequest, type LlmProgressObserver } from "./llm-request-progress";
 import {
   buildChatUrl,
   buildHeaders,
@@ -59,7 +61,9 @@ function resolveModel(task: LlmTask): {
 
 const LLM_IDLE_TIMEOUT_MS = 60000; // 连接、首块数据及相邻数据块之间的最大静默时间
 const LLM_TOTAL_TIMEOUT_MS = 300000;
-export const LLM_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+export const LLM_MAX_RESPONSE_BYTES = 2 * 1024 * 1024; // 非流式响应体及聚合后的可见正文
+// SSE 每片重复携带元数据，也可能包含不对外显示的推理；传输预算单独计，未知事件与心跳同样消耗。
+export const LLM_MAX_SSE_RESPONSE_BYTES = 8 * 1024 * 1024;
 export const LLM_MAX_SSE_FRAME_BYTES = 256 * 1024;
 const LLM_MAX_RETRIES = 2; // 自动重试上限，至少退避 1s、2s，并遵守 Retry-After；整个调用仍受总截止时间约束
 // useStream 在整个调用内只会从 true 降为 false，400 降级最多增加一次请求。
@@ -122,10 +126,10 @@ export class LlmHttpError extends Error {
 
 export class LlmTimeoutError extends Error {}
 
-/** requireJson 校验失败：回复不是可解析的 JSON。未向客户端输出过内容时可重试 */
+/** requireJson 校验失败：回复不是有效且键唯一的 JSON。未向客户端输出过内容时可重试 */
 class LlmInvalidJsonError extends Error {
-  constructor(raw: string) {
-    super(`AI 返回的内容不是有效 JSON：${raw.slice(0, 200)}`);
+  constructor() {
+    super("AI 返回的内容不是有效 JSON，请重试或核对模型输出格式");
   }
 }
 
@@ -158,9 +162,12 @@ async function requestOnce(args: {
   maxTokens?: number;
   useStream: boolean;
   attempt: number;
+  requestIndex: number;
   logLlm: LogFn;
   onDelta?: (delta: string) => void;
   onUsage?: (usage: LlmUsage) => void;
+  onHttpStatus?: ChatStreamOptions["onHttpStatus"];
+  onRequestProgress?: LlmProgressObserver;
   signal?: AbortSignal;
 }): Promise<{ content: string; usage: LlmUsage }> {
   const { format, model, url, apiKey, proxy, messages, maxTokens, useStream, attempt, logLlm, onDelta, signal } = args;
@@ -174,24 +181,30 @@ async function requestOnce(args: {
   let abortKind: "idle" | "total" | "client" | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
 
+  const abortRequest = (kind: NonNullable<typeof abortKind>, reason?: unknown) => {
+    // AbortController preserves the first reason; diagnostics must do the same
+    // while fetch/reader cancellation is still settling.
+    if (controller.signal.aborted) return;
+    abortKind = kind;
+    controller.abort(reason);
+  };
   const onClientAbort = () => {
-    abortKind = "client";
-    controller.abort(signal?.reason);
+    abortRequest("client", signal?.reason);
   };
   signal?.addEventListener("abort", onClientAbort);
 
   const bumpIdle = () => {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      abortKind = "idle";
-      controller.abort();
+      abortRequest("idle");
     }, LLM_IDLE_TIMEOUT_MS);
   };
   const totalTimer = setTimeout(() => {
-    abortKind = "total";
-    controller.abort();
+    abortRequest("total");
   }, LLM_TOTAL_TIMEOUT_MS);
   bumpIdle();
+  const progress = observeLlmRequest({ requestIndex: args.requestIndex, attempt, stream: useStream }, args.onRequestProgress);
+  let responseComplete = false;
 
   try {
     const res = await fetch(url, {
@@ -213,6 +226,11 @@ async function requestOnce(args: {
       signal: controller.signal,
       redirect: "manual",
     });
+    progress?.headers(res.status);
+    // 只观察真实响应状态；观察失败不能改变请求结果、重试或取消语义。
+    if (args.onHttpStatus) {
+      try { void Promise.resolve(args.onHttpStatus(res.status)).catch(() => {}); } catch {}
+    }
     logLlm({ status: String(res.status), attempt });
     if (!res.ok) {
       await res.body?.cancel().catch(() => {});
@@ -220,11 +238,12 @@ async function requestOnce(args: {
     }
     const content = (
       useStream
-        ? await readSseContent(res, format, bumpIdle, onDelta, collectUsage)
-        : await readJsonContent(res, format, collectUsage)
+        ? await readSseContent(res, format, bumpIdle, onDelta, collectUsage, progress)
+        : await readJsonContent(res, format, bumpIdle, collectUsage, progress)
     ).trim();
     signal?.throwIfAborted();
     if (!content) throw new LlmResponseError("LLM 返回了空内容", "protocol");
+    responseComplete = true;
     return { content, usage };
   } catch (err) {
     if (abortKind === "client") {
@@ -243,13 +262,25 @@ async function requestOnce(args: {
     clearTimeout(totalTimer);
     clearTimeout(idleTimer);
     signal?.removeEventListener("abort", onClientAbort);
+    progress?.end(responseComplete ? "complete" : "error", abortKind ?? null);
+  }
+}
+
+/** 解码错误是提供方协议损坏；不能当作可重试 TypeError，也不能静默替换原文。 */
+function decodeModelUtf8(decoder: TextDecoder, bytes?: Uint8Array, stream = false): string {
+  try {
+    return decoder.decode(bytes, { stream });
+  } catch {
+    throw new LlmResponseError("LLM 响应不是有效 UTF-8 编码，请核对模型服务返回格式", "protocol");
   }
 }
 
 async function readJsonContent(
   res: Response,
   format: ApiFormat,
+  bumpIdle: () => void,
   onUsage: (usage: Partial<LlmUsage>) => void,
+  progress?: ReturnType<typeof observeLlmRequest>,
 ): Promise<string> {
   if (!res.body) throw new LlmResponseError("LLM 响应缺少响应体", "protocol");
   const reader = res.body.getReader();
@@ -259,6 +290,8 @@ async function readJsonContent(
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      progress?.bytes(value.byteLength);
+      if (value.byteLength > 0) bumpIdle();
       bytes += value.byteLength;
       if (bytes > LLM_MAX_RESPONSE_BYTES) {
         throw new LlmResponseError("LLM 响应超过字节上限", "protocol");
@@ -268,9 +301,18 @@ async function readJsonContent(
   } finally {
     await reader.cancel().catch(() => {});
   }
-  const data = JSON.parse(Buffer.concat(chunks, bytes).toString("utf8")) as Record<string, unknown>;
+  const decoded = decodeModelUtf8(new TextDecoder("utf-8", { fatal: true }), Buffer.concat(chunks, bytes));
+  let data: unknown;
+  try {
+    data = JSON.parse(decoded);
+  } catch {
+    // JSON.parse 的异常可能包含响应正文；不要向调用方或日志透出。
+    throw new LlmResponseError("LLM 响应不是有效 JSON", "protocol");
+  }
   onUsage(parseNonStreamUsage(format, data));
-  return parseNonStreamReply(format, data);
+  const content = parseNonStreamReply(format, data);
+  progress?.content(Buffer.byteLength(content, "utf8"));
+  return content;
 }
 
 /** 解析 SSE 流，聚合文本内容并支持向外实时逐块输出 */
@@ -279,25 +321,35 @@ async function readSseContent(
   format: ApiFormat,
   bumpIdle: () => void,
   onDelta?: (delta: string) => void,
-  onUsage?: (usage: Partial<LlmUsage>) => void
+  onUsage?: (usage: Partial<LlmUsage>) => void,
+  progress?: ReturnType<typeof observeLlmRequest>,
 ): Promise<string> {
   if (!res.body) throw new Error("LLM 流式响应缺少响应体");
   const reader = res.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
   let content = "";
   let responseBytes = 0;
   let contentBytes = 0;
+  let frameBytes = 0;
+  let dataLines: string[] = [];
+  let skipLineFeed = false;
 
-  const handleLine = (rawLine: string): "done" | undefined => {
-    if (Buffer.byteLength(rawLine, "utf8") > LLM_MAX_SSE_FRAME_BYTES) {
-      throw new LlmResponseError("LLM SSE 单帧超过字节上限", "protocol");
-    }
-    const line = rawLine.replace(/\r$/, "");
-    if (!line.startsWith("data:")) return; // 空行、注释及非 data 字段
-    const payload = line.slice(5).trim();
+  const dispatchEvent = (): "done" | undefined => {
+    const payload = dataLines.join("\n").trim();
+    dataLines = [];
+    frameBytes = 0;
+    if (!payload) return;
     return handleSsePayload(format, payload, (deltaText) => {
-      contentBytes += Buffer.byteLength(deltaText, "utf8");
+      // JSON deltas can split a UTF-16 surrogate pair even though the wire is
+      // valid UTF-8. Count the joined text, not two replacement characters.
+      const previousCode = content.charCodeAt(content.length - 1);
+      const nextCode = deltaText.charCodeAt(0);
+      const joinsSurrogatePair = previousCode >= 0xd800 && previousCode <= 0xdbff
+        && nextCode >= 0xdc00 && nextCode <= 0xdfff;
+      const deltaBytes = Buffer.byteLength(deltaText, "utf8") - (joinsSurrogatePair ? 2 : 0);
+      contentBytes += deltaBytes;
+      progress?.content(deltaBytes);
       if (contentBytes > LLM_MAX_RESPONSE_BYTES) {
         throw new LlmResponseError("LLM 响应内容超过字节上限", "protocol");
       }
@@ -306,30 +358,54 @@ async function readSseContent(
     }, onUsage);
   };
 
+  const handleLine = (line: string, separatorBytes = 0): "done" | undefined => {
+    frameBytes += Buffer.byteLength(line, "utf8") + separatorBytes;
+    if (frameBytes > LLM_MAX_SSE_FRAME_BYTES) {
+      throw new LlmResponseError("LLM SSE 单帧超过字节上限", "protocol");
+    }
+    if (!line) return dispatchEvent();
+    // 同一事件的 data 字段以换行连接；注释、event、id 等不参与 JSON 内容。
+    if (line === "data") dataLines.push("");
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+  };
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      bumpIdle();
-      if (done) break;
-      responseBytes += value.byteLength;
-      if (responseBytes > LLM_MAX_RESPONSE_BYTES) {
+      const receivedBytes = value?.byteLength ?? 0;
+      // Empty transport chunks are not activity, matching non-streaming reads.
+      if (receivedBytes > 0) bumpIdle();
+      progress?.bytes(receivedBytes);
+      responseBytes += receivedBytes;
+      if (responseBytes > LLM_MAX_SSE_RESPONSE_BYTES) {
         throw new LlmResponseError("LLM 响应超过字节上限", "protocol");
       }
-      buffer += decoder.decode(value, { stream: true });
+      buffer += decodeModelUtf8(decoder, done ? undefined : value, !done);
       let nl: number;
-      while ((nl = buffer.indexOf("\n")) !== -1) {
-        const line = buffer.slice(0, nl);
-        buffer = buffer.slice(nl + 1);
-        if (handleLine(line) === "done") return content;
+      // CR 立即结束一行，不等待网关关闭连接；跨块的可选 LF 不再形成空行。
+      if (skipLineFeed && buffer.length) {
+        if (buffer[0] === "\n") buffer = buffer.slice(1);
+        skipLineFeed = false;
       }
-      if (Buffer.byteLength(buffer, "utf8") > LLM_MAX_SSE_FRAME_BYTES) {
+      while ((nl = buffer.search(/[\r\n]/)) !== -1) {
+        const isCarriageReturn = buffer[nl] === "\r";
+        const separatorBytes = isCarriageReturn && buffer[nl + 1] === "\n" ? 2 : 1;
+        skipLineFeed = isCarriageReturn && nl === buffer.length - 1;
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + separatorBytes);
+        // 单帧预算按规范化为 LF 后的事件计算；原始网络字节另受响应总预算限制。
+        if (handleLine(line, 1) === "done") return content;
+      }
+      if (frameBytes + Buffer.byteLength(buffer, "utf8") > LLM_MAX_SSE_FRAME_BYTES) {
         throw new LlmResponseError("LLM SSE 单帧超过字节上限", "protocol");
       }
+      if (done) break;
     }
-    buffer += decoder.decode();
     if (buffer) {
       if (handleLine(buffer) === "done") return content;
     }
+    // 保留网关在最后一帧后直接 EOF 的兼容；仍须收到协议完成事件。
+    if (dispatchEvent() === "done") return content;
   } finally {
     await reader.cancel().catch(() => {});
   }
@@ -349,21 +425,34 @@ export type ChatStreamOptions = {
   maxTokens?: number;
   signal?: AbortSignal;
   source?: LlmSource;
+  /** 每次收到 HTTP 响应时同步通知数值状态；不等待异步观察，隔离其异常。 */
+  onHttpStatus?: (status: number) => void | Promise<void>;
+  /** Per-request metadata, including strict-JSON buffering; never text. Observer failures are isolated. */
+  onRequestProgress?: LlmProgressObserver;
+  /**
+   * 进入终态计量时通知一次已观测的累计用量；可能只覆盖部分尝试。
+   * 未进入该路径的前置失败不通知；三项 null 不证明请求已发出。
+   * 传入独立副本，隔离同步/异步异常且不等待观察结果。
+   */
+  onUsage?: (usage: LlmUsage) => void | Promise<void>;
   /** 关联 ID，随请求从路由层透传下来，用于把 LLM 层日志与用户看到的报错串起来 */
   requestId?: string;
   /** 未保存配置的连接测试：固定非流式、1024 输出 token、15 秒截止且不自动重试。 */
   connectionTest?: ReturnType<typeof readModelSettingsRequest>;
   /**
-   * 要求回复是可解析的 JSON（与 extractJson 同一套容错：容忍围栏与前后杂文）。
+   * true 使用 extractJson 容错（容忍围栏与前后杂文）；"strict" 要求整段为纯 JSON。
+   * 两者均拒绝同一对象内重复的键，避免字段被静默覆盖；不改变历史数据读取。
    * 不满足时按可重试错误自动重新生成，总尝试次数与网络重试共享上限；
-   * 流式回调已向客户端输出过内容后无法重试，只能原样返回由调用方解析报错。
+   * 上游仍以流式读取，但通过 JSON 校验后才一次性调用 onDelta，避免无效片段外发。
+   * 仅校验 JSON 语法，业务字段仍由调用方校验。
    */
-  requireJson?: boolean;
+  requireJson?: boolean | "strict";
 };
 
 /**
  * 流式调用 LLM 接口：
- * 实时通过 onDelta 回调逐字/逐块输出文本，并在结束时返回完整的聚合文本。
+ * 通过 onDelta 回调输出文本，并在结束时返回完整的聚合文本。
+ * 默认实时逐块输出；requireJson 模式在完整 JSON 校验通过后一次性输出。
  *
  * 入口处有本进程快速闸门和共享 sidecar lease：超限时立刻失败，不排队。排队会让用户盯着一个没有
  * 任何反馈的界面等几十秒，最后收到的还是「请检查服务是否可用」这种误导性文案；
@@ -426,7 +515,12 @@ async function runChatStream(
   const url = buildChatUrl(baseUrl, format);
   const startedAt = Date.now();
   const source = opts?.source;
+  let usageNotified = false;
   const meter = (status: "ok" | "failed" | "cancelled", errorCode: string, attempts: number, usage: LlmUsage) => {
+    if (!usageNotified) {
+      usageNotified = true;
+      try { void Promise.resolve(opts?.onUsage?.({ ...usage })).catch(() => {}); } catch {}
+    }
     if (!source) return;
     recordLlmCall({ source, task, model, apiFormat: format, status, errorCode, attempts, durationMs: Date.now() - startedAt, usage });
   };
@@ -464,6 +558,7 @@ async function runChatStream(
       }
     : undefined;
 
+  let requestIndex = 0;
   for (;;) {
     let attemptUsage: LlmUsage = EMPTY_USAGE;
     try {
@@ -478,18 +573,29 @@ async function runChatStream(
         maxTokens,
         useStream,
         attempt,
+        requestIndex: requestIndex++,
         logLlm,
-        onDelta: wrappedOnDelta,
+        // JSON 输出在解析成功前不能发给客户端，否则坏响应会泄漏且不能安全重试。
+        onDelta: opts?.requireJson ? undefined : wrappedOnDelta,
         onUsage: (reported) => { attemptUsage = reported; },
+        onHttpStatus: opts?.onHttpStatus,
+        onRequestProgress: opts?.onRequestProgress,
         signal,
       });
+      signal?.throwIfAborted();
       if (opts?.requireJson) {
-        try { extractJson(content); } catch { throw new LlmInvalidJsonError(content); }
+        try {
+          if (opts.requireJson === "strict") parseModelJson(content);
+          else extractJson(content);
+        } catch { throw new LlmInvalidJsonError(); }
       }
+      if (opts?.requireJson) wrappedOnDelta?.(content);
       meter("ok", "", attempt, addUsage(knownUsage, usage));
       return content;
     } catch (err) {
       knownUsage = addUsage(knownUsage, attemptUsage);
+      // 与计量使用同一份已观测总量；不为获取拒绝终态后的 usage 继续读取流。
+      if (err instanceof LlmResponseError) err.usage = { ...knownUsage };
       const errorCode = err instanceof LlmHttpError ? `http_${err.status}`
         : err instanceof LlmResponseError ? err.code
         : err instanceof LlmTimeoutError ? "timeout"
@@ -532,14 +638,72 @@ async function runChatStream(
   }
 }
 
+/** 找到一个对象/数组的完整边界；字符串中的括号与围栏只是正文。语法仍交给原生解析器。 */
+function jsonContainerEnd(text: string, start: number): number {
+  let depth = 0;
+  for (let index = start; index < text.length; index++) {
+    if (text[index] === '"') {
+      for (index++; index < text.length; index++) {
+        if (text[index] === "\\") index++;
+        else if (text[index] === '"') break;
+      }
+    } else if (text[index] === "{" || text[index] === "[") depth++;
+    else if ((text[index] === "}" || text[index] === "]") && --depth === 0) return index;
+  }
+  return -1;
+}
+
 /** 从 LLM 回复中提取 JSON（容忍 ```json 围栏与前后杂文） */
 export function extractJson<T>(raw: string): T {
   let text = raw.trim();
+  // 合法 JSON 的字符串也可能含代码围栏；先解析整体，不能把字段正文当成回复容器。
+  try { return parseModelJson(text) as T; }
+  catch (error) {
+    // 结构完整但字段冲突时不能再抽取正文里的围栏，丢弃冲突后冒充成功。
+    if (error instanceof DuplicateModelJsonKeyError) throw new LlmInvalidJsonError();
+  }
+  const outerFence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  if (outerFence) {
+    try { return parseModelJson((outerFence[1] ?? "").trim()) as T; }
+    catch (error) {
+      if (error instanceof DuplicateModelJsonKeyError) throw new LlmInvalidJsonError();
+    }
+  }
+  // 有前后说明时，优先检查最早的完整对象/数组，不能把其字符串内的围栏当成外层回复。
+  // 真正的外层围栏也先按 JSON 结构找结束位置，避免被正文中的三反引号提前截断。
+  const openingFence = /```(?:json)?\s*/.exec(text);
+  if (openingFence) {
+    const containerStarts = /[\[{]/g;
+    for (let match = containerStarts.exec(text); match && match.index < openingFence.index; match = containerStarts.exec(text)) {
+      const end = jsonContainerEnd(text, match.index);
+      if (end === -1) break;
+      try {
+        const candidate = parseModelJson(text.slice(match.index, end + 1)) as T;
+        if (end > openingFence.index) return candidate;
+        // 说明中的独立 {} / [] 不抢占真正围栏；仍检查后续对象，不能跳过其字段冲突。
+      }
+      catch (error) {
+        if (error instanceof DuplicateModelJsonKeyError || openingFence.index < end) {
+          throw new LlmInvalidJsonError();
+        }
+      }
+      containerStarts.lastIndex = end + 1;
+    }
+    const bodyStart = openingFence.index + openingFence[0].length;
+    if (text[bodyStart] === "{" || text[bodyStart] === "[") {
+      const end = jsonContainerEnd(text, bodyStart);
+      if (end !== -1) {
+        try { return parseModelJson(text.slice(bodyStart, end + 1)) as T; }
+        catch { throw new LlmInvalidJsonError(); }
+      }
+    }
+  }
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) text = (fence[1] ?? "").trim();
   try {
-    return JSON.parse(text) as T;
-  } catch {
+    return parseModelJson(text) as T;
+  } catch (error) {
+    if (error instanceof DuplicateModelJsonKeyError) throw new LlmInvalidJsonError();
     const firstObj = text.indexOf("{");
     const firstArr = text.indexOf("[");
     const start =
@@ -548,8 +712,10 @@ export function extractJson<T>(raw: string): T {
     const lastArr = text.lastIndexOf("]");
     const end = Math.max(lastObj, lastArr);
     if (start !== -1 && end > start) {
-      return JSON.parse(text.slice(start, end + 1)) as T;
+      try {
+        return parseModelJson(text.slice(start, end + 1)) as T;
+      } catch { /* 原生 SyntaxError 可能含正文，统一使用无正文的错误。 */ }
     }
-    throw new Error(`AI 返回的内容不是有效 JSON：${raw.slice(0, 200)}`);
+    throw new LlmInvalidJsonError();
   }
 }

@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { ImportProofingWorkbench } from "../import-proofing-workbench";
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+afterEach(() => {
+  cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+  if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+  else Reflect.deleteProperty(navigator, "clipboard");
+});
 
 function Fixture({ original = "示例科技与示例科技合作" }: { original?: string }) {
   const [company, setCompany] = useState("示例科技");
@@ -60,6 +65,45 @@ describe("简历导入原文校对工作台", () => {
     expect(screen.getByText(/2 页/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "复制原文" }));
     await waitFor(() => expect(copy).toHaveBeenCalledWith("第一页\n第二页"));
+  });
+
+  it("重新复制时清除旧成功，等待时禁用按钮，失败重试不改变原文、定位或编辑草稿", async () => {
+    const copy = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
+    const original = "示例科技 <T> &amp;\n只参与校验，尚未上线。";
+    render(<Fixture original={original} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "公司名称" }), { target: { value: "编辑中的公司" } });
+    fireEvent.click(screen.getByRole("button", { name: "定位原文：工作 1 · 公司" }));
+    const button = screen.getByRole("button", { name: "复制原文" });
+    fireEvent.click(button);
+    await screen.findByRole("status", { name: "原文复制状态" });
+    let reject!: (reason: Error) => void;
+    copy.mockReturnValueOnce(new Promise<void>((_resolve, no) => { reject = no; }));
+    fireEvent.click(button);
+    expect(screen.queryByRole("status", { name: "原文复制状态" })).toBeNull();
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { reject(new Error("denied")); });
+    expect((await screen.findByRole("alert")).textContent).toContain("手动复制");
+    fireEvent.click(button);
+    await screen.findByRole("status", { name: "原文复制状态" });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(copy).toHaveBeenLastCalledWith(original);
+    expect((screen.getByRole("textbox", { name: "公司名称" }) as HTMLInputElement).value).toBe("编辑中的公司");
+    expect(screen.getByRole("status", { name: "原文定位状态" }).textContent).toContain("原文未找到");
+    expect(screen.getByLabelText("导入原文").textContent).toBe(original);
+  });
+
+  it("原文更新后不沿用旧复制结果，空原文禁止复制", async () => {
+    const copy = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
+    const { rerender } = render(<Fixture original="旧原文" />);
+    fireEvent.click(screen.getByRole("button", { name: "复制原文" }));
+    await screen.findByRole("status", { name: "原文复制状态" });
+    rerender(<Fixture original="新原文" />);
+    expect(screen.queryByRole("status", { name: "原文复制状态" })).toBeNull();
+    rerender(<Fixture original="" />);
+    expect((screen.getByRole("button", { name: "复制原文" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(copy).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])("窄屏原文定位遵循减少动效偏好 %s，聚焦输入框不打断编辑", (reduce) => {

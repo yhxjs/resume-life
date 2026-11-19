@@ -1,13 +1,16 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { clearEntityLlmLabels } from "@/lib/llm-label-cleanup";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction } from "@/lib/db";
 import { normalizeReport, normalizeEvaluatorReport, type InterviewReport, type EvaluatorReport } from "@/lib/scores";
+import { readInterviewRetryHistory, RETRY_HISTORY_UNAVAILABLE } from "@/lib/interview-retry-history";
+import { readInterviewOriginalScores, ORIGINAL_SCORES_UNAVAILABLE } from "@/lib/interview-original-scores";
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const interviewId = Number(id);
-  if (!Number.isInteger(interviewId)) {
+  const interviewId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(interviewId) || interviewId <= 0) {
     return NextResponse.json({ error: "无效的面试 ID" }, { status: 400 });
   }
   const db = getDb();
@@ -119,27 +122,21 @@ async function handleGet(_req: Request, { params }: { params: Promise<{ id: stri
     evaluator_report: evaluatorReport,
     reverse_interview: reverseInterview,
     turns: turns.map((t) => {
-      let scores = null;
-      try {
-        scores = JSON.parse(t.scores || "null");
-      } catch {
-        scores = null;
-      }
-      let retries = [];
-      try {
-        retries = JSON.parse(t.retries || "[]");
-      } catch {
-        retries = [];
-      }
-      return { ...t, reference: t.reference || "", retries, scores };
+      const original = readInterviewOriginalScores(t.scores);
+      const scores = original?.scores ?? null;
+      const history = readInterviewRetryHistory(t.retries);
+      return { ...t, reference: t.reference || "", retries: history?.retries ?? [], scores,
+        ...(original === null || (t.answered_at !== "" && scores === null) ? { scores_error: ORIGINAL_SCORES_UNAVAILABLE } : {}),
+        ...(history === null ? { retries_error: RETRY_HISTORY_UNAVAILABLE } : {}),
+      };
     }),
   });
 }
 
 async function handleDelete(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const interviewId = Number(id);
-  if (!Number.isInteger(interviewId)) {
+  const interviewId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(interviewId) || interviewId <= 0) {
     return NextResponse.json({ error: "无效的面试 ID" }, { status: 400 });
   }
   const db = getDb();

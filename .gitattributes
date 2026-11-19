@@ -1,0 +1,2 @@
+# The reviewed dependency policy binds the exact lockfile bytes on every OS.
+package-lock.json text eol=lf

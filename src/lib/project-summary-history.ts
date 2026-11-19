@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
-import { getDb, inTransaction, now } from "./db";
+import { getDb, inTransaction, now, withReadSnapshot } from "./db";
 import { createCursorPage, type CursorPage } from "./cursor-pagination";
 import { loadProjectRow } from "./projects";
 import { adoptSummaryChanges, compareProjectSummaries, type SummaryAiBaseline, type SummaryChange, type SummaryUnitKey } from "./project-summary-diff";
-import { normalizeSummary, parseSummary, SUMMARY_SECTIONS, type ProjectSummary } from "./summary";
+import { normalizeSummary, parseSummary, ProjectSummaryCorruptError, SUMMARY_SECTIONS, type ProjectSummary } from "./summary";
 import { assertBackupRecordBytes, BackupLimitError } from "./backup-limits";
+import { isStoredProjectMaterialSnapshot, isStoredSummaryAiBaseline } from "./backup-domain";
+import { serializeProjectSummaryMaterial } from "./project-summary-llm";
+import { iterateProjectMaterialSources, type ProjectMaterialSource } from "./project-materials";
+import { serializeDocumentTableProvenance } from "./document-table-provenance";
 
 export type MaterialSnapshotItem = { id: number; title: string; digest: string };
 export type MaterialChange = { id: number; title: string; status: "new" | "changed" | "removed" };
@@ -26,23 +30,56 @@ export class ProjectSummaryHistoryError extends Error {
   }
 }
 
-function latestHistory(projectId: number): HistoryRow | undefined {
-  return getDb().prepare("SELECT id, source, created_at, summary, ai_baseline, material_snapshot FROM project_summary_history WHERE project_id = ? ORDER BY id DESC LIMIT 1")
+function latestHistory(projectId: number, db = getDb()): HistoryRow | undefined {
+  return db.prepare("SELECT id, source, created_at, summary, ai_baseline, material_snapshot FROM project_summary_history WHERE project_id = ? ORDER BY id DESC LIMIT 1")
     .get(projectId) as HistoryRow | undefined;
 }
 
-export function captureProjectMaterialSnapshot(projectId: number): MaterialSnapshotItem[] {
-  const materials = getDb().prepare("SELECT id, title, content FROM project_materials WHERE project_id = ? ORDER BY id")
-    .iterate(projectId) as IterableIterator<{ id: number; title: string; content: string }>;
-  const snapshot: MaterialSnapshotItem[] = [];
-  for (const { id, title, content } of materials) {
-    snapshot.push({ id, title, digest: createHash("sha256").update(title).update("\0").update(content).digest("hex") });
-  }
-  return snapshot;
+function corruptHistory(row: HistoryRow): ProjectSummaryHistoryError {
+  return new ProjectSummaryHistoryError(`项目总结历史（版本 ${row.id}）已损坏，请修复历史数据或从有效备份恢复后重试`, 422);
 }
 
-function materialFingerprint(snapshot: MaterialSnapshotItem[]): string {
-  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+function parseHistoryJson(row: HistoryRow, raw: string, valid: (value: unknown) => boolean): unknown {
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { throw corruptHistory(row); }
+  if (!valid(value)) throw corruptHistory(row);
+  return value;
+}
+
+function historyBaseline(row: HistoryRow): SummaryAiBaseline {
+  return parseHistoryJson(row, row.ai_baseline, isStoredSummaryAiBaseline) as SummaryAiBaseline;
+}
+
+/** 只验证本次要消费或继承的元数据，不改写历史原文。 */
+function historyMetadata(row: HistoryRow | undefined) {
+  return {
+    baseline: row ? historyBaseline(row) : {},
+    materials: !row || row.material_snapshot === null ? null
+      : parseHistoryJson(row, row.material_snapshot, isStoredProjectMaterialSnapshot) as MaterialSnapshotItem[],
+  };
+}
+
+function historySummary(row: HistoryRow): ProjectSummary {
+  try { return parseSummary(row.summary); }
+  catch (error) {
+    if (error instanceof ProjectSummaryCorruptError) throw corruptHistory(row);
+    throw error;
+  }
+}
+
+function snapshotItem({ id, title, content, tableProvenance }: ProjectMaterialSource): MaterialSnapshotItem {
+  const digest = createHash("sha256").update(title).update("\0").update(content);
+  if (tableProvenance !== undefined) digest.update("\0docx-table-provenance-v1\0").update(serializeDocumentTableProvenance(tableProvenance, content));
+  return { id, title, digest: digest.digest("hex") };
+}
+
+export function captureProjectMaterialSnapshot(projectId: number, db = getDb()): MaterialSnapshotItem[] {
+  return Array.from(iterateProjectMaterialSources(projectId, db), snapshotItem);
+}
+
+/** 草稿携带的指纹同时绑定项目身份和生成时名称；持久化材料快照格式保持不变。 */
+function materialFingerprint(projectId: number, projectName: string, snapshot: MaterialSnapshotItem[]): string {
+  return createHash("sha256").update(JSON.stringify({ projectId, projectName, materials: snapshot })).digest("hex");
 }
 
 function compareMaterials(previous: MaterialSnapshotItem[] | null, current: MaterialSnapshotItem[]): MaterialChange[] {
@@ -86,7 +123,45 @@ export function projectSummaryRevision(projectId: number): number {
   return latestHistory(projectId)?.id ?? 0;
 }
 
-export function prepareProjectSummaryProposal(projectId: number, generated: ProjectSummary, sourceMaterials = captureProjectMaterialSnapshot(projectId), sourceRevisionId = projectSummaryRevision(projectId)): {
+function readSummaryHeader(projectId: number, db: ReturnType<typeof getDb>) {
+  const project = loadProjectRow(projectId, db);
+  if (!project) throw new ProjectSummaryHistoryError("项目不存在", 404);
+  const latest = latestHistory(projectId, db);
+  historyMetadata(latest);
+  return { project, revisionId: latest?.id ?? 0 };
+}
+
+export function captureProjectSummarySource(projectId: number) {
+  return withReadSnapshot(db => ({
+    ...readSummaryHeader(projectId, db),
+    materials: captureProjectMaterialSnapshot(projectId, db),
+  }));
+}
+
+/** 模型正文与指纹都来自同一行，只为预算内的完整记录计算摘要。 */
+export function captureProjectSummaryInput(projectId: number, maxMaterialChars: number) {
+  return withReadSnapshot(db => {
+    const header = readSummaryHeader(projectId, db);
+    const materials: MaterialSnapshotItem[] = [];
+    const chunks: string[] = [];
+    let remaining = maxMaterialChars;
+    for (const material of iterateProjectMaterialSources(projectId, db)) {
+      if (material.title.length + material.content.length > remaining) throw new ProjectSummaryHistoryError(
+        `项目材料超过单次总结的 ${maxMaterialChars} 字符限制（含标题与材料结构），请精简材料后重试；本次未生成总结，原材料保持不变`, 413,
+      );
+      const text = serializeProjectSummaryMaterial(material, materials.length);
+      if (text.length > remaining) throw new ProjectSummaryHistoryError(
+        `项目材料超过单次总结的 ${maxMaterialChars} 字符限制（含标题与材料结构），请精简材料后重试；本次未生成总结，原材料保持不变`, 413,
+      );
+      remaining -= text.length;
+      chunks.push(text);
+      materials.push(snapshotItem(material));
+    }
+    return { ...header, materials, materialText: chunks.join("") };
+  });
+}
+
+export function prepareProjectSummaryProposal(projectId: number, generated: ProjectSummary, sourceMaterials = captureProjectMaterialSnapshot(projectId), sourceRevisionId = projectSummaryRevision(projectId), sourceProjectName?: string): {
   summary: ProjectSummary;
   comparison: SummaryChange[];
   materialChanges: MaterialChange[];
@@ -97,13 +172,12 @@ export function prepareProjectSummaryProposal(projectId: number, generated: Proj
   if (!project) throw new ProjectSummaryHistoryError("项目不存在", 404);
   const latest = latestHistory(projectId);
   const current = parseSummary(project.summary);
-  const baseline = latest ? JSON.parse(latest.ai_baseline) as SummaryAiBaseline : {};
-  const previousMaterials = latest?.material_snapshot ? JSON.parse(latest.material_snapshot) as MaterialSnapshotItem[] : null;
+  const { baseline, materials: previousMaterials } = historyMetadata(latest);
   return {
     summary: generated,
     comparison: compareProjectSummaries(current, generated, baseline),
     materialChanges: previousMaterials === null ? [] : compareMaterials(previousMaterials, sourceMaterials),
-    materialFingerprint: materialFingerprint(sourceMaterials),
+    materialFingerprint: materialFingerprint(projectId, sourceProjectName ?? project.name, sourceMaterials),
     revisionId: sourceRevisionId,
   };
 }
@@ -121,11 +195,11 @@ export function saveProjectSummary(projectId: number, input: {
       throw new ProjectSummaryHistoryError("项目总结已更新，请刷新后重新核对草稿", 409);
     }
     const currentMaterials = captureProjectMaterialSnapshot(projectId);
-    if (input.proposal && input.proposal.materialFingerprint !== materialFingerprint(currentMaterials)) {
-      throw new ProjectSummaryHistoryError("项目材料已更新，请重新生成并核对草稿", 409);
+    if (input.proposal && input.proposal.materialFingerprint !== materialFingerprint(projectId, project.name, currentMaterials)) {
+      throw new ProjectSummaryHistoryError("草稿对应的项目、名称或材料已更新，请重新生成并核对草稿", 409);
     }
     const current = parseSummary(project.summary);
-    const previousBaseline = latest ? JSON.parse(latest.ai_baseline) as SummaryAiBaseline : {};
+    const { baseline: previousBaseline } = historyMetadata(latest);
     const summary = normalizeSummary(input.summary);
     const adopted = input.proposal
       ? adoptSummaryChanges(current, input.proposal.generated, previousBaseline, input.proposal.acceptedKeys)
@@ -177,11 +251,12 @@ export function saveProjectSummary(projectId: number, input: {
 export function listProjectSummaryHistory(projectId: number, cursor: number | null, limit: number): CursorPage<ProjectSummaryHistoryItem> {
   const rows = getDb().prepare("SELECT id, source, created_at, summary, ai_baseline, material_snapshot FROM project_summary_history WHERE project_id = ? AND (? IS NULL OR id < ?) ORDER BY id DESC LIMIT ?")
     .all(projectId, cursor, cursor, limit + 1) as HistoryRow[];
-  return createCursorPage(rows.map((row) => ({
+  const page = createCursorPage(rows, limit, (row) => String(row.id));
+  return { ...page, items: page.items.map((row) => ({
     id: row.id,
     source: row.source,
     createdAt: row.created_at,
-    summary: parseSummary(row.summary),
-    aiBaseline: JSON.parse(row.ai_baseline) as SummaryAiBaseline,
-  })), limit, (item) => String(item.id));
+    summary: historySummary(row),
+    aiBaseline: historyBaseline(row),
+  })) };
 }

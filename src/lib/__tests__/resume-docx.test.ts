@@ -1,12 +1,140 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import mammoth from "mammoth";
 import JSZip from "jszip";
 import sharp from "sharp";
 import { resumeToDocx } from "../resume-docx";
 import { defaultContent, type ModuleData } from "../modules";
-import { BUILTIN_STYLES } from "../templates";
+import { BUILTIN_STYLES, type ResumeStyle } from "../templates";
+
+const columnModules: ModuleData[] = [
+  { key: "basic", type: "basic", label: "页眉", sort: 0, content: { name: "合成姓名" } },
+  { key: "education_a", type: "education", label: "教育甲", sort: 1, content: [{ school: "甲大学", start: "2020", end: "2024" }] },
+  { key: "education_b", type: "education", label: "教育乙", sort: 2, content: [{ school: "乙大学" }] },
+  { key: "skills", type: "skills", label: "技能", sort: 3, content: { items: ["TypeScript"] } },
+  { key: "work", type: "work", label: "工作", sort: 4, content: [{ company: "合成公司" }] },
+  { key: "summary", type: "summary", label: "评价", sort: 5, content: { text: "团队协作" } },
+  { key: "extra_basic", type: "basic", label: "补充联系", sort: 6, content: { phone: "合成电话" } },
+];
+const columnLabels = columnModules.slice(1).map(module => module.label);
+const directChildren = (element: Element, tag: string) => [...element.children].filter(child => child.tagName === tag);
+
+async function readColumns(style: ResumeStyle) {
+  const buffer = await resumeToDocx("合成简历", columnModules, { style });
+  const zip = await JSZip.loadAsync(buffer);
+  const xml = await zip.file("word/document.xml")!.async("string");
+  const document = new DOMParser().parseFromString(xml, "application/xml");
+  expect(document.getElementsByTagName("parsererror")).toHaveLength(0);
+  const body = document.getElementsByTagName("w:body")[0]!;
+  const table = directChildren(body, "w:tbl")[1]!;
+  const row = directChildren(table, "w:tr")[0]!;
+  const cells = directChildren(row, "w:tc");
+  const labels = (cell: Element) => [...cell.getElementsByTagName("w:t")].map(node => node.textContent!)
+    .filter(text => columnLabels.includes(text));
+  const props = (cell: Element) => directChildren(cell, "w:tcPr")[0]!;
+  const width = (cell: Element) => Number(props(cell).getElementsByTagName("w:tcW")[0]!.getAttribute("w:w"));
+  const widths = [...table.getElementsByTagName("w:tblGrid")[0]!.children].map(node => Number(node.getAttribute("w:w")));
+  return { document, table, cells, labels, props, width, widths };
+}
 
 describe("resumeToDocx", () => {
+  const distributions = [
+    { name: "按类型包含全部实例", asideModules: ["education"], aside: ["教育甲", "教育乙"] },
+    { name: "按具体模块键", asideModules: ["education_b"], aside: ["教育乙"] },
+    { name: "旧 kind 名称", asideModules: ["entries"], aside: ["教育甲", "教育乙", "工作"] },
+    { name: "空数组沿用默认", asideModules: [], aside: ["技能", "评价", "补充联系"] },
+    { name: "省略沿用默认", asideModules: undefined, aside: ["技能", "评价", "补充联系"] },
+    { name: "非空但无匹配", asideModules: ["missing"], aside: [] },
+  ];
+  it.each(distributions.flatMap(sample => (["left", "right"] as const).map(asidePosition => ({ ...sample, asidePosition }))))(
+    "双栏按 $name 分流到 $asidePosition 侧，模块不丢失或重复", async ({ asideModules, aside, asidePosition }) => {
+      const style = { ...BUILTIN_STYLES.twocol, asidePosition, asideModules, asideGap: 0 };
+      const result = await readColumns(style);
+      expect(result.cells).toHaveLength(2);
+      const asideIndex = asidePosition === "left" ? 0 : 1;
+      expect(result.labels(result.cells[asideIndex]!)).toEqual(aside);
+      expect(result.labels(result.cells[1 - asideIndex]!)).toEqual(columnLabels.filter(label => !aside.includes(label)));
+      for (const label of columnLabels) {
+        expect(result.cells.flatMap(result.labels).filter(value => value === label)).toHaveLength(1);
+      }
+      expect(result.cells.flatMap(cell => [...cell.getElementsByTagName("w:t")].map(node => node.textContent))).not.toContain("合成姓名");
+    },
+  );
+
+  it.each(["left", "right"] as const)("双栏 %s 侧保留底色、宽度、间隔及内边距，日期表不越过栏内宽度", async asidePosition => {
+    const style = { ...BUILTIN_STYLES.twocol, asidePosition, asideModules: ["education"], asideWidth: 60,
+      pageMargin: 12, asideBg: "#eeeeee", asidePadding: 20, asideGap: 24, asideBorder: "auto" as const, asideBorderColor: "#123456" };
+    const result = await readColumns(style);
+    expect(result.cells).toHaveLength(3);
+    const asideIndex = asidePosition === "left" ? 0 : 2;
+    const aside = result.cells[asideIndex]!;
+    const main = result.cells[2 - asideIndex]!;
+    const gap = result.cells[1]!;
+    const totalWidth = Math.round((210 - style.pageMargin * 2) * 1440 / 25.4);
+    const asideWidth = Math.round(style.asideWidth * 1440 / 25.4);
+    expect(result.width(aside)).toBe(asideWidth);
+    expect(result.width(gap)).toBe(24 * 15);
+    expect(result.width(main)).toBe(totalWidth - asideWidth - 24 * 15);
+    expect(result.widths).toEqual(result.cells.map(result.width));
+    expect(result.widths.reduce((sum, value) => sum + value, 0)).toBe(totalWidth);
+    expect(result.labels(aside)).toEqual(["教育甲", "教育乙"]);
+    expect(gap.getElementsByTagName("w:t")).toHaveLength(0);
+    expect(result.props(aside).getElementsByTagName("w:shd")[0]!.getAttribute("w:fill")).toBe("EEEEEE");
+    expect(result.props(main).getElementsByTagName("w:shd")).toHaveLength(0);
+    const margins = result.props(aside).getElementsByTagName("w:tcMar")[0]!;
+    for (const edge of ["top", "right", "bottom", "left"]) {
+      expect(margins.getElementsByTagName(`w:${edge}`)[0]!.getAttribute("w:w")).toBe(String(20 * 15));
+    }
+    const innerBorder = asidePosition === "left" ? "right" : "left";
+    const borders = result.props(aside).getElementsByTagName("w:tcBorders")[0]!;
+    expect([...borders.children].map(node => node.tagName)).toEqual([`w:${innerBorder}`]);
+    expect(borders.children[0]!.getAttribute("w:color")).toBe("123456");
+    const nestedWidths = [...aside.getElementsByTagName("w:tblGrid")[0]!.children].map(node => Number(node.getAttribute("w:w")));
+    expect(nestedWidths.reduce((sum, value) => sum + value, 0)).toBe(asideWidth - 2 * 20 * 15 - 15);
+  });
+
+  it.each([
+    { asidePosition: "left", asideBorder: "auto", edges: ["right"] },
+    { asidePosition: "right", asideBorder: "auto", edges: ["left"] },
+    { asidePosition: "left", asideBorder: "left", edges: ["left"] },
+    { asidePosition: "right", asideBorder: "right", edges: ["right"] },
+    { asidePosition: "left", asideBorder: "both", edges: ["left", "right"] },
+    { asidePosition: "right", asideBorder: "none", edges: [] },
+  ] as const)("无底色时按 $asidePosition/$asideBorder 保留实际边框并只在边框侧留内距", async ({ asidePosition, asideBorder, edges }) => {
+    const result = await readColumns({ ...BUILTIN_STYLES.twocol, asidePosition, asideBorder, asideBg: undefined,
+      asideBorderColor: "#345678", asidePadding: 12, asideGap: 0 });
+    const aside = result.cells[asidePosition === "left" ? 0 : 1]!;
+    const props = result.props(aside);
+    expect(props.getElementsByTagName("w:shd")).toHaveLength(0);
+    const borders = props.getElementsByTagName("w:tcBorders")[0];
+    expect(borders ? [...borders.children].map(node => node.tagName) : []).toEqual(edges.map(edge => `w:${edge}`));
+    for (const border of borders?.children ?? []) expect(border.getAttribute("w:color")).toBe("345678");
+    const margins = props.getElementsByTagName("w:tcMar")[0]!;
+    for (const edge of ["top", "right", "bottom", "left"]) {
+      const expected = (edges as readonly string[]).includes(edge) ? 12 * 15 : 0;
+      expect(Number(margins.getElementsByTagName(`w:${edge}`)[0]!.getAttribute("w:w"))).toBe(expected);
+    }
+  });
+
+  it("双栏允许零内距与零栏间隔，不恢复为默认间距", async () => {
+    const result = await readColumns({ ...BUILTIN_STYLES.twocol, asideBg: "#eeeeee", asidePadding: 0, asideGap: 0, asideBorder: "none" });
+    expect(result.cells).toHaveLength(2);
+    const margins = result.props(result.cells[1]!).getElementsByTagName("w:tcMar")[0]!;
+    expect([...margins.children].map(node => node.getAttribute("w:w"))).toEqual(["0", "0", "0", "0"]);
+  });
+
+  it.each(["left", "right"] as const)("双栏 %s 侧技能标签按侧栏底色合成，移到主栏则按白底合成", async asidePosition => {
+    const style = { ...BUILTIN_STYLES.twocol, asidePosition, asideBg: "#eeeeee", accent: "#555555", skillStyle: "pill" as const, asideGap: 0 };
+    const side = await readColumns({ ...style, asideModules: ["skills"] });
+    const main = await readColumns({ ...style, asideModules: ["education"] });
+    const pillFill = (cells: Element[]) => {
+      const text = cells.flatMap(cell => [...cell.getElementsByTagName("w:t")]).find(node => node.textContent === "TypeScript")!;
+      return text.parentElement!.getElementsByTagName("w:shd")[0]!.getAttribute("w:fill");
+    };
+    expect(pillFill(side.cells)).toBe("DBDBDB");
+    expect(pillFill(main.cells)).toBe("EAEAEA");
+  });
+
   it("同一项目的标题、技术栈和说明保持为分页组，下一项目不被连带", async () => {
     const buffer = await resumeToDocx("简历", [{ key: "projects", type: "projects", label: "项目经历", sort: 0, content: [
       { name: "追番管理及社交平台", role: "个人独立开发", start: "2020", end: "2021",
@@ -136,7 +264,8 @@ describe("resumeToDocx", () => {
     const zip = await JSZip.loadAsync(buffer);
     const xml = await zip.file("word/document.xml")!.async("string");
     const row = [...xml.matchAll(/<w:tr[\s\S]*?<\/w:tr>/g)].find(([value]) => value.includes("示例公司"));
-    expect(row?.[0].match(/<w:tc>/g)).toHaveLength(2);
+    // 默认 asideGap=20 使用独立空白列，仍只有左右两个内容栏。
+    expect(row?.[0].match(/<w:tc>/g)).toHaveLength(3);
     expect(row?.[0].indexOf("示例公司")).toBeLessThan(row?.[0].indexOf("TypeScript") ?? 0);
     expect(row?.[0]).toContain("团队协作");
   });

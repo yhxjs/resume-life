@@ -26,7 +26,7 @@ export function TodayReviews() {
             <span>{`今日已复习 ${data.summary.completed_today} 题`}</span>
           </div>
           {data.summary.due > 0 ? <>
-            <ul className="mt-3 divide-y divide-line">{data.items.map(card => <li key={card.id}><Link href={`/reviews?card=${card.id}`} className="group flex items-center justify-between gap-3 py-3 text-sm focus-visible:outline-2 focus-visible:outline-primary"><span className="min-w-0 break-words text-ink group-hover:text-primary">{card.question}</span><span className="shrink-0 text-xs text-muted">{card.source === "notebook" ? "错题" : "追练"} →</span></Link></li>)}</ul>
+            <ul className="mt-3 divide-y divide-line">{data.items.map(card => <li key={card.id}><Link href={`/reviews?card=${card.id}`} className="group flex items-center justify-between gap-3 py-3 text-sm focus-visible:outline-2 focus-visible:outline-primary"><span className="min-w-0 whitespace-pre-wrap text-ink [overflow-wrap:anywhere] group-hover:text-primary">{card.question}</span><span className="shrink-0 text-xs text-muted">{card.source === "notebook" ? "错题" : "追练"} →</span></Link></li>)}</ul>
             <Link href="/reviews" className={`${btnPrimary} mt-3`}>开始今日复习</Link>
           </> : <p className="mt-4 text-sm text-primary">{data.summary.total === 0 ? "收藏错题或完成追练后，这里会自动安排复习。" : "今日复习已完成，下次到期会在这里提醒。"}</p>}
           {loading && <p role="status" className="mt-2 text-xs text-muted">正在更新复习进度…</p>}

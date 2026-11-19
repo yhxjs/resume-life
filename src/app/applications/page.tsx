@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Loading } from "@/components/common/ui-bits";
 import { alertDialog } from "@/components/common/confirm-dialog";
 import { btnPrimary, inputCls } from "@/lib/ui";
@@ -10,7 +11,6 @@ import {
   type Application,
   type ApplicationInterview,
   type ApplicationStage,
-  type ApplicationStats,
   type ApplicationViewMode,
   type CalendarInterviewEvent,
   type InterviewRoundStatus,
@@ -27,27 +27,29 @@ import { ApplicationFunnelView } from "@/components/application/funnel-view/appl
 import { FunnelStrip } from "@/components/application/funnel-strip";
 import { InterviewScheduleBanner } from "@/components/application/interview-schedule-banner";
 import { errorMessage } from "@/lib/error-message";
+import { useApplicationDeletion } from "@/hooks/use-application-deletion";
+import { ToolHistoryDeletionFeedback } from "@/components/common/tool-history-deletion-feedback";
+import { validateExistingApplication } from "@/lib/application-deletion";
+import { useTaskReferenceTime } from "@/hooks/use-task-reference-time";
+import { readApplicationStats, type ApplicationStatsSnapshot } from "@/lib/application-stats";
 
 export default function ApplicationsPage() {
-  const [stats, setStats] = useState<ApplicationStats | null>(null);
+  const referenceTime = useTaskReferenceTime();
+  const [stats, setStats] = useState<ApplicationStatsSnapshot | null>(null);
   const [statsError, setStatsError] = useState("");
+  const [statsLoading, setStatsLoading] = useState(true);
+  const currentStats = statsLoading || statsError ? null : stats;
   const [keyword, setKeyword] = useState("");
   const { bind: keywordInputBind } = useCompositionInput("", setKeyword);
   const [selectedStage, setSelectedStage] = useState("all");
   const [showRejected, setShowRejected] = useState(false);
   const [announcement, setAnnouncement] = useState("");
 
-  // 视图模式: 看板 / 日程日历 / 全周期漏斗（惰性读取 URL 参数初始化）
-  const [viewMode, setViewMode] = useState<ApplicationViewMode>(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const urlView = params.get("view");
-      if (urlView === "kanban" || urlView === "calendar" || urlView === "funnel") {
-        return urlView;
-      }
-    }
-    return "kanban";
-  });
+  // 根布局已调用 connection()；服务端首屏与客户端使用同一个 URL 视图。
+  const searchParams = useSearchParams();
+  const urlView = searchParams.get("view");
+  const viewMode: ApplicationViewMode = urlView === "calendar" || urlView === "funnel" ? urlView : "kanban";
+  const viewId = useId();
 
   // 对话框状态
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -63,7 +65,6 @@ export default function ApplicationsPage() {
 
   // 切换视图并同步 URL
   function handleViewChange(nextView: ApplicationViewMode) {
-    setViewMode(nextView);
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
       if (nextView === "kanban") {
@@ -76,10 +77,19 @@ export default function ApplicationsPage() {
   }
 
   const statsLoadSeq = useRef(0);
+  const statsReading = useRef(true);
   const mountedRef = useRef(true);
+  const pageSession = useRef<AbortController | null>(null);
+  const requestPending = useRef(false);
+  const modalOpen = useRef(false);
+  const [working, setWorking] = useState(false);
+  const deletionFeedback = useRef<HTMLDivElement | null>(null);
+  const deletion = useApplicationDeletion(refreshAfterMutation);
+  const mutationsDisabled = deletion.busy || working || dialogOpen || roundDialogOpen;
+  const deleteDisabled = working || dialogOpen || roundDialogOpen || (deletion.busy && deletion.phase !== "confirming");
 
   const {
-    items,
+    items: loadedItems,
     nextCursor,
     loading,
     loadingMore,
@@ -98,6 +108,19 @@ export default function ApplicationsPage() {
       return `/api/applications${queryParts.length > 0 ? `?${queryParts.join("&")}` : ""}`;
     },
   });
+  const items = loadedItems?.filter(item => !deletion.deletedIds.has(item.id)) ?? null;
+
+  useLayoutEffect(() => {
+    const controller = new AbortController(); pageSession.current = controller; mountedRef.current = true;
+    return () => { controller.abort(); mountedRef.current = false; if (pageSession.current === controller) pageSession.current = null; };
+  }, []);
+
+  function canStart() { return Boolean(pageSession.current && !pageSession.current.signal.aborted && !requestPending.current && !modalOpen.current && deletion.canStart()); }
+  function isCurrent(session: AbortController) { return pageSession.current === session && !session.signal.aborted; }
+
+  useEffect(() => {
+    if (deletion.error || deletion.notice) deletionFeedback.current?.focus();
+  }, [deletion.error, deletion.notice]);
 
   useEffect(() => {
     if (viewMode === "calendar" && !loading && !loadingMore && nextCursor && !listError) {
@@ -105,35 +128,41 @@ export default function ApplicationsPage() {
     }
   }, [viewMode, loading, loadingMore, nextCursor, listError, loadApplications]);
 
-  useEffect(() => {
-    loadStats();
-  }, []);
-
-  useEffect(() => () => {
-    mountedRef.current = false;
-  }, []);
-
   async function loadStats() {
+    const session = pageSession.current; if (!session || !isCurrent(session)) return;
     const seq = ++statsLoadSeq.current;
+    statsReading.current = true;
+    setStatsLoading(true);
     setStatsError("");
     try {
-      const nextStats = await jsonFetch<ApplicationStats>("/api/applications/stats");
-      if (seq !== statsLoadSeq.current || !mountedRef.current) return;
-      setStats(nextStats);
+      const nextStats = await jsonFetch<unknown>("/api/applications/stats", { signal: session.signal, cache: "no-store" });
+      if (seq !== statsLoadSeq.current || !isCurrent(session)) return;
+      setStats(readApplicationStats(nextStats));
       setStatsError("");
     } catch (err) {
-      if (seq !== statsLoadSeq.current || !mountedRef.current) return;
+      if (seq !== statsLoadSeq.current || !isCurrent(session)) return;
       setStatsError(errorMessage(err));
+    } finally {
+      if (seq === statsLoadSeq.current && isCurrent(session)) {
+        statsReading.current = false;
+        setStatsLoading(false);
+      }
     }
   }
 
+  const loadInitialStats = useEffectEvent(loadStats);
+  useEffect(() => { void loadInitialStats(); }, []);
+
   function refreshAfterMutation() {
+    if (!mountedRef.current || !pageSession.current || pageSession.current.signal.aborted) return;
     reloadList();
     void loadStats();
   }
 
   // 快捷创建
   function handleOpenCreate(stage: ApplicationStage = "interested", date?: Date) {
+    if (!canStart()) return;
+    modalOpen.current = true;
     setStageOverride(undefined);
     setEditingApp(null);
     setDefaultStage(stage);
@@ -143,56 +172,62 @@ export default function ApplicationsPage() {
 
   // 编辑卡片
   async function handleEdit(app: Application, override?: ApplicationStage) {
+    const session = pageSession.current; if (!session || !canStart()) return;
+    requestPending.current = true; setWorking(true);
     try {
       // 列表刷新有防抖延迟；编辑前读取最新履历，避免刚保存就打开旧卡片。
-      const latest = await jsonFetch<Application>(`/api/applications/${app.id}`);
+      const latest = await jsonFetch<Application>(`/api/applications/${app.id}`, { signal: session.signal, cache: "no-store" });
+      if (!isCurrent(session)) return;
+      validateExistingApplication(latest, app.id);
+      modalOpen.current = true;
       setStageOverride(override);
       setEditingApp(latest);
       setDialogOpen(true);
     } catch (err) {
-      await alertDialog({ title: "加载投递失败", message: errorMessage(err) });
+      if (isCurrent(session)) await alertDialog({ title: "加载投递失败", message: errorMessage(err), signal: session.signal });
+    } finally {
+      if (isCurrent(session)) { requestPending.current = false; setWorking(false); }
     }
   }
 
   // 删除卡片
-  async function handleDelete(id: number) {
-    try {
-      await jsonFetch(`/api/applications/${id}`, { method: "DELETE" });
-    } catch (err) {
-      await alertDialog({ title: "删除失败", message: errorMessage(err) });
-      return;
-    }
-    refreshAfterMutation();
+  function handleDelete(id: number) {
+    if (!canStart()) return;
+    const app = items?.find(item => item.id === id);
+    if (app) void deletion.remove(app);
   }
 
   // 阶段流转（支持点击推进或拖拽落地）
   async function handleStageChange(id: number, newStage: ApplicationStage) {
+    const session = pageSession.current; if (!session || !canStart() || !items?.some(item => item.id === id)) return;
     if (newStage === "rejected") {
       const app = items?.find(item => item.id === id);
       if (!app) return;
       await handleEdit(app, "rejected");
       return;
     }
+    requestPending.current = true; setWorking(true);
     try {
       await jsonFetch<Application>(`/api/applications/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage: newStage }),
+        signal: session.signal,
       });
+      if (!isCurrent(session)) return;
+      const company = items?.find((app) => app.id === id)?.company;
+      setAnnouncement(`${company ? `「${company}」` : "该投递"}已流转到${STAGE_CONFIG[newStage].label}阶段`);
+      refreshAfterMutation();
     } catch (err) {
-      await alertDialog({ title: "流转失败", message: errorMessage(err) });
-      return;
+      if (isCurrent(session)) await alertDialog({ title: "流转失败", message: errorMessage(err), signal: session.signal });
+    } finally {
+      if (isCurrent(session)) { requestPending.current = false; setWorking(false); }
     }
-    // 拖拽落地只改变看板列，没有可读反馈；这里播报一次结果
-    const company = items?.find((app) => app.id === id)?.company;
-    setAnnouncement(
-      `${company ? `「${company}」` : "该投递"}已流转到${STAGE_CONFIG[newStage].label}阶段`
-    );
-    refreshAfterMutation();
   }
 
   // 拖拽操作支持
   function handleDragStart(e: React.DragEvent, id: number) {
+    if (!canStart()) { e.preventDefault(); return; }
     e.dataTransfer.setData("text/plain", String(id));
   }
 
@@ -211,14 +246,18 @@ export default function ApplicationsPage() {
 
   // 对话框保存成功回调
   function handleSaved() {
+    if (!mountedRef.current) return;
+    modalOpen.current = false;
     setDialogOpen(false);
     refreshAfterMutation();
   }
 
   // 日历视图：点击编辑轮次
   function handleCalendarEditRound(event: CalendarInterviewEvent) {
+    if (!canStart()) return;
     const parentApp = items?.find((a) => a.id === event.application_id);
     if (!parentApp) return;
+    modalOpen.current = true;
 
     setRoundApp(parentApp);
     if (event.id > 0) {
@@ -238,15 +277,21 @@ export default function ApplicationsPage() {
     roundId: number,
     status: InterviewRoundStatus
   ) {
+    const session = pageSession.current; if (!session || !canStart()) return;
+    requestPending.current = true; setWorking(true);
     try {
       await jsonFetch(`/api/applications/${applicationId}/interviews/${roundId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
+        signal: session.signal,
       });
+      if (!isCurrent(session)) return;
       refreshAfterMutation();
     } catch (err) {
-      await alertDialog({ title: "更新状态失败", message: errorMessage(err) });
+      if (isCurrent(session)) await alertDialog({ title: "更新状态失败", message: errorMessage(err), signal: session.signal });
+    } finally {
+      if (isCurrent(session)) { requestPending.current = false; setWorking(false); }
     }
   }
 
@@ -257,15 +302,23 @@ export default function ApplicationsPage() {
 
   // 轮次对话框保存后刷新
   function handleRoundSaved() {
+    if (!mountedRef.current) return;
+    modalOpen.current = false;
     setRoundDialogOpen(false);
     refreshAfterMutation();
+  }
+
+  function handleOpenRound(app: Application, round: ApplicationInterview | null) {
+    if (!canStart()) return;
+    modalOpen.current = true;
+    setRoundApp(app); setEditingRound(round); setRoundDialogOpen(true);
   }
 
   // 判断是否有 24 小时内的紧急待办面试（用于切换栏红点提示）
   const hasUrgentInterview = !!(
     stats?.upcomingInterviews &&
     stats.upcomingInterviews.some((app) => {
-      const diff = new Date(app.next_interview_at).getTime() - Date.now();
+      const diff = new Date(app.next_interview_at).getTime() - referenceTime;
       return diff >= 0 && diff <= 1000 * 60 * 60 * 24;
     })
   );
@@ -305,12 +358,13 @@ export default function ApplicationsPage() {
         <div className="flex flex-wrap items-center gap-3">
           {/* 三大视图模式切换器 */}
           <ApplicationViewSwitcher
+            id={viewId}
             currentView={viewMode}
             onViewChange={handleViewChange}
-            activeCount={stats?.totalActive || 0}
-            upcomingInterviewCount={stats?.upcomingInterviews?.length || 0}
+            activeCount={currentStats?.totalActive ?? null}
+            upcomingInterviewCount={currentStats?.upcomingInterviews?.length ?? null}
             hasUrgentInterview={hasUrgentInterview}
-            offerCount={stats?.counts?.offer || 0}
+            offerCount={currentStats?.counts?.offer ?? null}
           />
 
           {/* 搜索框 */}
@@ -337,6 +391,7 @@ export default function ApplicationsPage() {
           <button
             type="button"
             onClick={() => handleOpenCreate("interested")}
+            disabled={mutationsDisabled}
             className={btnPrimary}
           >
             <span aria-hidden className="font-bold">+</span>
@@ -345,6 +400,20 @@ export default function ApplicationsPage() {
         </div>
       </div>
 
+      <div id={`${viewId}-panel`} role="tabpanel" aria-labelledby={`${viewId}-${viewMode}`} tabIndex={0} className="space-y-6 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+      {statsLoading && (
+        <p role="status" aria-label={stats ? "正在更新投递统计…" : "正在加载投递统计…"} className="text-sm text-muted">
+          {stats ? "正在更新投递统计，当前显示上次读取的统计。" : "正在加载投递统计…"}
+        </p>
+      )}
+      {statsError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger/30 bg-danger-wash p-4 text-xs text-danger">
+          <span>{stats ? "更新统计失败，当前显示上次读取的统计：" : "加载统计数据失败："}{statsError}</span>
+          <button type="button" className={btnPrimary} disabled={statsLoading} onClick={() => { if (!statsReading.current) void loadStats(); }}>
+            重试统计
+          </button>
+        </div>
+      )}
       {/* 视图一：看板模式下的顶部辅助条 (漏斗简报与7天横幅) */}
       {viewMode === "kanban" && stats && (
         <FunnelStrip
@@ -358,21 +427,16 @@ export default function ApplicationsPage() {
       {viewMode !== "calendar" &&
         stats?.upcomingInterviews &&
         stats.upcomingInterviews.length > 0 && (
-          <InterviewScheduleBanner upcomingInterviews={stats.upcomingInterviews} />
+          <InterviewScheduleBanner upcomingInterviews={stats.upcomingInterviews} currentTime={referenceTime} />
         )}
 
-      {statsError && (
-        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger/30 bg-danger-wash p-4 text-xs text-danger">
-          <span>加载统计数据失败：{statsError}</span>
-          <button type="button" className={btnPrimary} onClick={loadStats}>
-            重试统计
-          </button>
-        </div>
-      )}
-
       {/* 加载中与错误提示 */}
-      {loading && <Loading label="正在加载求职数据..." />}
-      {listError && (
+      <div ref={deletionFeedback} tabIndex={-1} role="group" aria-label="投递删除状态" className="space-y-3 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+        <ToolHistoryDeletionFeedback deletion={deletion} deletingLabel="正在删除投递记录…" />
+      </div>
+      {working && <p role="status" className="text-sm text-muted">正在处理投递操作…</p>}
+      {viewMode !== "funnel" && loading && <Loading label="正在加载求职数据..." />}
+      {viewMode !== "funnel" && listError && (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger/30 bg-danger-wash p-4 text-xs text-danger">
           <span>加载投递数据失败：{listError}</span>
           {failedCursor === null && (
@@ -393,7 +457,7 @@ export default function ApplicationsPage() {
       )}
 
       {/* 主工作区：根据 viewMode 渲染对应视图 */}
-      {!loading && items !== null && (
+      {viewMode !== "funnel" && !loading && items !== null && (
         <>
           {/* 视图 1：看板列模式 (Kanban Board) */}
           {viewMode === "kanban" && (
@@ -423,6 +487,7 @@ export default function ApplicationsPage() {
                         <button
                           type="button"
                           onClick={() => handleOpenCreate(stageKey)}
+                          disabled={mutationsDisabled}
                           title={`快速在该列新建投递`}
                           className="rounded p-1 text-muted hover:bg-card hover:text-ink transition-colors"
                         >
@@ -442,7 +507,9 @@ export default function ApplicationsPage() {
                             onDelete={handleDelete}
                             onStageChange={handleStageChange}
                             onDragStart={handleDragStart}
-                            onRefresh={refreshAfterMutation}
+                            onOpenRound={handleOpenRound}
+                            mutationsDisabled={mutationsDisabled}
+                            deleteDisabled={deleteDisabled}
                           />
                         ))}
 
@@ -452,6 +519,7 @@ export default function ApplicationsPage() {
                             <button
                               type="button"
                               onClick={() => handleOpenCreate(stageKey)}
+                              disabled={mutationsDisabled}
                               className="mt-1 text-primary hover:underline text-[11px]"
                             >
                               + 添加投递
@@ -493,6 +561,9 @@ export default function ApplicationsPage() {
                         onDelete={handleDelete}
                         onStageChange={handleStageChange}
                         onDragStart={handleDragStart}
+                        onOpenRound={handleOpenRound}
+                        mutationsDisabled={mutationsDisabled}
+                        deleteDisabled={deleteDisabled}
                       />
                     ))}
                     {groupedApps.rejected.length === 0 && (
@@ -539,12 +610,15 @@ export default function ApplicationsPage() {
             />
           )}
 
-          {/* 视图 3：全周期漏斗分析模式 (Full Lifecycle Funnel) */}
-          {viewMode === "funnel" && stats?.funnel && (
-            <ApplicationFunnelView metrics={stats.funnel} batches={stats.batchStats ?? []} />
-          )}
         </>
       )}
+
+      {/* 漏斗来自独立的完整统计，不依赖当前列表的搜索、分页或读取成功。 */}
+      {viewMode === "funnel" && stats?.funnel && (
+        <ApplicationFunnelView metrics={stats.funnel} batches={stats.batchStats ?? []} />
+      )}
+
+      </div>
 
       {/* 弹窗创建/编辑投递 */}
       {dialogOpen && (
@@ -553,7 +627,7 @@ export default function ApplicationsPage() {
           defaultStage={defaultStage}
             initialInterviewDate={editingApp ? undefined : initialInterviewDate}
           stageOverride={stageOverride}
-          onClose={() => setDialogOpen(false)}
+          onClose={() => { modalOpen.current = false; setDialogOpen(false); }}
           onSuccess={handleSaved}
         />
       )}
@@ -564,7 +638,7 @@ export default function ApplicationsPage() {
           application={roundApp}
           initialInterview={editingRound}
           open={roundDialogOpen}
-          onClose={() => setRoundDialogOpen(false)}
+          onClose={() => { modalOpen.current = false; setRoundDialogOpen(false); }}
           onSuccess={handleRoundSaved}
         />
       )}

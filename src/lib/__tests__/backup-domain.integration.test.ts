@@ -652,12 +652,12 @@ it("round-trips all generated domain formats, including camelCase and nullable r
   expect(backup.exportAllData().data).toEqual(payload.data);
 });
 
-it("flags corrupt project GET data while preserving the 404 for missing projects", async () => {
+it("rejects corrupt project GET data while preserving the 404 for missing projects", async () => {
   db.exec(`UPDATE projects SET summary='{"overview":42}'`);
   const { GET } = await import("../../app/api/projects/[id]/route");
   const response = await GET(new Request("http://localhost/projects/1"), { params: Promise.resolve({ id: "1" }) });
-  if (response.status === 200) expect((await response.json()).summary_corrupt).toBe(true);
-  else expect(response.status).toBe(422);
+  expect(response.status).toBe(422);
+  expect(await response.json()).toEqual({ error: "项目总结数据损坏，请修复项目档案或恢复有效备份" });
   const { POST } = await import("../../app/api/drills/route");
   const missing = await POST(new Request("http://localhost/drills", {
     method: "POST",

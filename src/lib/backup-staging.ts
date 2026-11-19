@@ -3,8 +3,8 @@ import path from "node:path";
 import { Buffer } from "node:buffer";
 import { DatabaseSync } from "node:sqlite";
 import { TABLES_CLEAR_ORDER } from "@/lib/backup";
-import { validateResumeVersionRelations } from "./backup-domain";
-import { CURRENT_DB_VERSION, validateDatabaseSchema } from "@/lib/db";
+import { validateResumeVersionRelations, validateProjectMaterialTableProvenance } from "./backup-domain";
+import { validateDatabaseSchema } from "@/lib/db";
 import {
   BACKUP_FILE_CHUNK_BYTES,
   BackupLimitError,
@@ -43,6 +43,11 @@ import {
 
 export { BackupStagingError } from "@/lib/backup-staging-validation";
 export type { StagedBackup } from "@/lib/backup-staging-storage";
+
+/** 响应只报告原包清单；暂存 stats 为恢复补齐的新版空表不属于原包。 */
+export function getBackupManifestStats(staged: StagedBackup): Record<string, number> {
+  return Object.fromEntries(staged.manifest.tables.map((table) => [table, staged.stats[table]!]));
+}
 
 export async function stageBackupRecordStream(
   source: AsyncIterable<Uint8Array>,
@@ -220,12 +225,12 @@ export async function stageBackupRecordStream(
       if (end) throw new BackupStagingError("end 之后不允许其他记录");
 
       if (value.kind === "end") {
-        const nextEnd = validateEnd(value, tables);
+        const nextEnd = validateEnd(value, manifest.tables);
         return {
           record: {
             kind: "end",
             // validateEnd 已逐表校验过是非负安全整数
-            stats: Object.fromEntries(tables.map((table) => [table, nextEnd.stats[table]!])),
+            stats: Object.fromEntries(manifest.tables.map((table) => [table, nextEnd.stats[table]!])),
             totalRecords: nextEnd.totalRecords,
             files: nextEnd.files,
           },
@@ -244,7 +249,7 @@ export async function stageBackupRecordStream(
       if (value.kind !== "row" || !hasExactKeys(value, ["kind", "table", "data"]) || typeof value.table !== "string") {
         throw new BackupStagingError("备份 row 记录无效");
       }
-      if (!allowedTables.has(value.table)) throw new BackupStagingError(`未知表：${value.table}`);
+      if (!allowedTables.has(value.table) || !manifest.tables.includes(value.table)) throw new BackupStagingError(`未知表：${value.table}`);
 
       const table = value.table;
       const nextTableRows = (rowCounts[table] ?? 0) + 1;
@@ -361,10 +366,7 @@ export async function stageBackupRecordStream(
     if (pendingBytes > 0) throw new BackupStagingError("备份流存在未以换行结束的截断尾行");
     if (!manifest) throw new BackupStagingError("备份流缺少 manifest");
     if (!end) throw new BackupStagingError("备份流缺少 end");
-    if (manifest.dbVersion !== CURRENT_DB_VERSION) {
-      throw new BackupStagingError(`备份数据库版本不匹配：${manifest.dbVersion} !== ${CURRENT_DB_VERSION}`);
-    }
-    if (end.totalRecords !== totalRows || tables.some((table) => end!.stats[table] !== rowCounts[table])) {
+    if (end.totalRecords !== totalRows || manifest.tables.some((table) => end!.stats[table] !== rowCounts[table])) {
       throw new BackupStagingError("备份统计与实际行数不匹配");
     }
 
@@ -391,6 +393,7 @@ export async function stageBackupRecordStream(
     const foreignKeyError = stagingDatabase.prepare("PRAGMA foreign_key_check").get();
     if (foreignKeyError !== undefined) throw new BackupStagingError("备份数据损坏：外键完整性校验失败");
     validateResumeVersionRelations(stagingDatabase);
+    validateProjectMaterialTableProvenance(stagingDatabase, BackupStagingError);
     const integrityRow = stagingDatabase.prepare("PRAGMA integrity_check(1)").get() as { integrity_check?: unknown } | undefined;
     if (integrityRow?.integrity_check !== "ok") {
       throw new BackupStagingError("备份数据损坏：SQLite 完整性校验失败");
@@ -399,7 +402,8 @@ export async function stageBackupRecordStream(
     transactionOpen = false;
     stagingDatabase.exec("PRAGMA foreign_keys = ON");
 
-    const result = createStagedBackup(stagingDatabase, temporaryDirectory, manifest, end, allowedTables);
+    // 先按原版本完整校验 canonical 流，再向恢复器提供当前表集合；旧快照保持为空。
+    const result = createStagedBackup(stagingDatabase, temporaryDirectory, manifest, { ...end, stats: rowCounts }, allowedTables);
     stagingDatabase = undefined;
     // 句柄已全部关闭（上面关过一轮），这里再调一次是为了让后续任何分支都不会漏关
     return result;

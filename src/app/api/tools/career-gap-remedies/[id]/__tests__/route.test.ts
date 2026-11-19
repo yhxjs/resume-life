@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ResignationGapRemedyResult } from "@/lib/career-gap-remedy";
 
 const TEMP_PREFIX = "resume-life-gap-remedies-id-route-test-";
 
@@ -51,8 +52,24 @@ const seedRemedy = (result: string): number => {
 };
 
 describe("GET/DELETE /api/tools/career-gap-remedies/[id] 空窗补救方案", () => {
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "", "Infinity", "NaN", "abc"])("路径 ID %j 必须为正安全整数，GET/DELETE 都在写入前拒绝", async (id) => {
+    seedRemedy("{}");
+    const before = db?.prepare("SELECT * FROM resignation_gap_remedies ORDER BY id").all();
+    const route = await import("../route");
+    const get = await route.GET(request(), idContext(id));
+    const deletion = await route.DELETE(request(), idContext(id));
+    expect([get.status, deletion.status]).toEqual([400, 400]);
+    expect(db?.prepare("SELECT * FROM resignation_gap_remedies ORDER BY id").all()).toEqual(before);
+  });
   it("GET 返回记录并解析 result JSON", async () => {
-    const id = seedRemedy(JSON.stringify({ scripts: [{ scenario: "自我介绍", script: "这样讲" }] }));
+    const script = { label: "原版话术", applicableScene: "初步沟通", script: "休整半年，没有开展项目；到岗安排待确认。", keyPoints: ["只说明真实情况"] };
+    const saved: ResignationGapRemedyResult = {
+      title: "休整经历说明", punchline: "保留事实与未知条件",
+      hrMindsetAnalysis: { coreConcerns: [], riskPoints: [], whatHrWantsToHear: "可确认与岗位有关的时间安排" },
+      reframeFormula: { factAcknowledgment: "休整半年", positiveAttribution: "个人选择", growthAndValue: "未开展项目", motivationAlignment: "真实岗位方向待补充" },
+      scripts: { concise: script, detailed: script, pivoting: script }, drills: [], forbiddenList: [], closingTips: [],
+    };
+    const id = seedRemedy(JSON.stringify(saved));
     const route = await import("../route");
     const res = await route.GET(request(), idContext(id));
     expect(res.status).toBe(200);
@@ -61,22 +78,24 @@ describe("GET/DELETE /api/tools/career-gap-remedies/[id] 空窗补救方案", ()
       scenario_type: string;
       raw_story: string;
       target_role: string;
-      result: { scripts: { scenario: string; script: string }[] } | null;
+      result: ResignationGapRemedyResult | null;
     };
     expect(data.id).toBe(id);
     expect(data.scenario_type).toBe("both");
     expect(data.raw_story).toBe("裸辞半年想回大厂");
     expect(data.target_role).toBe("后端工程师");
-    expect(data.result?.scripts[0]?.scenario).toBe("自我介绍");
+    expect(data.result).toEqual(saved);
   });
 
-  it("GET result JSON 损坏时 result 为 null 而不是 500", async () => {
-    const id = seedRemedy("不是JSON");
+  it.each(["不是JSON", JSON.stringify({ scripts: [{ scenario: "自我介绍", script: "这样讲" }] })])("GET 损坏结构 %s 返回 null，原始记录不变", async (stored) => {
+    const id = seedRemedy(stored);
+    const before = db?.prepare("SELECT * FROM resignation_gap_remedies WHERE id=?").get(id);
     const route = await import("../route");
     const res = await route.GET(request(), idContext(id));
     expect(res.status).toBe(200);
     const data = (await res.json()) as { result: unknown };
     expect(data.result).toBeNull();
+    expect(db?.prepare("SELECT * FROM resignation_gap_remedies WHERE id=?").get(id)).toEqual(before);
   });
 
   it("GET 不存在的记录返回 404，非法 id 返回 400", async () => {

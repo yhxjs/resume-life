@@ -43,15 +43,29 @@ export function findSensitiveTraceEntries(tracePath, entries, projectRoot = proc
 
 export function findMissingParserDependencies(tracePath, entries, projectRoot = process.cwd()) {
   const projectRequire = createRequire(path.join(projectRoot, "package.json"));
-  const traced = new Set(entries.map((entry) => path.resolve(path.dirname(tracePath), entry)));
-  const missing = ["mammoth", "pdf-parse"].filter((dependency) => !traced.has(projectRequire.resolve(dependency)));
+  // pnpm 的 node_modules 是链接，而 NFT 可记录 .pnpm 下的真实路径；两端均按文件身份比较。
+  // 不存在的清单项不能据此满足必需依赖，其他文件系统错误继续向上报告。
+  const canonicalPath = (file) => {
+    try {
+      return fs.realpathSync(file);
+    } catch (error) {
+      if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
+      throw error;
+    }
+  };
+  const traced = new Set(entries.map((entry) => canonicalPath(path.resolve(path.dirname(tracePath), entry))).filter(Boolean));
+  const isTraced = (file) => {
+    const canonical = canonicalPath(file);
+    return canonical !== null && traced.has(canonical);
+  };
+  const missing = ["mammoth", "pdf-parse"].filter((dependency) => !isTraced(projectRequire.resolve(dependency)));
   const pdfjsRoot = path.join(projectRoot, "node_modules/pdfjs-dist");
   for (const file of ["legacy/build/pdf.mjs", "legacy/build/pdf.worker.mjs"]) {
-    if (!traced.has(path.join(pdfjsRoot, file))) missing.push(`pdfjs-dist/${file}`);
+    if (!isTraced(path.join(pdfjsRoot, file))) missing.push(`pdfjs-dist/${file}`);
   }
   for (const directory of ["cmaps", "standard_fonts"]) {
     const assetDirectory = path.join(pdfjsRoot, directory);
-    if (fs.readdirSync(assetDirectory).some((file) => !traced.has(path.join(assetDirectory, file)))) {
+    if (fs.readdirSync(assetDirectory).some((file) => !isTraced(path.join(assetDirectory, file)))) {
       missing.push(`pdfjs-dist/${directory}`);
     }
   }

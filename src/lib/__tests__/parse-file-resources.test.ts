@@ -103,9 +103,14 @@ describe("PDF/DOCX/TXT extraction counts Unicode code points", () => {
     let text = "\u{1f600}".repeat(200_000);
     vi.spyOn(sandbox, "runInSandboxedWorker").mockImplementation((source, data, _limits, _timeout, read) => new Promise((resolve, reject) => {
       const parentPort = { postMessage(message: unknown) { try { resolve(read(message)); } catch (error) { reject(error); } } };
-      vm.runInNewContext(source, { Buffer, require: (name: string) => name === "node:worker_threads"
+      const mammothRequire = (name: string) => name === "./unzip"
+        ? { openZip: async () => ({ read: async () => "<document/>" }) }
+        : { _findPartPaths: async () => ({ mainDocument: "document.xml" }),
+          read: async () => ({ value: { type: "document", children: [{ type: "text", value: text }] } }) };
+      const require = Object.assign((name: string) => name === "node:worker_threads"
         ? { parentPort, workerData: data }
-        : { extractRawText: async () => ({ value: text }) } });
+        : { createRequire: () => mammothRequire }, { resolve: (name: string) => name });
+      vm.runInNewContext(source, { Buffer, require });
     }));
     vi.spyOn(sandbox, "runInSandboxedProcess").mockImplementation((source, _module, _data, _limits, _timeout, read) => new Promise((resolve, reject) => {
       const stdin = new EventEmitter();
@@ -114,7 +119,9 @@ describe("PDF/DOCX/TXT extraction counts Unicode code points", () => {
       vm.runInNewContext(source, { Buffer, process: { argv: ["", "fixture"], stdin, stdout }, require: () => ({ PDFParse }) });
       stdin.emit("end");
     }));
-    await expect(extractContentFromFile(`boundary.${ext}`, Buffer.from(text))).resolves.toEqual({ text });
+    await expect(extractContentFromFile(`boundary.${ext}`, Buffer.from(text))).resolves.toEqual({ text,
+      ...(ext === "docx" ? { tableProvenance: expect.objectContaining({ version: 1, format: "docx", offsetUnit: "utf16", markers: [] }) } : {}),
+    });
     text += "x";
     await expect(extractContentFromFile(`over.${ext}`, Buffer.from(text))).rejects.toBeInstanceOf(sandbox.FileFormatError);
   });

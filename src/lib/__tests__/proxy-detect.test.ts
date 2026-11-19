@@ -154,6 +154,48 @@ describe("代理端点真实回环握手", () => {
     await expect(testProxyEndpoint(config)).rejects.toThrow(/代理协议不匹配|代理连接/);
   });
 
+  it("SOCKS5 单字节方法响应截断时返回认证错误", async () => {
+    const config = await endpoint((_data, socket) => socket.end(Buffer.from([5])), "socks5");
+    await expect(testProxyEndpoint(config)).rejects.toThrow("代理认证失败");
+  });
+
+  it("SOCKS5 认证响应截断时拒绝，清理连接", async () => {
+    let phase = 0;
+    const config = await endpoint((_data, socket) => {
+      if (phase++ === 0) socket.write(Buffer.from([5, 2]));
+      else socket.end(Buffer.from([1]));
+    }, "socks5");
+    config.username = "demo";
+    await expect(testProxyEndpoint(config)).rejects.toThrow("代理认证失败");
+  });
+
+  it("SOCKS5 255 字节凭证边界按 UTF-8 字节编码", async () => {
+    let phase = 0;
+    let authentication = Buffer.alloc(0);
+    const config = await endpoint((data, socket) => {
+      if (phase === 0) { phase = 1; socket.write(Buffer.from([5, 2])); return; }
+      authentication = Buffer.concat([authentication, data]);
+      if (authentication.length >= 513) socket.write(Buffer.from([1, 0]));
+    }, "socks5");
+    config.username = "测".repeat(85);
+    config.password = "p".repeat(255);
+    await expect(testProxyEndpoint(config)).resolves.toMatchObject({ protocol: "socks5" });
+    expect(authentication[1]).toBe(255);
+    expect(authentication[257]).toBe(255);
+    expect(authentication.subarray(2, 257).toString()).toBe(config.username);
+    expect(authentication.subarray(258).toString()).toBe(config.password);
+  });
+
+  it("超长无换行 HTTP banner 被限制并结束", async () => {
+    const config = await endpoint((_data, socket) => socket.write("x".repeat(2048)));
+    await expect(testProxyEndpoint(config)).rejects.toThrow("代理协议不匹配");
+  });
+
+  it("对端复位不会产生未捕获异常", async () => {
+    const config = await endpoint((_data, socket) => socket.resetAndDestroy());
+    await expect(testProxyEndpoint(config)).rejects.toThrow(/代理连接|代理协议不匹配/);
+  });
+
   it("握手无响应时超时并关闭自有连接", async () => {
     const config = await endpoint(() => {});
     await expect(testProxyEndpoint(config)).rejects.toThrow("代理握手超时");

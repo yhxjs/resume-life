@@ -2,70 +2,21 @@
 
 import Link from "next/link";
 import { PreparationReturnLink } from "@/components/application/preparation-return-link";
-import { useCallback, useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { INTERVIEW_DIMENSIONS, type InterviewReport } from "@/lib/scores";
-import { SERIES_ROUND_DEFS, seriesRoundOf, type SeriesReport } from "@/lib/series";
+import { useParams } from "next/navigation";
+import { INTERVIEW_DIMENSIONS } from "@/lib/scores";
+import { SERIES_ROUND_DEFS, seriesRoundOf } from "@/lib/series";
 import { Loading, LoadError } from "@/components/common/ui-bits";
-import { jsonFetch } from "@/lib/fetcher";
 import { btnPrimary, scoreTextCls, textErr } from "@/lib/ui";
-import { errorMessage } from "@/lib/error-message";
 import { usePreparationHref } from "@/hooks/use-preparation-href";
-import { ResumeVersionBadge, type ResumeVersionBinding } from "@/components/resume/resume-version-badge";
-
-type SeriesEntry = {
-  interview_id: number;
-  round_no: number;
-  style: string;
-  status: string;
-  rounds: number;
-  answered: number;
-  report: InterviewReport | null;
-};
-
-type SeriesData = ResumeVersionBinding & {
-  id: number;
-  resume_title: string;
-  jd: string;
-  rounds: number;
-  rounds_total: number;
-  status: string;
-  created_at: string;
-  finished_at: string;
-  final_report: SeriesReport | null;
-  entries: SeriesEntry[];
-};
+import { ResumeVersionBadge } from "@/components/resume/resume-version-badge";
+import { useInterviewSeries } from "@/hooks/use-interview-series";
 
 export default function SeriesPage() {
   const params = useParams<{ id: string }>();
-  const router = useRouter();
   const preparationHref = usePreparationHref();
-  const [data, setData] = useState<SeriesData | null>(null);
-  const [loadError, setLoadError] = useState("");
-  const [advancing, setAdvancing] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const [finalizing, setFinalizing] = useState(false);
-  const [loadAttempt, setLoadAttempt] = useState(0);
+  const { data, loadError, retryLoad, actionError, advancing, finalizing, readRecovery, retryRead, advance, finalize } = useInterviewSeries(params.id);
 
-  const refetch = useCallback(async () => {
-    return jsonFetch<SeriesData>(`/api/interviews/series/${params.id}`);
-  }, [params.id]);
-
-  useEffect(() => {
-    let cancelled = false;
-    refetch()
-      .then((d) => {
-        if (!cancelled) setData(d);
-      })
-      .catch((err) => {
-        if (!cancelled) setLoadError(errorMessage(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [refetch, loadAttempt]);
-
-  if (loadError) return <LoadError message={loadError} onRetry={() => { setLoadError(""); setLoadAttempt((attempt) => attempt + 1); }} />;
+  if (loadError) return <LoadError message={loadError} onRetry={retryLoad} />;
   if (!data) return <Loading />;
 
   const entryFor = (no: number) => data.entries.find((e) => e.round_no === no);
@@ -73,47 +24,16 @@ export default function SeriesPage() {
   const last = data.entries[data.entries.length - 1];
   const nextDef = last ? seriesRoundOf(last.round_no + 1) : undefined;
   // 可进入下一轮：最后一轮已出报告且还有未建的轮次
-  const canAdvance = !data.final_report && last && last.report && nextDef;
+  const canAdvance = data.status === "ongoing" && !data.final_report && last?.status === "finished" && last.report && nextDef;
   // 可生成总评：三轮齐备且各自报告已出
-  const canFinalize = !data.final_report && data.entries.length === data.rounds_total && data.entries.every((e) => e.report);
+  const canFinalize = !data.final_report && data.entries.length === data.rounds_total && data.entries.every((e) => e.status === "finished" && e.report);
   // 三轮已答完但有轮次缺报告：提示先回该轮生成报告
   const missingReport = [...data.entries]
     .filter((e) => e.status === "finished" && !e.report)
     .map((e) => seriesRoundOf(e.round_no)?.label ?? `第${e.round_no}面`);
 
-  async function advance() {
-    setAdvancing(true);
-    setActionError("");
-    try {
-      const res = await jsonFetch<{ id: number }>(`/api/interviews/series/${data!.id}/advance`, {
-        method: "POST",
-      });
-      router.push(preparationHref(`/interviews/${res.id}`));
-    } catch (err) {
-      setActionError(errorMessage(err));
-      setAdvancing(false);
-    }
-  }
-
-  async function finalize() {
-    setFinalizing(true);
-    setActionError("");
-    try {
-      const res = await jsonFetch<{ report: SeriesReport }>(`/api/interviews/series/${data!.id}/finalize`, {
-        method: "POST",
-      });
-      setData((prev) =>
-        prev ? { ...prev, final_report: res.report, status: "finished", finished_at: new Date().toISOString() } : prev
-      );
-    } catch (err) {
-      setActionError(errorMessage(err));
-    } finally {
-      setFinalizing(false);
-    }
-  }
-
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="mx-auto min-w-0 max-w-6xl space-y-8 wrap-anywhere">
       <PreparationReturnLink />
       {/* 头部导航与状态栏 */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-line pb-5">
@@ -128,7 +48,7 @@ export default function SeriesPage() {
             <span className="text-xs text-faint">/</span>
             <span className="text-xs text-muted font-mono">进阶三轮连打 #{data.id}</span>
           </div>
-          <h1 className="mt-1 font-serif text-2xl sm:text-3xl font-bold text-ink flex items-center gap-3">
+          <h1 className="mt-1 font-serif text-2xl sm:text-3xl font-bold text-ink flex flex-wrap items-center gap-3">
             <span>进阶多轮模拟面试</span>
             <span className="font-sans text-sm font-normal text-muted bg-surface border border-line px-2.5 py-0.5 rounded-full">
               关联简历：{data.resume_title}
@@ -136,7 +56,7 @@ export default function SeriesPage() {
             </span>
           </h1>
           <p className="mt-1 max-w-prose text-sm text-muted leading-relaxed">
-            一面技术深挖 → 二面架构权衡 → 三面 HR 综合。各轮反馈即时带入下一轮出题与深度追问，通关后生成跨轮综合总评。
+            一面技术深挖 → 二面方案权衡 → 三面 HR 综合。各轮反馈作为后续模拟出题的参考，三轮报告齐备后可生成跨轮总评。
           </p>
         </div>
 
@@ -146,7 +66,7 @@ export default function SeriesPage() {
               ? "border-accent/30 bg-accent-wash text-accent font-bold"
               : "border-primary/25 bg-primary-soft text-primary"
           }`}>
-            {data.status === "finished" ? "● 连打通关 / 已出跨轮总评" : "● 三轮进阶推进中"}
+            {data.final_report ? "● 模拟练习完成 / 已出跨轮总评" : data.status === "finished" ? "● 跨轮总评待补全" : "● 三轮模拟练习进行中"}
           </span>
           <span className="font-mono text-[11px] text-faint">
             创建于 {new Date(data.created_at).toLocaleDateString()}
@@ -253,10 +173,15 @@ export default function SeriesPage() {
       </div>
 
       {/* 流程推进控制器 */}
-      {(ongoing || canAdvance || canFinalize || missingReport.length > 0) && !data.final_report && (
+      {(readRecovery || ongoing || canAdvance || canFinalize || missingReport.length > 0) && !data.final_report && (
         <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-primary/30 bg-primary-soft/30 p-5 shadow-card-subtle">
           <div className="min-w-0 space-y-1">
-            {ongoing ? (
+            {readRecovery ? (
+              <>
+                <p className="text-sm font-bold text-ink">{readRecovery.kind === "finalize" ? "跨轮总评状态待确认" : "下一轮创建状态待确认"}</p>
+                <p className="text-xs text-muted">请先重新读取系列状态，确认结果是否已保存。</p>
+              </>
+            ) : ongoing ? (
               <>
                 <p className="text-sm font-bold text-ink flex items-center gap-1.5">
                   <span className="h-2 w-2 rounded-full bg-accent animate-ping" />
@@ -272,7 +197,7 @@ export default function SeriesPage() {
             ) : canFinalize ? (
               <>
                 <p className="text-sm font-bold text-ink">🎉 三轮考场报告已全部齐备！</p>
-                <p className="text-xs text-muted">点击右侧合成跨轮综合总评：三轮五维对比走势、主考官结论与改进建议。</p>
+                <p className="text-xs text-muted">汇总各轮报告中明确记载的表现、待核实事项与练习建议；分数差异不代表能力进步或退步。</p>
               </>
             ) : (
               <>
@@ -283,23 +208,27 @@ export default function SeriesPage() {
           </div>
 
           <div className="shrink-0">
-            {ongoing ? (
+            {readRecovery ? (
+              <button type="button" className={btnPrimary} onClick={retryRead} disabled={advancing || finalizing}>
+                {advancing || finalizing ? "正在核对系列状态…" : "重新读取系列状态"}
+              </button>
+            ) : ongoing ? (
               <Link href={preparationHref(`/interviews/${ongoing.interview_id}`)} className={btnPrimary}>
                 继续本轮答题 →
               </Link>
             ) : canAdvance ? (
-              <button className={btnPrimary} onClick={advance} disabled={advancing}>
+              <button type="button" className={btnPrimary} onClick={advance} disabled={advancing || finalizing}>
                 {advancing ? "面试官命题中…" : `进入 ${nextDef!.label} →`}
               </button>
             ) : canFinalize ? (
-              <button className={btnPrimary} onClick={finalize} disabled={finalizing}>
+              <button type="button" className={btnPrimary} onClick={finalize} disabled={advancing || finalizing}>
                 {finalizing ? "正在合成总评中…" : "一键生成跨轮总评 🏆"}
               </button>
             ) : null}
           </div>
         </div>
       )}
-      {actionError && <p className={`text-sm ${textErr}`}>{actionError}</p>}
+      {actionError && <p role="alert" className={`text-sm ${textErr}`}>{actionError}</p>}
 
       {/* 跨轮总评报告展示 */}
       {data.final_report && (
@@ -311,7 +240,7 @@ export default function SeriesPage() {
               </span>
               <div>
                 <h2 className="font-serif text-xl font-bold text-ink">三轮连打 · 跨轮综合总评</h2>
-                <p className="text-xs text-muted">融合技术初试、架构复试与 HR 终面的全周期评价</p>
+                <p className="text-xs text-muted">依据三轮报告及其中的模型观察整理，仅供模拟复盘，不代表真实录用结果。</p>
               </div>
             </div>
 
@@ -327,6 +256,7 @@ export default function SeriesPage() {
           {/* 各轮小分汇总表 */}
           <div className="space-y-2">
             <h3 className="text-xs font-serif font-bold text-ink">各轮次评分细项对比</h3>
+            <p className="text-xs text-muted">各轮题目和侧重点不同，分数不宜直接比较；“真实性”分仅供材料一致性反馈，不代表事实核验。</p>
             <div className="space-y-2">
               {data.entries.map((e) => {
                 const label = seriesRoundOf(e.round_no)?.label ?? `第${e.round_no}面`;
@@ -366,26 +296,26 @@ export default function SeriesPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
             <div className="rounded-xl border border-line bg-surface/30 p-4 space-y-1.5">
               <span className="font-bold text-primary block">🎯 综合总评结论</span>
-              <p className="text-ink leading-relaxed font-sans">{data.final_report.verdict}</p>
+              <p className="text-ink leading-relaxed font-sans whitespace-pre-wrap">{data.final_report.verdict}</p>
             </div>
             <div className="rounded-xl border border-primary/20 bg-primary-soft/30 p-4 space-y-1.5">
               <span className="font-bold text-primary block">💪 跨轮展现强项</span>
-              <p className="text-ink leading-relaxed font-sans">{data.final_report.strengths}</p>
+              <p className="text-ink leading-relaxed font-sans whitespace-pre-wrap">{data.final_report.strengths}</p>
             </div>
             <div className="rounded-xl border border-danger/20 bg-danger-wash/40 p-4 space-y-1.5">
-              <span className="font-bold text-danger block">⚠️ 跨轮暴露短板</span>
-              <p className="text-ink leading-relaxed font-sans">{data.final_report.weaknesses}</p>
+              <span className="font-bold text-danger block">⚠️ 跨轮改进与待核实事项</span>
+              <p className="text-ink leading-relaxed font-sans whitespace-pre-wrap">{data.final_report.weaknesses}</p>
             </div>
             <div className="rounded-xl border border-accent/20 bg-accent-wash/40 p-4 space-y-1.5">
               <span className="font-bold text-accent block">💡 下一步攻坚建议</span>
-              <p className="text-ink leading-relaxed font-sans">{data.final_report.suggestions}</p>
+              <p className="text-ink leading-relaxed font-sans whitespace-pre-wrap">{data.final_report.suggestions}</p>
             </div>
           </div>
 
-          <div className="flex items-center justify-between pt-2 border-t border-line/60 text-xs text-muted">
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-line/60 text-xs text-muted">
             <span>针对短板可在各单轮报告中一键生成针对性追练题。</span>
             <Link href="/review" className="text-primary hover:underline font-medium">
-              前往「复盘看板」查看全周期趋势 →
+              前往「复盘看板」查看历史评分趋势 →
             </Link>
           </div>
         </div>

@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { clearEntityLlmLabels } from "@/lib/llm-label-cleanup";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
@@ -7,8 +8,8 @@ import { normalizeSeriesReport, SERIES_ROUNDS, type SeriesReport } from "@/lib/s
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const seriesId = Number(id);
-  if (!Number.isInteger(seriesId)) {
+  const seriesId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(seriesId) || seriesId <= 0) {
     return NextResponse.json({ error: "无效的进阶面试 ID" }, { status: 400 });
   }
   const db = getDb();
@@ -96,8 +97,8 @@ async function handleGet(_req: Request, { params }: { params: Promise<{ id: stri
 
 async function handleDelete(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const seriesId = Number(id);
-  if (!Number.isInteger(seriesId)) {
+  const seriesId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(seriesId) || seriesId <= 0) {
     return NextResponse.json({ error: "无效的进阶面试 ID" }, { status: 400 });
   }
   const db = getDb();

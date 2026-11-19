@@ -44,6 +44,21 @@ describe("简历排雷输出归一化", () => {
     expect(normalizeScannedDefenseItem(input)).toEqual(input);
   });
 
+  it.each([
+    { tabooMistakes: [] },
+    { taboo_mistakes: [] },
+    { tabooMistakes: [], taboo_mistakes: ["不应覆盖显式空列表"] },
+  ])("保留明确为空的失实提醒列表 %#", async (defensePlan) => {
+    const { normalizeScannedDefenseItem } = await import("../resume-defense");
+    expect(normalizeScannedDefenseItem({ originalText: "合成内容", defensePlan })?.defensePlan.tabooMistakes).toEqual([]);
+  });
+
+  it.each([undefined, null, "", {}, [null, " ", 3]])("缺失或损坏的历史失实提醒仍使用默认值 %j", async (tabooMistakes) => {
+    const { normalizeScannedDefenseItem } = await import("../resume-defense");
+    const item = normalizeScannedDefenseItem({ originalText: "合成内容", defensePlan: { tabooMistakes } });
+    expect(item?.defensePlan.tabooMistakes).toEqual(["把团队成果说成个人独立完成，或编造未经核实的数据与经历。"]);
+  });
+
   it("非法枚举和缺失方案回退为可用的默认字段", async () => {
     const { normalizeScannedDefenseItem } = await import("../resume-defense");
     const item = normalizeScannedDefenseItem({ originalText: "合成内容", riskLevel: "low", riskType: "unknown" });
@@ -52,6 +67,8 @@ describe("简历排雷输出归一化", () => {
     expect(item?.defensePlan.interviewerIntent).toBeTruthy();
     expect(item?.defensePlan.standardDefense).toBeTruthy();
     expect(item?.defensePlan.tabooMistakes).toHaveLength(1);
+    expect(item?.interviewerRoast).toContain("旧记录未保存");
+    expect(item?.defensePlan.standardDefense).toContain("通用练习框架");
   });
 
   it.each([null, undefined, "report", 5])("拒绝非法报告顶层 %j", async (raw) => {
@@ -63,7 +80,7 @@ describe("简历排雷输出归一化", () => {
     const { normalizeDefenseReport } = await import("../resume-defense");
     const result = normalizeDefenseReport({ items: [null, {}, { original_text: "合成项目成果" }] });
     expect(result.riskLevel).toBe("medium");
-    expect(result.overallRoast).toBeTruthy();
+    expect(result.overallRoast).toContain("旧记录未保存整体点评");
     expect(result.items).toHaveLength(1);
     expect(result.items[0]).toMatchObject({ id: "item_3", originalText: "合成项目成果" });
   });
@@ -213,9 +230,12 @@ describe("简历排雷数据管理与删除", () => {
     const res404 = await route.DELETE(delReq, { params: Promise.resolve({ id: String(report.id) }) });
     expect(res404.status).toBe(404);
 
-    // 无效 ID 返回 400
-    const res400 = await route.DELETE(delReq, { params: Promise.resolve({ id: "invalid" }) });
-    expect(res400.status).toBe(400);
+    // 两种方法都拒绝不安全、非正整数 ID，避免在绑定 SQLite 前发生精度丢失。
+    for (const id of ["invalid", "0", "-1", "1.5", "9007199254740992"]) {
+      const params = { params: Promise.resolve({ id }) };
+      expect((await route.DELETE(delReq, params)).status).toBe(400);
+      expect((await route.GET(new Request(`http://127.0.0.1/api/tools/resume-defenses/${id}`), params)).status).toBe(400);
+    }
   });
 
   it("normalizeScannedDefenseItem 能将转义的富文本实体还原为 HTML 标签", async () => {

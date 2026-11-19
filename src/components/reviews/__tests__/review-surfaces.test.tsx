@@ -5,12 +5,12 @@ import { ReviewWorkbench } from "../review-workbench";
 import { useReviewList } from "../use-review-list";
 import { useCursorList } from "@/hooks/use-cursor-list";
 import NotebookPage from "@/app/notebook/page";
-import type { ReviewCard, ReviewList } from "@/lib/spaced-repetition-card-types";
+import type { ReviewListCard, ReviewList } from "@/lib/spaced-repetition-card-types";
 
 vi.mock("../use-review-list", () => ({ useReviewList: vi.fn() }));
 vi.mock("@/hooks/use-cursor-list", () => ({ useCursorList: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
-const card: ReviewCard = { id: 301, source: "notebook", source_id: 91, source_label: "缓存追练", question: "如何处理缓存一致性？", mastery: "learning", interval_days: 1, ease_factor: 2.5, repetitions: 1, review_count: 1, lapses: 0, next_review_date: "2026-09-26", last_reviewed_at: "2026-09-25T10:00:00Z" };
+const card: ReviewListCard = { id: 301, source: "notebook", source_id: 91, source_label: "缓存追练", question: "如何处理缓存一致性？", mastery: "learning", interval_days: 1, ease_factor: 250, repetitions: 1, review_count: 1, lapses: 0, next_review_date: "2026-09-26", sort_date: "2026-09-26", last_reviewed_at: "2026-09-25T10:00:00Z" };
 const data: ReviewList = { items: [card], nextCursor: "next-list", summary: { date: "2026-09-27", total: 3, due: 2, notebook: 1, remedial: 1, overdue: 1, completed_today: 1 } };
 const result = () => ({ data, loading: false, loadingMore: false, error: "", reload: vi.fn(), loadMore: vi.fn() });
 

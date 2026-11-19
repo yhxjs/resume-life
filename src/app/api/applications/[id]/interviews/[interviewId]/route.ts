@@ -1,15 +1,16 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import {
   ApplicationInputError,
-  INTERVIEW_ROUND_STATUSES,
+  assertApplicationInterviewTextInput,
+  parseInterviewRoundStatus,
   deleteApplicationInterview,
   getApplicationById,
   getApplicationInterviewById,
   parseInterviewReminderMinutes,
   updateApplicationInterview,
-  type InterviewRoundStatus,
 } from "@/lib/applications";
 
 async function handlePatch(
@@ -17,8 +18,8 @@ async function handlePatch(
   { params }: { params: Promise<{ id: string; interviewId: string }> }
 ) {
   const { id: rawAppId, interviewId: rawInterviewId } = await params;
-  const appId = Number(rawAppId);
-  const interviewId = Number(rawInterviewId);
+  const appId = parseCanonicalPositiveId(rawAppId);
+  const interviewId = parseCanonicalPositiveId(rawInterviewId);
 
   if (!Number.isInteger(appId) || !Number.isInteger(interviewId)) {
     return NextResponse.json({ error: "无效的请求参数 ID" }, { status: 400 });
@@ -47,21 +48,16 @@ async function handlePatch(
     notes?: unknown;
   } | null;
 
-  if (!body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
     return NextResponse.json({ error: "请求数据无效" }, { status: 400 });
   }
 
-  if (body.status !== undefined && body.status !== null) {
-    if (typeof body.status !== "string" || !INTERVIEW_ROUND_STATUSES.includes(body.status as InterviewRoundStatus)) {
-      return NextResponse.json({ error: "面试轮次状态无效" }, { status: 400 });
-    }
-  }
-
   try {
+    assertApplicationInterviewTextInput(body);
     const updated = updateApplicationInterview(interviewId, {
       round_name: typeof body.round_name === "string" ? body.round_name : undefined,
       interview_time: typeof body.interview_time === "string" ? body.interview_time : undefined,
-      status: typeof body.status === "string" ? (body.status as InterviewRoundStatus) : undefined,
+      status: body.status === undefined ? undefined : parseInterviewRoundStatus(body.status),
       interviewer: typeof body.interviewer === "string" ? body.interviewer : undefined,
       location: typeof body.location === "string" ? body.location : undefined,
       meeting_url: typeof body.meeting_url === "string" ? body.meeting_url : undefined,
@@ -82,8 +78,8 @@ async function handleDelete(
   { params }: { params: Promise<{ id: string; interviewId: string }> }
 ) {
   const { id: rawAppId, interviewId: rawInterviewId } = await params;
-  const appId = Number(rawAppId);
-  const interviewId = Number(rawInterviewId);
+  const appId = parseCanonicalPositiveId(rawAppId);
+  const interviewId = parseCanonicalPositiveId(rawInterviewId);
 
   if (!Number.isInteger(appId) || !Number.isInteger(interviewId)) {
     return NextResponse.json({ error: "无效的请求参数 ID" }, { status: 400 });

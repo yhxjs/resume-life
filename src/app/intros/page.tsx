@@ -2,42 +2,37 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { confirmDialog, alertDialog } from "@/components/common/confirm-dialog";
+import { ToolHistoryDeletionFeedback } from "@/components/common/tool-history-deletion-feedback";
 import { Empty, Loading, LoadError } from "@/components/common/ui-bits";
 import { useRouter } from "next/navigation";
-import { jsonFetch } from "@/lib/fetcher";
-import { fetchSse } from "@/lib/fetch-sse";
-import { useTypewriter } from "@/hooks/use-typewriter";
-import { useAutoScroll } from "@/hooks/use-auto-scroll";
+import { fetchSse, SseServerError } from "@/lib/fetch-sse";
+import { HttpError } from "@/lib/fetcher";
 import { useResumeOptions } from "@/hooks/use-resume-options";
 import { useResumeVersionSelection } from "@/hooks/use-resume-version-selection";
 import { ResumeVersionSelect } from "@/components/resume/resume-version-select";
-import { ResumeVersionBadge, type ResumeVersionBinding } from "@/components/resume/resume-version-badge";
+import { ResumeVersionBadge } from "@/components/resume/resume-version-badge";
 import { useCursorList } from "@/hooks/use-cursor-list";
-import { btnDanger, btnPrimary, inputCls, textareaCls, labelCls, textErr } from "@/lib/ui";
+import { useIntroDeletion } from "@/hooks/use-intro-deletion";
+import { formatIntroHistoryDate, readIntroListPage, type IntroListItem } from "@/lib/intro-history";
+import { btnDanger, btnGhost, btnPrimary, inputCls, textareaCls, labelCls, textErr } from "@/lib/ui";
 import { errorMessage } from "@/lib/error-message";
-
-type IntroItem = ResumeVersionBinding & {
-  id: number;
-  jd: string;
-  created_at: string;
-  resume_title: string;
-};
 
 export default function IntrosPage() {
   const router = useRouter();
-  const { items, total, nextCursor, loadingMore, listError: loadError, failedCursor, loadMore, reload } = useCursorList<IntroItem>({
+  const { items, total, nextCursor, loading, loadingMore, listError: loadError, failedCursor, loadMore, reload } = useCursorList<IntroListItem>({
     queryKey: "intros",
     buildUrl: (cursor) => `/api/intros?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
     delay: 0,
+    validatePage: (page, cursor) => { readIntroListPage(page, { cursor }); },
   });
   const [resumeId, setResumeId] = useState<number | "">("");
   const [jd, setJd] = useState("");
   const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState("");
-  const typewriter = useTypewriter();
-  const { containerRef: introScrollRef, handleScroll: handleIntroScroll } = useAutoScroll(typewriter.displayedText);
+  const [error, setError] = useState<{ message: string; uncertain: boolean } | null>(null);
   const generation = useRef<AbortController | null>(null);
+  const deletion = useIntroDeletion(reload);
+  const visibleItems = items?.filter(item => !deletion.deletedIds.has(item.id)) ?? null;
+  const busy = generating || deletion.busy;
 
   const { resumes, resumesError, reloadResumes } = useResumeOptions();
 
@@ -52,67 +47,51 @@ export default function IntrosPage() {
   useEffect(() => {
     if (!resumes || resumes.length === 0) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setResumeId(resumes[0]!.id);
+    setResumeId((current) => resumes.some((resume) => resume.id === current) ? current : resumes[0]!.id);
   }, [resumes]);
 
   const selectedResume = resumes?.find((resume) => resume.id === resumeId);
   const { resumeVersionId, setResumeVersionId } = useResumeVersionSelection(selectedResume);
 
   async function generate() {
-    if (resumeId === "" || resumeVersionId === "" || !jd.trim()) return;
-    generation.current?.abort();
+    if (generation.current || !deletion.canStart() || resumeId === "" || resumeVersionId === "" || !jd.trim()) return;
     const controller = new AbortController();
     generation.current = controller;
     const isCurrent = () => generation.current === controller && !controller.signal.aborted;
     setGenerating(true);
-    setError("");
-    typewriter.reset();
+    setError(null);
     try {
-      await fetchSse<{ id: number }>("/api/intros", {
+      await fetchSse<unknown>("/api/intros", {
         body: { resume_id: resumeId, resume_version_id: resumeVersionId, jd: jd.trim() },
         signal: controller.signal,
-        onDelta: (delta) => {
-          if (!isCurrent()) return;
-          typewriter.appendDelta(delta);
-        },
         onDone: (data) => {
           if (!isCurrent()) return;
-          typewriter.flush();
-          router.push(`/intros/${data.id}`);
-        },
-        onError: (err) => {
-          if (!isCurrent()) return;
-          setError(err.message);
-          setGenerating(false);
-          typewriter.reset();
+          const id = data && typeof data === "object" ? (data as { id?: unknown }).id : undefined;
+          if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) throw new Error("生成完成响应不完整，请先刷新历史记录核对是否已保存");
+          router.push(`/intros/${id}`);
         },
       });
     } catch (err) {
       if (!isCurrent()) return;
-      setError(errorMessage(err));
+      const rejected = err instanceof SseServerError || (err instanceof HttpError && err.status >= 400 && err.status < 500 && err.status !== 408);
+      setError({ message: errorMessage(err), uncertain: !rejected });
       setGenerating(false);
-      typewriter.reset();
+      generation.current = null;
+      reload();
     }
   }
 
-  async function remove(id: number) {
-    if (!(await confirmDialog({ title: "删除记录", message: "确定删除这份自我介绍及其两版内容？", danger: true }))) return;
-    try {
-      await jsonFetch(`/api/intros/${id}`, { method: "DELETE" });
-    } catch (err) {
-      await alertDialog({ title: "删除失败", message: errorMessage(err) });
-      return;
-    }
-    reload();
+  function remove(item: IntroListItem) {
+    if (!generation.current) void deletion.remove(item);
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-8">
+    <div className="mx-auto max-w-7xl space-y-8 wrap-anywhere">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-line pb-5">
         <div>
           <h1 className="font-serif text-[28px] sm:text-[32px] font-bold text-ink leading-tight">自我介绍工坊</h1>
           <p className="mt-1 max-w-prose text-sm text-muted leading-relaxed">
-            按选定简历与目标岗位一键定制 30 秒黄金电梯版与 2 分钟详述版；逐句点评打磨表达，配合背诵遮罩脱稿演练。
+            按选定的简历发布版本与目标岗位生成两版介绍草稿，逐句点评并配合遮罩演练。30 秒与 2 分钟是篇幅目标，实际时长以朗读为准。
           </p>
         </div>
       </div>
@@ -142,8 +121,8 @@ export default function IntrosPage() {
               <select
                 className={`${inputCls} mt-1`}
                 value={resumeId}
-                onChange={(e) => setResumeId(Number(e.target.value))}
-                disabled={generating}
+                onChange={(e) => { if (!generation.current && deletion.canStart()) setResumeId(Number(e.target.value)); }}
+                disabled={busy}
               >
                 {resumes.map((r) => (
                   <option key={r.id} value={r.id}>
@@ -153,47 +132,39 @@ export default function IntrosPage() {
               </select>
             </label>
 
-            <ResumeVersionSelect resume={selectedResume} value={resumeVersionId} onChange={setResumeVersionId} disabled={generating} />
+            <ResumeVersionSelect resume={selectedResume} value={resumeVersionId} onChange={id => { if (!generation.current && deletion.canStart()) setResumeVersionId(id); }} disabled={busy} />
 
             <label className="block">
               <span className={labelCls}>目标岗位要求（JD / 职位描述）</span>
               <textarea
                 className={`${textareaCls} mt-1 font-sans`}
                 value={jd}
-                onChange={(e) => setJd(e.target.value)}
-                placeholder="粘贴目标岗位的职责与任职要求，AI 将挑选最契合的经历亮点，提炼成黄金话术…"
-                disabled={generating}
+                onChange={(e) => { if (!generation.current && deletion.canStart()) setJd(e.target.value); }}
+                placeholder="粘贴目标岗位的职责与任职要求，依据简历中已有的经历与个人分工组织表达…"
+                disabled={busy}
               />
             </label>
 
-            <div className="flex items-center justify-between pt-2 border-t border-line/60">
+            <p className="text-xs text-muted">生成依据选定的简历版本与 JD，不核验经历真伪。请核对个人分工、技能掌握程度及未上线、待验证等限定后再使用。</p>
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-line/60">
               <span className="text-xs text-faint">同时输出 30 秒紧凑版与 2 分钟详述版</span>
               <button
                 type="button"
                 className={btnPrimary}
                 onClick={generate}
-                disabled={generating || !jd.trim() || resumeId === "" || resumeVersionId === ""}
+                disabled={busy || !jd.trim() || resumeId === "" || resumeVersionId === ""}
               >
-                {generating ? "AI 正在构思双版自我介绍…（约需半分钟）" : "立即生成两版自我介绍"}
+                {generating ? "AI 正在构思双版自我介绍…" : "立即生成两版自我介绍"}
               </button>
             </div>
 
             {generating && (
-              <div className="mt-3 rounded-xl border border-primary/20 bg-primary-soft/50 p-4 animate-in fade-in duration-200">
+              <div role="status" className="mt-3 rounded-xl border border-primary/20 bg-primary-soft/50 p-4 animate-in fade-in duration-200">
                 <div className="flex items-center gap-2 text-xs font-bold text-primary">
                   <span className="inline-block h-2 w-2 animate-ping rounded-full bg-primary" />
                   AI 面试教练正在打磨 30 秒与 2 分钟双版自我介绍…
                 </div>
-                <div
-                  ref={introScrollRef}
-                  onScroll={handleIntroScroll}
-                  className="mt-2 text-sm text-ink leading-relaxed font-sans whitespace-pre-wrap max-h-48 overflow-y-auto"
-                >
-                  {typewriter.displayedText || "正在分析岗位亮点契合点，规划开篇钩子与核心证据链…"}
-                  {typewriter.isTyping && (
-                    <span className="inline-block w-1.5 h-4 ml-0.5 bg-primary animate-pulse align-middle" />
-                  )}
-                </div>
+                <p className="mt-2 text-sm text-ink leading-relaxed">正在依据所选简历版本与 JD 组织表达；完整校验并保存后进入演练页。</p>
               </div>
             )}
           </div>
@@ -202,53 +173,68 @@ export default function IntrosPage() {
           <div className="flex flex-col justify-between space-y-4 rounded-2xl border border-line bg-card p-6 shadow-card-subtle">
             <div className="space-y-3.5">
               <div className="flex items-center justify-between border-b border-line pb-2.5">
-                <h3 className="font-serif text-sm font-bold text-ink">黄金开场三原则</h3>
+                <h3 className="font-serif text-sm font-bold text-ink">开场表达三原则</h3>
                 <span className="rounded bg-accent-wash px-2 py-0.5 text-[10px] font-bold text-accent">
                   表达心法
                 </span>
               </div>
               <ul className="space-y-3 text-xs leading-relaxed text-muted">
                 <li className="flex items-start gap-2.5">
-                  <span className="font-mono font-bold text-primary">01.</span>
-                  <span><strong>拒绝报菜名：</strong>切忌平铺直叙复述学校与年限，开篇第一句亮出最核心的专业技术标签。</span>
+                  <span className="shrink-0 font-mono font-bold text-primary">01.</span>
+                  <span><strong>交代定位：</strong>用有依据的身份或方向自然开场，教育、参与和维护经历都可使用；年限未知时省略。</span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <span className="font-mono font-bold text-primary">02.</span>
-                  <span><strong>对标 JD 痛点：</strong>前 30 秒务必点出与目标岗位最匹配的 1-2 项战果，证明“我能解决你们的问题”。</span>
+                  <span className="shrink-0 font-mono font-bold text-primary">02.</span>
+                  <span><strong>说明相关经历：</strong>选择与岗位相关的实际任务和个人行动。没有量化结果时保留定性描述，不把参与改成主导。</span>
                 </li>
                 <li className="flex items-start gap-2.5">
-                  <span className="font-mono font-bold text-primary">03.</span>
-                  <span><strong>预埋诱饵钩子：</strong>在结尾留出 1 个最具含金量的架构亮点，主动引导面试官顺势提问。</span>
+                  <span className="shrink-0 font-mono font-bold text-primary">03.</span>
+                  <span><strong>留下讨论方向：</strong>可用亲自参与且能解释的任务或取舍自然收尾，不要求架构亮点；未上线、待验证的状态照实交代。</span>
                 </li>
               </ul>
             </div>
 
             <div className="rounded-xl border border-accent/20 bg-accent-wash/60 p-3.5 text-xs text-accent leading-relaxed">
-              💡 <strong>记忆技巧：</strong>生成后进入详情页开启「脱稿背诵遮罩」，逐词遮挡训练肌肉记忆！
+              💡 <strong>演练方法：</strong>先核对草稿，再实际朗读调整篇幅。详情页遮罩会模糊整句，点击单句揭开后可再次遮蔽。
             </div>
           </div>
         </div>
       )}
 
-      {error && <p className={`mt-3 text-sm ${textErr}`}>{error}</p>}
+      {error && <div role="alert" className={`space-y-1 text-sm ${textErr}`}>
+        <p>{error.message}</p>
+        <p className="text-xs">{error.uncertain
+          ? "响应异常时仍可能已保存，请先核对历史再重新生成；历史读取失败时可单独重试。"
+          : "请按上方提示处理后再生成。"}</p>
+        {error.uncertain && <>
+          <p className="text-xs">即使当前历史没有新记录，也不代表原请求不会稍后保存。</p>
+          <button type="button" className={btnGhost} onClick={reload} disabled={loading || loadingMore}>
+            {loading || loadingMore ? "正在读取历史…" : "重新读取历史"}
+          </button>
+        </>}
+      </div>}
+      <ToolHistoryDeletionFeedback deletion={deletion} deletingLabel="正在删除自我介绍…" />
       {loadError && <LoadError message={`自我介绍历史加载失败：${loadError}`} onRetry={failedCursor === null ? reload : loadMore} />}
       {items === null && !loadError && <Loading label="加载自我介绍历史中…" />}
 
       {/* 历史生成记录（双列卡片化） */}
-      {items !== null && items.length > 0 && (
-        <div className="mt-10 space-y-4">
-          <div className="flex items-center justify-between border-b border-line pb-3">
+      {visibleItems !== null && (
+        <section aria-label="自我介绍历史" className="mt-10 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
             <div className="flex items-center gap-2">
               <span aria-hidden className="h-[9px] w-[9px] rounded-[1px] bg-primary" />
-              <h2 className="font-serif text-base font-bold text-ink">自我介绍沉淀档案 (已载入 {items.length}{total !== null ? ` / 共 ${total}` : ""})</h2>
+              <h2 className="font-serif text-base font-bold text-ink">自我介绍沉淀档案 (已载入 {visibleItems.length}{total !== null && deletion.deletedIds.size === 0 ? ` / 共 ${total}` : ""})</h2>
             </div>
-            <span className="text-xs text-faint">按生成时间倒序</span>
+            <span className="text-xs text-faint">按记录编号倒序</span>
           </div>
 
+          {visibleItems.length === 0 && <p className="text-sm text-muted">{nextCursor ? "本页记录已移除，可以继续加载更早的自我介绍。" : "尚无自我介绍历史，生成后会显示在这里。"}</p>}
+
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {items.map((it) => (
-              <div
+            {visibleItems.map((it) => (
+              <article
                 key={it.id}
+                aria-label={`自我介绍 #${it.id}`}
                 className="group flex flex-col justify-between rounded-xl border border-line bg-card p-4 shadow-card-subtle transition-all duration-150 hover:border-primary/40 hover:bg-surface/30"
               >
                 <div className="space-y-2">
@@ -260,11 +246,11 @@ export default function IntrosPage() {
                       >
                         {(it.jd.split("\n")[0] ?? "").slice(0, 45) || "（无职位描述）"}
                       </Link>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
                         <span className="rounded bg-primary-soft px-2 py-0.5 text-[10px] font-bold text-primary">
                           30s / 2min 双版
                         </span>
-                        <span className="rounded border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-muted">
+                        <span className="max-w-full rounded border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-muted">
                           {it.resume_title}
                           <ResumeVersionBadge {...it} />
                         </span>
@@ -277,14 +263,15 @@ export default function IntrosPage() {
                   </p>
                 </div>
 
-                <div className="mt-4 flex items-center justify-between border-t border-line/60 pt-3 text-xs">
-                  <span className="font-mono text-[11px] text-faint">
-                    {new Date(it.created_at).toLocaleDateString()}
-                  </span>
-                  <div className="flex items-center gap-2">
+                <div className="mt-4 flex items-start justify-between gap-3 border-t border-line/60 pt-3 text-xs">
+                  <time dateTime={it.created_at} className="min-w-0 font-mono text-[11px] text-faint [overflow-wrap:anywhere]">
+                    {formatIntroHistoryDate(it.created_at)}
+                  </time>
+                  <div className="flex shrink-0 items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => remove(it.id)}
+                      onClick={() => remove(it)}
+                      disabled={busy}
                       className={btnDanger}
                     >
                       删除
@@ -294,7 +281,7 @@ export default function IntrosPage() {
                     </Link>
                   </div>
                 </div>
-              </div>
+              </article>
             ))}
           </div>
           {nextCursor && (
@@ -304,7 +291,7 @@ export default function IntrosPage() {
               </button>
             </div>
           )}
-        </div>
+        </section>
       )}
     </div>
   );

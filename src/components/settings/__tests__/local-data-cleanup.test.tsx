@@ -3,7 +3,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { confirmDialog } from "@/components/common/confirm-dialog";
 import { LocalDataCleanup } from "../local-data-cleanup";
-import { clearSensitiveBrowserData } from "@/lib/browser-sensitive-data";
+import { RESUME_IMPORT_SESSION_KEY } from "@/lib/resume-import-session";
+import { SALARY_CREATION_STORAGE_KEY } from "@/lib/salary-creation-storage";
+import { clearSensitiveBrowserData, hasSensitiveBrowserDrafts } from "@/lib/browser-sensitive-data";
 
 vi.mock("@/components/common/confirm-dialog", () => ({ confirmDialog: vi.fn() }));
 beforeEach(() => {
@@ -28,6 +30,17 @@ it("主动清理仅删除应用敏感键并给出完成反馈", async () => {
   expect(localStorage.getItem("other-app")).toBe("keep");
   expect(localStorage.getItem("resume_life_project_repo_paths_1")).toBeNull();
   expect(localStorage.getItem("resume_life_project_repo_paths_old:2")).toBeNull();
+  expect(sessionStorage.getItem("other-app")).toBe("keep");
+});
+it.each([RESUME_IMPORT_SESSION_KEY, SALARY_CREATION_STORAGE_KEY])("退出时能发现、保留和清除单独的会话草稿 %s", key => {
+  sessionStorage.removeItem("resume-life:draft:1");
+  sessionStorage.setItem(key, "saved draft");
+  expect(hasSensitiveBrowserDrafts()).toBe(true);
+  clearSensitiveBrowserData(true);
+  expect(sessionStorage.getItem(key)).toBe("saved draft");
+  clearSensitiveBrowserData();
+  expect(sessionStorage.getItem(key)).toBeNull();
+  expect(hasSensitiveBrowserDrafts()).toBe(false);
   expect(sessionStorage.getItem("other-app")).toBe("keep");
 });
 it("保留草稿也清除所有项目路径和脱敏规则", () => {

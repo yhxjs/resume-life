@@ -1,0 +1,105 @@
+import { expect, test } from "@playwright/test";
+import { MODULE_KEYS, normalizeContent } from "../../src/lib/modules";
+const storageKey = "resume-life:resume-import:v1";
+
+for (const width of [390, 1280]) {
+  test(`导入草稿暂存 ${width}px：刷新保留原文和校对富文本，主动清除不删除存档`, async ({ page, request }, testInfo) => {
+    const before = await (await request.get("/api/resumes")).json();
+    let parses = 0; let creates = 0;
+    const text = String.raw`原文 Array<T> &amp; C:\new\resume
+未上线，收益尚未统计。`;
+    const edited = "已修改的原文，限定仍然保留。";
+    const modules = Object.fromEntries(MODULE_KEYS.map(key => [key, normalizeContent(key, undefined)]));
+    await page.route("**/api/import/parse", route => { parses++; return route.fulfill({ json: { title: "原始草稿", modules } }); });
+    await page.route("**/api/resumes", route => { if (route.request().method() === "POST") creates++; return route.continue(); });
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/resumes/import");
+    await page.getByLabel("简历原文", { exact: true }).fill(text);
+    await page.reload();
+    await expect(page.getByLabel("简历原文", { exact: true })).toHaveValue(text);
+    expect(parses).toBe(0); expect(creates).toBe(0);
+    await page.getByRole("button", { name: "开始智能解析 →", exact: true }).click();
+    const title = page.getByLabel("简历标题", { exact: true });
+    await expect(title).toHaveValue("原始草稿");
+    await title.fill("  已核对标题 &amp; Array<T>  ");
+    const summary = page.getByRole("textbox", { name: "自我评价第 1 行", exact: true });
+    await summary.fill(text);
+    await summary.press("Control+a");
+    await summary.press("Control+b");
+    // 实际富文本保存在浏览器编辑事件中，暂存与刷新均不能再次转义。
+    const html = await summary.innerHTML();
+    expect(html).toMatch(/<(b|strong)>/);
+    const savedSummary = await page.evaluate(key => JSON.parse(sessionStorage.getItem(key)!).editor.draft.modules.summary, storageKey);
+    expect(savedSummary.descriptionItems).toEqual([html]);
+    await page.reload();
+    await expect(title).toHaveValue("  已核对标题 &amp; Array<T>  ");
+    await expect(summary).toHaveText(text, { useInnerText: true });
+    // 渲染器会把浏览器生成的 div 行转换为 br；核对已存富文本本身不变及可见换行/加粗仍在。
+    expect(await page.evaluate(key => JSON.parse(sessionStorage.getItem(key)!).editor.draft.modules.summary, storageKey)).toEqual(savedSummary);
+    await expect(summary.locator("b,strong").first()).toBeVisible();
+    await expect(page.getByLabel("导入原文", { exact: true })).toHaveText(text);
+    expect(parses).toBe(1); expect(creates).toBe(0);
+    await page.getByRole("button", { name: "返回重新解析", exact: true }).click();
+    const recovered = page.getByLabel("已保留的原文，可直接修改", { exact: true });
+    await recovered.fill(edited);
+    await page.reload();
+    await expect(recovered).toHaveValue(edited);
+    await recovered.fill("");
+    await page.reload();
+    await expect(recovered).toHaveValue("");
+    await expect(page.getByRole("button", { name: "开始智能解析 →", exact: true })).toBeDisabled();
+    await page.getByRole("button", { name: "清除导入暂存", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "清除导入暂存", exact: true });
+    await dialog.getByRole("button", { name: "取消", exact: true }).click();
+    expect(await page.evaluate(key => sessionStorage.getItem(key), storageKey)).not.toBeNull();
+    await expect(recovered).toHaveValue("");
+    await recovered.scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`import-restored-${width}.png`) });
+    await page.getByRole("button", { name: "清除导入暂存", exact: true }).click();
+    await dialog.getByRole("button", { name: "清除暂存", exact: true }).click();
+    await expect(page.getByLabel("简历原文", { exact: true })).toHaveValue("");
+    await expect(recovered).toHaveCount(0);
+    expect(await page.evaluate(key => sessionStorage.getItem(key), storageKey)).toBeNull();
+    await page.reload();
+    await expect(page.getByLabel("简历原文", { exact: true })).toHaveValue("");
+    expect(parses).toBe(1); expect(creates).toBe(0);
+    expect(await (await request.get("/api/resumes")).json()).toEqual(before);
+  });
+
+  test(`坏导入暂存 ${width}px：保留原始数据，读取存档后显式确认才重新开始`, async ({ page, request }, testInfo) => {
+    const before = await (await request.get("/api/resumes")).json();
+    let creates = 0; let parses = 0;
+    await page.route("**/api/import/parse", route => { parses++; return route.abort(); });
+    await page.route("**/api/resumes", route => { if (route.request().method() === "POST") creates++; return route.continue(); });
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/resumes/import");
+    const raw = '{损坏的 JSON Array<T> &amp; C:\\new\\resume，末尾原文保留';
+    await page.evaluate(({ key, raw }) => sessionStorage.setItem(key, raw), { key: storageKey, raw });
+    await page.reload();
+    const recovery = page.getByRole("region", { name: "导入结果核对" });
+    await expect(recovery).toContainText("恢复信息读取失败");
+    await expect(page.getByLabel("简历原文", { exact: true })).toBeDisabled();
+    await recovery.getByText("查看原始恢复数据", { exact: true }).click();
+    await expect(page.getByLabel("原始导入恢复数据", { exact: true })).toHaveValue(raw);
+    const allow = recovery.getByRole("button", { name: "已核对，允许再次创建", exact: true });
+    await expect(allow).toBeDisabled();
+    await recovery.getByRole("button", { name: "重新读取导入结果", exact: true }).click();
+    await expect(allow).toBeEnabled();
+    await allow.click();
+    const dialog = page.getByRole("dialog", { name: "允许再次创建简历", exact: true });
+    await expect(dialog).toContainText("清除本页损坏的恢复信息");
+    await dialog.getByRole("button", { name: "取消", exact: true }).click();
+    expect(await page.evaluate(key => sessionStorage.getItem(key), storageKey)).toBe(raw);
+    await recovery.scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`import-corrupt-session-${width}.png`) });
+    await allow.click();
+    await dialog.getByRole("button", { name: "允许再次创建", exact: true }).click();
+    await expect(page.getByLabel("简历原文", { exact: true })).toBeEnabled();
+    expect(creates).toBe(0); expect(parses).toBe(0);
+    expect(await (await request.get("/api/resumes")).json()).toEqual(before);
+    await page.reload();
+    await expect(recovery).toHaveCount(0);
+  });
+}

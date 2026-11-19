@@ -1,50 +1,38 @@
 import { getDb, inTransaction, now } from "@/lib/db";
 
-import { extractJson, LlmConfigError } from "@/lib/llm";
+import { LlmConfigError } from "@/lib/llm";
 
-import { loadProjectContext, ProjectNotFoundError } from "@/lib/projects";
+import { loadProjectContext, projectContextMatches, ProjectNotFoundError } from "@/lib/projects";
 
 import { ProjectSummaryCorruptError } from "@/lib/summary";
 
-import { MAX_MODEL_INPUT_CHARS } from "@/lib/llm-input-budget";
+import { MAX_MODEL_INPUT_CHARS, ModelInputBudgetError } from "@/lib/llm-input-budget";
 
-import { UNTRUSTED_DATA_SYSTEM_RULES } from "@/lib/prompt-safety";
-
-import { safeChat, LLM_FEATURES, type PromptPart } from "@/lib/safe-llm";
-
-import { INTERVIEW_DIMENSIONS, normalizeReport, weakDimensions } from "@/lib/scores";
+import { safeChat, checkSafeModelInput, LLM_FEATURES, type PromptPart } from "@/lib/safe-llm";
 
 import { errorMessage } from "@/lib/error-message";
 
-import { loadBankContext, loadInterviewTurnParts, promptPartsLength } from "@/lib/drills-context";
+import { loadBankContext, loadInterviewQuestionContext, loadInterviewTurnParts } from "@/lib/drills-context";
 
-import { insertQuestions, MAX_DRILL_QUESTIONS, parseQuestionItems } from "@/lib/drills-questions";
+import { insertQuestions, parseQuestionItems } from "@/lib/drills-questions";
+import { questionComparisonKey } from "@/lib/question-normalization";
+import { BANK_DRILL_QUESTION_PROMPT, buildBankDrillQuestionMessages, buildProjectDrillQuestionMessages, PROJECT_DRILL_QUESTION_PROMPT } from "@/lib/drill-question-llm";
+import { buildInterviewRemediationMessages, buildInterviewRemediationParts, readInterviewRemediationReport, REMEDIATION_PROMPT } from "@/lib/drill-remediation-llm";
 
 export type CreatedDrill = { id: number; count: number };
 
-function validateQuestionCount(questions: readonly unknown[], count: number): void {
-  if (questions.length === 0) throw new HttpError(502, "AI 没有生成有效题目，请重试");
-  if (questions.length > Math.min(count, MAX_DRILL_QUESTIONS)) {
-    throw new HttpError(502, "AI 生成的题目数量超过本次请求上限，请重试");
+function generatedQuestions(raw: string, maxCount: number, project = false): { question: string; kind: string }[] {
+  try {
+    return parseQuestionItems(raw, { maxCount, project });
+  } catch (err) {
+    throw new HttpError(502, errorMessage(err));
   }
 }
 
-const PROJECT_PROMPT = `你是资深面试官。基于给定的项目档案与材料，为该项目设计深挖面试题。
-输出 JSON：{"questions": ["题目1", "题目2", ...]}
-要求：题目围绕项目的背景、架构、技术难点、权衡决策、结果与候选人职责；从浅入深排列；每道题是一个具体的问题（不要选择题/判断题）；只输出 JSON。`;
-
-const BANK_QUESTION_PROMPT = `你是资深面试官。请结合岗位方向与 JD，出八股与行为面试题：优先覆盖核心考点，八股与行为题按岗位侧重合理搭配，按由浅入深排列。
-若提供了参考题库（每行格式：ID|类型|题目），它只是参考题源：其中合适的题目可直接采用原题，也可结合方向与 JD 出新题；同一套题内不要重复。
-输出 JSON：{"questions": [{"question": "题目文本", "kind": "tech"（八股）或 "behavior"（行为）}, ...]}。只输出 JSON。`;
-
-const REMEDIATION_PROMPT = `你是资深面试教练。候选人刚结束一场模拟面试，想在短板维度上做针对性练习。
-请围绕总结报告中的低分维度与逐题作答暴露的失分点出追练题：变换角度重考失分点，补齐对应的能力短板（知识盲区用八股题、表达与条理问题换场景重考），不要与原题重复；由浅入深排列；每道题是一个具体的问题（不要选择题/判断题）。
-输出 JSON：{"questions": [{"question": "题目文本", "kind": "tech"（八股）或 "behavior"（行为）}, ...]}。只输出 JSON。`;
-
 /** 项目深挖题：从项目档案与材料生成 */
 export async function createProjectDrill(body: { project_id?: unknown }, count: number, signal: AbortSignal): Promise<CreatedDrill> {
-  const projectId = Number(body?.project_id);
-  if (!Number.isInteger(projectId)) {
+  const projectId = body?.project_id;
+  if (typeof projectId !== "number" || !Number.isSafeInteger(projectId) || projectId <= 0) {
     throw new HttpError(400, "请选择项目");
   }
 
@@ -52,6 +40,7 @@ export async function createProjectDrill(body: { project_id?: unknown }, count: 
   try {
     context = await loadProjectContext(projectId);
   } catch (err) {
+    if (err instanceof ModelInputBudgetError) throw new HttpError(413, err.message);
     if (err instanceof ProjectSummaryCorruptError) throw new HttpError(422, err.message);
     if (err instanceof ProjectNotFoundError) throw new HttpError(404, err.message);
     throw err;
@@ -59,39 +48,25 @@ export async function createProjectDrill(body: { project_id?: unknown }, count: 
 
   let raw: string;
   try {
-    raw = await safeChat("question", { feature: LLM_FEATURES.drillProject, entity: { type: "project", id: projectId } }, PROJECT_PROMPT, [
-      {
-        role: "user",
-        parts: [
-          { trust: "untrusted", tag: "project_context", text: context },
-          { trust: "trusted", text: "\n\n请生成 " },
-          { trust: "untrusted", tag: "question_count", text: String(count) },
-          { trust: "trusted", text: " 道面试深挖题。" },
-        ],
-      },
-    ], { signal, requireJson: true });
+    raw = await safeChat("question", { feature: LLM_FEATURES.drillProject, entity: { type: "project", id: projectId } }, PROJECT_DRILL_QUESTION_PROMPT,
+      buildProjectDrillQuestionMessages(context, count), { signal, requireJson: "strict" });
   } catch (err) {
-    throw new HttpError(502, llmErrorMessage(err));
+    throw new HttpError(err instanceof ModelInputBudgetError ? 413 : 502, llmErrorMessage(err));
   }
 
-  let questions: string[] = [];
-  try {
-    const parsed = extractJson<{ questions?: unknown }>(raw);
-    questions = Array.isArray(parsed.questions)
-      ? [...new Set(parsed.questions.filter((q): q is string => typeof q === "string" && q.trim().length > 0).map((q) => q.trim()))]
-      : [];
-  } catch {
-    questions = [];
-  }
-  validateQuestionCount(questions, count);
+  const questions = generatedQuestions(raw, count, true);
 
   const db = getDb();
   return inTransaction(() => {
+    signal.throwIfAborted();
+    if (!projectContextMatches(projectId, context)) {
+      throw new HttpError(409, "项目档案或材料已发生变化，请刷新后重新出题");
+    }
     const result = db
       .prepare("INSERT INTO drills (source, project_id, created_at) VALUES ('project', ?, ?)")
       .run(projectId, now());
     const newId = Number(result.lastInsertRowid);
-    insertQuestions(newId, questions.map((q) => ({ question: q, kind: "" })));
+    insertQuestions(newId, questions);
     return { id: newId, count: questions.length };
   });
 }
@@ -108,29 +83,19 @@ export async function createBankDrill(
     throw new HttpError(400, "请填写岗位方向或 JD（至少一项）");
   }
 
-  // 题库为空时同样可出题，只是没有参考题源
-  const bank = await loadBankContext(direction || undefined);
+  // 先保留完整 JD、方向与固定指令，参考题库只使用剩余额度（含标签转义开销）。
+  const bankBudget = remainingContextChars(BANK_DRILL_QUESTION_PROMPT, buildBankDrillQuestionMessages(direction, jd, "", count)[0]!.parts);
+  const bank = await loadBankContext(direction || undefined, Math.min(60_000, bankBudget));
 
   let raw: string;
   try {
-    raw = await safeChat("question", { feature: LLM_FEATURES.drillBank }, BANK_QUESTION_PROMPT, [
-      {
-        role: "user",
-        parts: bankQuestionParts(direction, jd, bank, count),
-      },
-    ], { signal });
+      raw = await safeChat("question", { feature: LLM_FEATURES.drillBank }, BANK_DRILL_QUESTION_PROMPT,
+        buildBankDrillQuestionMessages(direction, jd, bank, count), { signal, requireJson: "strict" });
   } catch (err) {
     throw new HttpError(502, llmErrorMessage(err));
   }
 
-  // 解析题目列表（kind 归一化、去重）；解析失败按空处理，下方统一报错
-  let questions: { question: string; kind: string }[] = [];
-  try {
-    questions = parseQuestionItems(raw);
-  } catch {
-    questions = [];
-  }
-  validateQuestionCount(questions, count);
+  const questions = generatedQuestions(raw, count);
 
   const db = getDb();
   return inTransaction(() => {
@@ -143,16 +108,8 @@ export async function createBankDrill(
   });
 }
 
-/** 面试追练题：从总结报告的短板/低分维度与本场问答的失分点生成 */
-export async function createInterviewDrill(
-  body: { interview_id?: unknown },
-  count: number,
-  signal: AbortSignal
-): Promise<CreatedDrill> {
-  const interviewId = Number(body?.interview_id);
-  if (!Number.isInteger(interviewId)) {
-    throw new HttpError(400, "请选择面试记录");
-  }
+/** 同步构建实际外发材料；调用方用短事务固定报告、原题及预算内原答。 */
+function interviewDrillContext(interviewId: number, count: number) {
   const db = getDb();
   const interview = db
     .prepare("SELECT id, jd, report FROM interviews WHERE id = ?")
@@ -166,111 +123,102 @@ export async function createInterviewDrill(
   } catch {
     reportRaw = null;
   }
-  const report = normalizeReport(reportRaw);
-  if (!report) {
+  const reportContext = readInterviewRemediationReport(reportRaw);
+  if (!reportContext) {
     throw new HttpError(400, "该面试还没有有效的总结报告，请先生成报告");
   }
 
-  // 追练重点：报告中的低分维度；各维都不低时取最低两维
-  const focus = weakDimensions(report)
-    .map((k) => INTERVIEW_DIMENSIONS.find((d) => d.key === k)?.label ?? k)
-    .join("、");
-
-  const reportText = [
-    `综合 ${report.overall} 分`,
-    INTERVIEW_DIMENSIONS.map((d) => `${d.label} ${report[d.key]}`).join("，"),
-    `短板：${report.weaknesses}`,
-    `建议：${report.suggestions}`,
-  ].join("\n");
-  const contextPrefix: PromptPart[] = [
-    { trust: "trusted", text: "【岗位要求】\n" },
-    { trust: "untrusted", tag: "job_description", text: interview.jd },
-    { trust: "trusted", text: "\n\n【总结报告】\n" },
-    { trust: "untrusted", tag: "interview_report", text: reportText },
-    { trust: "trusted", text: "\n\n【本场问答】\n" },
-  ];
-  const contextSuffix: PromptPart[] = [
-    { trust: "trusted", text: "\n\n请出 " },
-    { trust: "untrusted", tag: "question_count", text: String(count) },
-    { trust: "trusted", text: " 道追练题，重点考察：" },
-    { trust: "untrusted", tag: "focus_dimensions", text: focus },
-    { trust: "trusted", text: "。" },
-  ];
-  const safeFixedInputChars = REMEDIATION_PROMPT.length
-    + 1
-    + UNTRUSTED_DATA_SYSTEM_RULES.length
-    + promptPartsLength(contextPrefix)
-    + promptPartsLength(contextSuffix);
-  if (safeFixedInputChars > MAX_MODEL_INPUT_CHARS) {
-    throw new HttpError(
-      413,
-      `完整模型输入超过 ${MAX_MODEL_INPUT_CHARS} 字符，请缩短简历、岗位要求或历史内容后重试`,
-    );
+  const { reportText, focus } = reportContext;
+  const buildParts = (questionParts: readonly PromptPart[], turnParts: readonly PromptPart[]) => buildInterviewRemediationParts({
+    jd: interview.jd, reportText, questionParts, turnParts, count, focus,
+  });
+  const questionBudget = remainingContextChars(REMEDIATION_PROMPT, buildParts([], []));
+  let questionContext: ReturnType<typeof loadInterviewQuestionContext>;
+  try {
+    questionContext = loadInterviewQuestionContext(interviewId, questionBudget);
+  } catch (error) {
+    if (error instanceof ModelInputBudgetError) throw new HttpError(413, error.message);
+    throw error;
   }
-
-  const turnParts = await loadInterviewTurnParts(
+  const turnBudget = remainingContextChars(REMEDIATION_PROMPT, buildParts(questionContext.parts, []));
+  const turnParts = loadInterviewTurnParts(
     interviewId,
-    MAX_MODEL_INPUT_CHARS - safeFixedInputChars,
+    turnBudget,
   );
+  return {
+    jd: interview.jd,
+    focus,
+    questions: questionContext.questions,
+    parts: buildParts(questionContext.parts, turnParts),
+  };
+}
+
+/** 面试追练题：模型等待期间不持锁，提交前复核实际用于出题和去重的材料。 */
+export async function createInterviewDrill(
+  body: { interview_id?: unknown },
+  count: number,
+  signal: AbortSignal
+): Promise<CreatedDrill> {
+  const interviewId = body?.interview_id;
+  if (typeof interviewId !== "number" || !Number.isSafeInteger(interviewId) || interviewId <= 0) throw new HttpError(400, "请选择面试记录");
+  const context = inTransaction(() => interviewDrillContext(interviewId, count));
 
   let raw: string;
   try {
-    raw = await safeChat("question", { feature: LLM_FEATURES.drillRemediation, entity: { type: "interview", id: interviewId } }, REMEDIATION_PROMPT, [
-      {
-        role: "user",
-        parts: [
-          ...contextPrefix,
-          ...turnParts,
-          ...contextSuffix,
-        ],
-      },
-    ], { signal });
+    raw = await safeChat("question", { feature: LLM_FEATURES.drillRemediation, entity: { type: "interview", id: interviewId } }, REMEDIATION_PROMPT,
+      buildInterviewRemediationMessages(context.parts), { signal, requireJson: "strict" });
   } catch (err) {
     throw new HttpError(502, llmErrorMessage(err));
   }
 
-  let questions: { question: string; kind: string }[] = [];
-  try {
-    questions = parseQuestionItems(raw);
-  } catch {
-    questions = [];
+  const questions = generatedQuestions(raw, count);
+
+  if (questions.some((item) => context.questions.has(questionComparisonKey(item.question)))) {
+    throw new HttpError(502, "AI 追练题与本场原题重复，请重试");
   }
-  validateQuestionCount(questions, count);
 
   return inTransaction(() => {
+    signal.throwIfAborted();
+    let current: ReturnType<typeof interviewDrillContext>;
+    try {
+      current = interviewDrillContext(interviewId, count);
+    } catch (error) {
+      if (error instanceof HttpError || error instanceof ModelInputBudgetError) {
+        throw new HttpError(409, "面试追练依据已发生变化，请刷新后重新出题");
+      }
+      throw error;
+    }
+    if (JSON.stringify(current.parts) !== JSON.stringify(context.parts)) {
+      throw new HttpError(409, "面试追练依据已发生变化，请刷新后重新出题");
+    }
+    const db = getDb();
     const result = db
-      .prepare("INSERT INTO drills (source, interview_id, focus, created_at) VALUES ('interview', ?, ?, ?)")
-      .run(interviewId, focus, now());
+      .prepare("INSERT INTO drills (source, interview_id, jd, focus, created_at) VALUES ('interview', ?, ?, ?, ?)")
+      .run(interviewId, context.jd, context.focus, now());
     const newId = Number(result.lastInsertRowid);
     insertQuestions(newId, questions);
     return { id: newId, count: questions.length };
   });
 }
 
-function bankQuestionParts(direction: string, jd: string, bank: string, count: number): PromptPart[] {
-  const parts: PromptPart[] = [];
-  const append = (label: string, tag: string, text: string) => {
-    if (parts.length > 0) parts.push({ trust: "trusted", text: "\n\n" });
-    parts.push(
-      { trust: "trusted", text: `${label}\n` },
-      { trust: "untrusted", tag, text },
-    );
-  };
-  if (direction) append("【岗位方向】", "job_direction", direction);
-  if (jd) append("【岗位要求（JD）】", "job_description", jd);
-  if (bank) append("【参考题库】", "question_bank", bank);
-  parts.push(
-    { trust: "trusted", text: "\n\n请出 " },
-    { trust: "untrusted", tag: "question_count", text: String(count) },
-    { trust: "trusted", text: " 道题。" },
-  );
-  return parts;
-}
-
 function llmErrorMessage(err: unknown): string {
   return err instanceof LlmConfigError
     ? err.message
     : errorMessage(err);
+}
+
+/** 与真正调用走同一套拼装，日期规则、标签及转义都计入预算。 */
+function remainingContextChars(system: string, parts: readonly PromptPart[]): number {
+  try {
+    const messages = checkSafeModelInput(system, [{ role: "user", parts }]);
+    return MAX_MODEL_INPUT_CHARS - messages.reduce((total, message) => {
+      if (typeof message.content !== "string") throw new Error("出题上下文必须为纯文本");
+      return total + message.content.length;
+    }, 0);
+  } catch (err) {
+    if (err instanceof ModelInputBudgetError) throw new HttpError(413, err.message);
+    throw err;
+  }
 }
 
 export class HttpError extends Error {

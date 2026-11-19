@@ -1,3 +1,4 @@
+import { listenForFetch } from "../support/http-server";
 import { expect, test } from "@playwright/test";
 import { createServer } from "node:http";
 import { exportEncryptedBackup, postEncryptedBackup } from "./backup-helpers";
@@ -9,31 +10,31 @@ test("投递准备聚合资料、复用 JD、持久保存待办和模拟面试�
   const baseline = await exportEncryptedBackup(request);
   expect(baseline.response.ok()).toBe(true);
   const reviewPayloads: string[] = [];
+  const replies: { data: unknown; review?: boolean }[] = [];
+  const unexpectedRequests: string[] = [];
   const privateMarkers = ["PRIVATE_REVIEW_NAME", "PRIVATE_REVIEW_PHONE", "PRIVATE_REVIEW_EMAIL", "PRIVATE_REVIEW_ADDRESS"];
+  const reviewReply = {
+    mistakes: [{ question_index: 1, gap: "缺少一致性策略", improved_answer: "说明缓存失效和回源保护" }],
+    drills: [{ question_index: 1, question: "缓存击穿时如何保护数据库？" }],
+    resume_suggestions: [{ question_index: 1, suggestion: "补充缓存优化的量化结果" }],
+  };
   const provider = createServer(async (incoming, outgoing) => {
     let raw = "";
     for await (const chunk of incoming) raw += chunk;
     const body = JSON.parse(raw);
-    const system = String(body.messages[0]?.content ?? "");
-    if (system.includes("面试复盘教练")) reviewPayloads.push(JSON.stringify(body.messages));
-    const reply = system.includes("面试复盘教练") ? {
-      mistakes: [{ question_index: 1, gap: "缺少一致性策略", improved_answer: "说明缓存失效和回源保护" }],
-      drills: [{ question_index: 1, question: "缓存击穿时如何保护数据库？" }],
-      resume_suggestions: [{ question_index: 1, suggestion: "补充缓存优化的量化结果" }],
-    } : system.includes("自我介绍") ? { versions: [
-      { kind: "30s", sentences: [{ text: "我擅长 React 和可访问性。", comment: "技术定位清楚" }] },
-      { kind: "2min", sentences: [{ text: "我在项目中优化了交互与性能。", comment: "补充成果" }] },
-    ] } : system.includes("资深技术招聘专家") ? { match: 7, summary: "突出岗位相关成果", modules: [{ module_key: "summary",
-      scores: { depth: 7, structure: 7, authenticity: 8, completeness: 7 }, gaps: "补充业务结果",
-      suggestions: [{ item_id: "", field: "text", reason: "对齐岗位", draft: "注重可访问性的前端工程师" }],
-    }] } : system.includes("雷达") ? { role: "React 前端开发与工程化", must_skills: [
-      { name: "React", weight: 9, why: "岗位要求" }, { name: "TypeScript", weight: 8, why: "岗位要求" }, { name: "测试", weight: 7, why: "岗位要求" },
-    ], followups: [{ topic: "组件设计", questions: ["如何划分组件职责？"] }], company_style: { style: "工程导向", signals: ["强调工程质量"] } }
-      : { question: "如何设计一个可访问的 React 表单？" };
+    // 由实际操作安排回复，不依赖 system 提示词的措辞或旧产品名。
+    const reply = replies.shift();
+    if (!reply) {
+      unexpectedRequests.push(JSON.stringify(body.messages));
+      outgoing.writeHead(500, { "Content-Type": "application/json" });
+      outgoing.end(JSON.stringify({ error: "Unexpected synthetic provider request" }));
+      return;
+    }
+    if (reply.review) reviewPayloads.push(JSON.stringify(body.messages));
     outgoing.writeHead(200, { "Content-Type": "text/event-stream" });
-    outgoing.end(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(reply) } }] })}\n\ndata: [DONE]\n\n`);
+    outgoing.end(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(reply.data) } }] })}\n\ndata: [DONE]\n\n`);
   });
-  await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  await listenForFetch(provider);
   const address = provider.address();
   if (!address || typeof address === "string") throw new Error("Missing provider address");
   try {
@@ -45,6 +46,16 @@ test("投递准备聚合资料、复用 JD、持久保存待办和模拟面试�
     expect(resume.status()).toBe(201);
     const resumeId = (await resume.json()).id;
     const version = await publishResume(request, resumeId);
+    const diagnosisReply = {
+      match: 7, summary: "突出岗位相关成果",
+      modules: version.snapshot.modules.filter((module) => module.type !== "basic").map((module) => ({
+        module_key: module.key,
+        scores: { depth: 7, structure: 7, authenticity: 8, completeness: 7 },
+        gaps: module.type === "summary" ? "补充业务结果" : "未提供相关材料",
+        suggestions: module.type === "summary"
+          ? [{ item_id: "", field: "text", reason: "明确已有前端经验", draft: "我有前端开发经验。" }] : [],
+      })),
+    };
     const jd = "需要 React、TypeScript、可访问性和自动化测试经验。";
     const create = async (company: string) => {
       const response = await request.post("/api/applications", { data: { company, role: "前端工程师", resume_id: resumeId, resume_version_id: version.id, jd } });
@@ -74,10 +85,18 @@ test("投递准备聚合资料、复用 JD、持久保存待办和模拟面试�
     await page.reload();
     await expect(page.getByRole("checkbox", { name: "练习 30 秒自我介绍" })).toBeChecked();
 
+    replies.push({ data: diagnosisReply });
     await page.getByRole("button", { name: "生成简历诊断", exact: true }).click();
     await expect(page.getByRole("region", { name: "简历诊断", exact: true })).toContainText("突出岗位相关成果");
+    replies.push({ data: { versions: [
+      { kind: "30s", sentences: [{ text: "我擅长 React 和可访问性。", comment: "技术定位清楚" }] },
+      { kind: "2min", sentences: [{ text: "我在项目中优化了交互与性能。", comment: "补充成果" }] },
+    ] } });
     await page.getByRole("button", { name: "生成自我介绍", exact: true }).click();
     await expect(page.getByRole("region", { name: "自我介绍", exact: true })).toContainText("我擅长 React 和可访问性。");
+    replies.push({ data: { role: "React 前端开发与工程化", must_skills: [
+      { name: "React", weight: 9, why: "岗位要求" }, { name: "TypeScript", weight: 8, why: "岗位要求" }, { name: "测试", weight: 7, why: "岗位要求" },
+    ], followups: [{ topic: "组件设计", questions: ["如何划分组件职责？"] }], company_style: { style: "工程导向", signals: ["强调工程质量"] } } });
     await page.getByRole("button", { name: "生成JD 考点画像", exact: true }).click();
     await expect(page.getByRole("region", { name: "JD 考点画像", exact: true })).toContainText("React 前端开发与工程化");
     await page.getByRole("region", { name: "自我介绍", exact: true }).getByRole("link", { name: "查看记录" }).click();
@@ -88,6 +107,7 @@ test("投递准备聚合资料、复用 JD、持久保存待办和模拟面试�
     await page.getByRole("link", { name: "到简历中采纳建议" }).click();
     const diagnostic = page.getByRole("dialog", { name: "对 JD 体检诊断简历" });
     await expect(diagnostic.getByText("突出岗位相关成果", { exact: true })).toBeVisible();
+    replies.push({ data: diagnosisReply });
     await diagnostic.getByRole("button", { name: "按所选发布版本再次诊断", exact: true }).click();
     await expect(diagnostic.getByText("岗位匹配度：7 → 7（持平）", { exact: true })).toBeVisible();
     await diagnostic.getByRole("button", { name: "完成并关闭", exact: true }).click();
@@ -108,6 +128,7 @@ test("投递准备聚合资料、复用 JD、持久保存待办和模拟面试�
     await review.getByRole("textbox", { name: "对方反馈" }).fill("继续解释");
     await review.getByRole("button", { name: "保存逐题记录" }).click();
     await expect(review.getByText("逐题记录已保存")).toBeVisible();
+    replies.push({ data: reviewReply, review: true });
     await review.getByRole("button", { name: "确认并生成复盘" }).click();
     await expect(review.getByText("缓存击穿时如何保护数据库？")).toBeVisible();
     await expect(review.getByText("补充缓存优化的量化结果")).toBeVisible();
@@ -126,6 +147,7 @@ test("投递准备聚合资料、复用 JD、持久保存待办和模拟面试�
     await page.getByRole("region", { name: "真实面试记录" }).getByRole("button", { name: "逐题复盘" }).click();
     await expect(review.getByRole("button", { name: "确认并生成复盘" })).toBeEnabled();
     await expect(review.getByText("缺少一致性策略")).toBeVisible();
+    replies.push({ data: reviewReply, review: true });
     await review.getByRole("button", { name: "确认并生成复盘" }).click();
     await expect(review.getByText("复盘结果已保存")).toBeVisible();
     await expect(review.getByRole("button", { name: "确认并生成复盘" })).toBeDisabled();
@@ -148,6 +170,7 @@ test("投递准备聚合资料、复用 JD、持久保存待办和模拟面试�
     await expect(page.getByRole("combobox", { name: "已发布版本", exact: true })).toHaveValue(String(version.id));
     await expect(page.getByRole("combobox", { name: "已发布版本", exact: true })).toBeDisabled();
     await expect(page.getByRole("textbox", { name: "目标岗位要求（JD / 职位描述）" })).toHaveValue(jd);
+    replies.push({ data: { question: "如何设计一个可访问的 React 表单？" } });
     await page.getByRole("button", { name: "立即开启模拟实战", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/interviews/\\d+\\?applicationId=${first}$`));
     const interviewId = Number(new URL(page.url()).pathname.split("/").at(-1));
@@ -182,6 +205,8 @@ test("投递准备聚合资料、复用 JD、持久保存待办和模拟面试�
     await expect(page.getByRole("region", { name: "自我介绍", exact: true })).toContainText("我擅长 React 和可访问性。");
     await page.getByRole("region", { name: "自我介绍", exact: true }).getByRole("button", { name: "取消关联" }).click();
     await expect(page.getByRole("region", { name: "自我介绍", exact: true })).toContainText("暂无自我介绍");
+    expect(replies).toHaveLength(0);
+    expect(unexpectedRequests).toEqual([]);
   } finally {
     const restored = await postEncryptedBackup(request, "/api/backup/restore", baseline.bytes);
     expect(restored.status()).toBe(200);
@@ -199,8 +224,9 @@ test("进阶面试总览、轮次切换及推进始终保留投递准备入口",
   const advances: string[] = [];
   await page.route("**/api/interviews/series/9100**", async (route) => {
     if (route.request().method() === "POST") {
+      expect(route.request().postDataJSON()).toEqual({ from_interview_id: 9101 });
       advances.push(new URL(route.request().url()).pathname);
-      return route.fulfill({ json: { id: 9102 } });
+      return route.fulfill({ json: { id: 9102, round_no: 2 } });
     }
     return route.fulfill({ json: {
       id: 9100, resume_title: "合成简历", resume_version_id: 90001, resume_version: 1, resume_version_name: "测试发布版本", jd: "合成岗位", rounds: 1, rounds_total: 3,

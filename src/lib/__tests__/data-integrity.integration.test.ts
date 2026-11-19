@@ -31,6 +31,10 @@ const request = (body: unknown) => new Request("http://localhost/api/test", {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(body),
 });
+async function salaryRequest(body: Record<string, unknown>) {
+  const { readSalaryNegotiationRevision } = await import("@/lib/salary-negotiation-snapshot");
+  return request({ ...body, expected_revision: readSalaryNegotiationRevision(1) });
+}
 const BACKUP_PASSWORD = "correct horse battery staple";
 const answerResult = JSON.stringify({ comment: "点评", next_question: "下一题", next_kind: "question", depth: 7, structure: 7, authenticity: 7, completeness: 7 });
 const validNegotiationTurn = JSON.stringify({
@@ -42,9 +46,9 @@ const validNegotiationTurn = JSON.stringify({
 const validNegotiationOpening = JSON.stringify({
   initial_offer: "30k", hr_response: "开局", hr_tactics: "初始探底开价",
   hr_mindset: { looseness: 20, current_attitude: "严守", estimated_package: "30k", tactics_label: "锚定", internal_pressure: "正常" },
-  mentor_analysis: { user_argument_score: 7, strengths: ["有理"], vulnerabilities: ["待强化"], tactical_tips: "保持锚定", suggested_replies: [{ title: "回应", content: "继续沟通", rationale: "保持空间" }] },
+  mentor_analysis: { user_argument_score: 5, strengths: ["已提供目标范围"], vulnerabilities: ["薪酬口径待确认"], tactical_tips: "先确认完整薪酬结构", suggested_replies: [{ title: "回应", content: "请确认保证薪数和奖金条件", rationale: "先核对口径" }] },
 });
-const validNegotiationReport = JSON.stringify({ final_package_summary: "30k", persuasion_grade: "B", score: 75, leverage_efficiency: "稳定", turn_critiques: [{ turn_no: 1, gain_or_loss: "neutral", summary: "正常", key_point: "保持" }], real_world_tips: ["核对带宽"], mentor_summary: "完成复盘" });
+const validNegotiationReport = JSON.stringify({ final_package_summary: "30k", score: 75, leverage_efficiency: "稳定", turn_critiques: [], real_world_tips: ["核对带宽"], mentor_summary: "完成复盘" });
 function seedInterview() {
   db.exec("INSERT INTO resumes (id,title,created_at,updated_at) VALUES (1,'原简历','',''); INSERT INTO interviews (id,resume_id,jd,created_at) VALUES (1,1,'岗位',''); INSERT INTO interview_turns (id,interview_id,idx,question,reference) VALUES (1,1,1,'题目','原参考答案')");
 }
@@ -1493,9 +1497,9 @@ describe("真实路由异步提交", () => {
     const paused = gate();
     llm.chat.mockReturnValue(paused.promise);
     const { POST } = await import("@/app/api/interviews/series/[id]/advance/route");
-    const first = POST(request({}), context);
+    const first = POST(request({ from_interview_id: 1 }), context);
     await vi.waitFor(() => expect(llm.chat).toHaveBeenCalledTimes(1));
-    const secondPromise = POST(request({}), context);
+    const secondPromise = POST(request({ from_interview_id: 1 }), context);
     // 先确认第二个请求此刻已因锁被拒绝，再放行模型；并发窗口由这个 await 确定，而不是靠宏任务时序
     const two = await expectRejectedWithoutModel(secondPromise, "第二个进阶请求");
     expect(two.status).toBe(409);
@@ -1511,7 +1515,7 @@ describe("真实路由异步提交", () => {
     const paused = gate();
     llm.chat.mockReturnValue(paused.promise);
     const { POST } = await import("@/app/api/interviews/series/[id]/advance/route");
-    const responsePromise = POST(request({}), context);
+    const responsePromise = POST(request({ from_interview_id: 1 }), context);
     await vi.waitFor(() => expect(llm.chat).toHaveBeenCalledTimes(1));
     db.exec("UPDATE interview_series SET status='finished' WHERE id=1");
     paused.resolve('{"question":"过期下一轮"}');
@@ -1544,6 +1548,7 @@ describe("真实路由异步提交", () => {
     ["根值字符串", "结论"],
     ["根值数字", 8],
     ["根值布尔", true],
+    ["额外 overall 字段", { verdict: "通过", strengths: "稳定", weaknesses: "表达", suggestions: "练习", overall: 1 }],
     ...["verdict", "strengths", "weaknesses", "suggestions"].flatMap((field) =>
       [undefined, "", " \n\t", 8, [], {}].map((value): [string, unknown] => [
         `${field} 为 ${JSON.stringify(value)}`,
@@ -1568,7 +1573,7 @@ describe("真实路由异步提交", () => {
       .toEqual({ status: "ongoing", final_report: "", finished_at: "" });
     expect(db.prepare("SELECT * FROM interviews ORDER BY round_no").all()).toEqual(rounds);
 
-    llm.chat.mockResolvedValue(JSON.stringify({ ...valid, overall: 1 }));
+    llm.chat.mockResolvedValue(JSON.stringify(valid));
     const retried = await POST(request({}), context);
     expect(retried.status).toBe(200);
     await expect(retried.json()).resolves.toMatchObject({ report: { ...valid, overall: 8 } });
@@ -1637,7 +1642,7 @@ describe("真实路由异步提交", () => {
     seedNegotiation();
     const { POST } = await import("@/app/api/tools/salary-negotiations/[id]/turn/route");
     llm.chat.mockResolvedValueOnce('{"hr_tactics":"综合拉扯"}');
-    const response = await POST(request({ user_message: "提高报价" }), context);
+    const response = await POST(await salaryRequest({ user_message: "提高报价" }), context);
     expect(response.status).toBe(502);
     expect(db.prepare("SELECT COUNT(*) AS n FROM salary_negotiation_turns").get()).toEqual({ n: 1 });
   });
@@ -1647,9 +1652,9 @@ describe("真实路由异步提交", () => {
     const paused = gate();
     llm.chat.mockReturnValue(paused.promise);
     const { POST } = await import("@/app/api/tools/salary-negotiations/[id]/turn/route");
-    const first = POST(request({ user_message: "提高报价" }), context);
+    const first = POST(await salaryRequest({ user_message: "提高报价" }), context);
     await vi.waitFor(() => expect(llm.chat).toHaveBeenCalledTimes(1));
-    const second = await POST(request({ user_message: "提高报价" }), context);
+    const second = await POST(await salaryRequest({ user_message: "提高报价" }), context);
     paused.resolve(validNegotiationTurn);
     expect(second.status).toBe(409);
     expect((await first).status).toBe(201);
@@ -1661,9 +1666,9 @@ describe("真实路由异步提交", () => {
     const paused = gate();
     llm.chat.mockReturnValue(paused.promise);
     const { POST } = await import("@/app/api/tools/salary-negotiations/[id]/turn/route");
-    const first = POST(request({ user_message: "提高报价" }), context);
+    const first = POST(await salaryRequest({ user_message: "提高报价" }), context);
     await vi.waitFor(() => expect(llm.chat).toHaveBeenCalledTimes(1));
-    const secondPromise = POST(request({ user_message: "提高报价" }), context);
+    const secondPromise = POST(await salaryRequest({ user_message: "提高报价" }), context);
     // 先确认第二个请求已因锁被拒绝，再改状态；否则无法区分「被锁挡住」与「改完状态才被挡住」
     const second = await expectRejectedWithoutModel(secondPromise, "第二个谈判请求");
     expect(second.status).toBe(409);
@@ -1679,9 +1684,9 @@ describe("真实路由异步提交", () => {
     llm.chat.mockReturnValue(paused.promise);
     const turn = await import("@/app/api/tools/salary-negotiations/[id]/turn/route");
     const finalize = await import("@/app/api/tools/salary-negotiations/[id]/finalize/route");
-    const first = firstKind === "turn" ? turn.POST(request({ user_message: "提高报价" }), context) : finalize.POST(request({}), context);
+    const first = firstKind === "turn" ? turn.POST(await salaryRequest({ user_message: "提高报价" }), context) : finalize.POST(await salaryRequest({}), context);
     await vi.waitFor(() => expect(llm.chat).toHaveBeenCalledTimes(1));
-    const second = firstKind === "turn" ? await finalize.POST(request({}), context) : await turn.POST(request({ user_message: "继续谈判" }), context);
+    const second = firstKind === "turn" ? await finalize.POST(await salaryRequest({}), context) : await turn.POST(await salaryRequest({ user_message: "继续谈判" }), context);
     expect(second.status).toBe(409);
     paused.resolve(firstKind === "turn" ? validNegotiationTurn : validNegotiationReport);
     expect((await first).status).toBe(firstKind === "turn" ? 201 : 200);
@@ -1693,7 +1698,7 @@ describe("真实路由异步提交", () => {
     const paused = gate();
     llm.chat.mockReturnValue(paused.promise);
     const finalize = await import("@/app/api/tools/salary-negotiations/[id]/finalize/route");
-    const response = finalize.POST(request({}), context);
+    const response = finalize.POST(await salaryRequest({}), context);
     await vi.waitFor(() => expect(llm.chat).toHaveBeenCalledTimes(1));
     const writer = new DatabaseSync(path.join(tempDir, "data", "resume-life.db"));
     try { writer.exec("INSERT INTO salary_negotiation_turns (negotiation_id,turn_no,user_message,hr_response,created_at) VALUES (1,2,'新回合','新回复','')"); }
@@ -1705,6 +1710,25 @@ describe("真实路由异步提交", () => {
 });
 
 describe("谈判成本与收藏快照", () => {
+  it.each([1, 3, 5])("复盘引用非候选人回合 %i 时不结束谈判且允许重试", async (turnNo) => {
+    seedNegotiation();
+    db.exec("INSERT INTO salary_negotiation_turns (negotiation_id,turn_no,user_message,hr_response,created_at) VALUES (1,2,'请确认保证薪数','模拟回复',''),(1,4,'希望讨论固定工资','模拟回复','')");
+    const report = JSON.parse(validNegotiationReport);
+    report.turn_critiques = [{ turn_no: turnNo, gain_or_loss: "neutral", summary: "澄清条件", key_point: "询问保证薪数" }];
+    llm.chat.mockResolvedValueOnce(JSON.stringify(report));
+    const { POST } = await import("@/app/api/tools/salary-negotiations/[id]/finalize/route");
+    expect((await POST(await salaryRequest({}), context)).status).toBe(502);
+    expect(db.prepare("SELECT status,report FROM salary_negotiations").get()).toEqual({ status: "ongoing", report: "" });
+    report.turn_critiques[0].turn_no = 4;
+    report.score = 69;
+    llm.chat.mockResolvedValueOnce(JSON.stringify(report));
+    const response = await POST(await salaryRequest({}), context);
+    expect(response.status).toBe(200);
+    expect((await response.json()).report).toMatchObject({ score: 69, persuasion_grade: "C", turn_critiques: [{ turn_no: 4 }] });
+    const saved = db.prepare("SELECT report FROM salary_negotiations").get() as { report: string };
+    expect(JSON.parse(saved.report)).toMatchObject({ score: 69, persuasion_grade: "C", turn_critiques: [{ turn_no: 4 }] });
+  });
+
   it("开局预算包括系统提示词，超限不调用模型也不创建谈判", async () => {
     llm.chat.mockResolvedValue(validNegotiationOpening);
     const { POST } = await import("@/app/api/tools/salary-negotiations/route");
@@ -1727,21 +1751,31 @@ describe("谈判成本与收藏快照", () => {
     seedNegotiation();
     llm.chat.mockResolvedValue('{"hr_response":"好"}');
     const { POST } = await import("@/app/api/tools/salary-negotiations/[id]/turn/route");
-    expect((await POST(request({ user_message: "字".repeat(4001) }), context)).status).toBe(400);
+    expect((await POST(await salaryRequest({ user_message: "字".repeat(4001) }), context)).status).toBe(400);
     for (let i = 2; i <= 21; i++) db.prepare("INSERT INTO salary_negotiation_turns (negotiation_id,turn_no,user_message,hr_response,created_at) VALUES (1,?,'回答','回复','')").run(i);
-    expect((await POST(request({ user_message: "再问" }), context)).status).toBe(400);
+    expect((await POST(await salaryRequest({ user_message: "再问" }), context)).status).toBe(400);
     expect(llm.chat).not.toHaveBeenCalled();
   });
-  it("回合 prompt 拒绝超限，但合法旧会话的复盘会裁剪到预算内并保留全部回合", async () => {
+  it("回合拒绝超限，复盘保留最新原话并仅裁剪更早回合，必保材料超限时拒绝", async () => {
     const builders = await import("@/lib/salary-negotiation-llm");
-    const base = { targetCompanyTier: "公司", targetRole: "岗位", expectedSalary: "薪资", currentOrCompetingOffer: "", hrStyleDesc: "正常" };
-    const turns = [{ turn_no: 1, user_message: "", hr_response: "字".repeat(33000), hr_mindset_str: "{}", mentor_analysis_str: "{}" }];
+    const { checkSafeModelInput } = await import("@/lib/safe-llm");
+    const finalize = (params: Parameters<typeof builders.buildFinalizeMessages>[0]) => {
+      const messages = checkSafeModelInput(builders.SALARY_NEGOTIATION_FINALIZE_PROMPT, builders.buildFinalizeMessages(params));
+      expect(messages.reduce((total, message) => total + (message.content as string).length, 0))
+        .toBeLessThanOrEqual(builders.MAX_NEGOTIATION_CONTEXT_CHARS);
+      return messages.slice(1).map((message) => message.content).join("\n");
+    };
+    const base = { targetCompanyTier: "公司", targetRole: "岗位", expectedSalary: "薪资", currentOrCompetingOffer: "", hrStyleDesc: "正常", initialOffer: "模拟报价" };
+    const turns = [{ turn_no: 1, user_message: "", hr_response: "字".repeat(33000), hr_mindset: "{}", hr_mindset_str: "{}", mentor_analysis_str: "{}" }];
     expect(() => builders.buildTurnHistoryMessages({ ...base, turns, newUserMessage: "答" })).toThrow();
-    expect(builders.buildFinalizeUserPrompt({ ...base, turns, initialOffer: "报价" }).length + builders.SALARY_NEGOTIATION_FINALIZE_PROMPT.length)
-      .toBeLessThanOrEqual(builders.MAX_NEGOTIATION_CONTEXT_CHARS);
-    const nearLimit = [{ ...turns[0]!, hr_response: "字".repeat(31500) }];
-    expect(() => builders.buildTurnHistoryMessages({ ...base, turns: nearLimit, newUserMessage: "答" })).toThrow();
-    expect(() => builders.buildFinalizeUserPrompt({ ...base, turns: nearLimit, initialOffer: "报价" })).not.toThrow();
+    expect(() => finalize({ ...base, turns, initialOffer: "报价" })).toThrow();
+    const emptyParams = { ...base, turns: [{ ...turns[0]!, hr_response: "" }], initialOffer: "报价" };
+    const overhead = checkSafeModelInput(builders.SALARY_NEGOTIATION_FINALIZE_PROMPT, builders.buildFinalizeMessages(emptyParams))
+      .reduce((total, message) => total + (message.content as string).length, 0);
+    const latestReply = "字".repeat(builders.MAX_NEGOTIATION_CONTEXT_CHARS - overhead);
+    const nearLimit = [{ ...turns[0]!, hr_response: latestReply }];
+    expect(finalize({ ...base, turns: nearLimit, initialOffer: "报价" })).toContain(latestReply);
+    expect(() => finalize({ ...base, turns: [{ ...nearLimit[0]!, hr_response: `${latestReply}字` }], initialOffer: "报价" })).toThrow();
 
     const twentyTurns = Array.from({ length: 20 }, (_, index) => ({
       turn_no: index + 1,
@@ -1750,12 +1784,15 @@ describe("谈判成本与收藏快照", () => {
       hr_mindset_str: "心理".repeat(500),
       mentor_analysis_str: "分析".repeat(500),
     }));
-    const prompt = builders.buildFinalizeUserPrompt({ ...base, turns: twentyTurns, initialOffer: "报价" });
-    expect(prompt.length + builders.SALARY_NEGOTIATION_FINALIZE_PROMPT.length)
-      .toBeLessThanOrEqual(builders.MAX_NEGOTIATION_CONTEXT_CHARS);
-    for (let turn = 1; turn <= 20; turn += 1) expect(prompt).toContain(`【第 ${turn} 回合】`);
+    const prompt = finalize({ ...base, turns: twentyTurns, initialOffer: "报价" });
+    for (let turn = 1; turn <= 20; turn += 1) expect(prompt).toContain(`"turn_no":${turn},`);
     expect(prompt).not.toContain("军师即时分析");
     expect(prompt).not.toContain("HR心理状态");
+    const longTurns = twentyTurns.map((turn) => ({ ...turn, user_message: "候选人开头" + "求".repeat(3990), hr_response: "HR开头" + "回".repeat(4000) }));
+    const clipped = finalize({ ...base, initialOffer: "报价", turns: longTurns });
+    expect(clipped.match(/\[中间省略\]/g)).toHaveLength((longTurns.length - 1) * 2);
+    expect(clipped).toContain(JSON.stringify({ turn_no: 20, candidate: { text: longTurns.at(-1)!.user_message, is_excerpt: false }, hr: { text: longTurns.at(-1)!.hr_response, is_excerpt: false } }));
+    for (let turn = 1; turn <= 20; turn += 1) expect(clipped).toContain(`"turn_no":${turn},"candidate":{"text":"候选人开头`);
   });
   it("收藏保留当时参考答案，重新生成源答案不改变收藏", async () => {
     seedInterview();

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
@@ -23,7 +24,7 @@ describe("findSensitiveTraceEntries", () => {
     "coverage/lcov.info", "test-results/trace.zip", "playwright-report/index.html",
     "public/uploads/avatar.png", "docs/design-proposals/preview.html", "docs/superpowers/plan.md",
     "proxy-settings-current.png", "temp_rendered_page.png", "test-worker-dummy.js",
-    ".plan.md", ".process.json", ".checklist.json", "server.log", "server-err.log",
+    ".plan.md", ".process.json", ".checklist.json", ".open-source-analysis.md", ".open-source-proposal.md", "server.log", "server-err.log",
     "audit-report-resume-life-2026-09-28.html", "public/highlight-preview.html",
     ".env.local", "nested/.env.production", "nested/private.pem", "nested/private.key",
     "nested/id_rsa", "nested/id_ed25519", "nested/credentials.json", "nested/secrets.yml",
@@ -117,5 +118,45 @@ describe("解析依赖构建追踪", () => {
       "pdfjs-dist/cmaps",
       "pdfjs-dist/standard_fonts",
     ]));
+  });
+
+  it.each(["flat", "linked"])("%s 安装同时接受链接与实际路径，但仍拒绝遗漏、同名替代和失效清单", (layout) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "resume-life-build-trace-"));
+    try {
+      fs.writeFileSync(path.join(directory, "package.json"), "{}");
+      for (const name of ["mammoth", "pdf-parse", "pdfjs-dist"]) {
+        const location = path.join(directory, "node_modules", ...(layout === "linked" ? [".pnpm", `${name}@fixture`, "node_modules", name] : [name]));
+        fs.mkdirSync(location, { recursive: true });
+        fs.writeFileSync(path.join(location, "package.json"), JSON.stringify({ name, main: "index.js" }));
+        fs.writeFileSync(path.join(location, "index.js"), "module.exports = {};");
+        if (name === "pdfjs-dist") {
+          for (const file of ["legacy/build/pdf.mjs", "legacy/build/pdf.worker.mjs", "cmaps/map.bcmap", "standard_fonts/font.pfb"]) {
+            fs.mkdirSync(path.dirname(path.join(location, file)), { recursive: true });
+            fs.writeFileSync(path.join(location, file), "fixture");
+          }
+        }
+        if (layout === "linked") fs.symlinkSync(location, path.join(directory, "node_modules", name), process.platform === "win32" ? "junction" : "dir");
+      }
+      const trace = path.join(directory, ".next/server/app/api/import/parse/route.js.nft.json");
+      const files = ["mammoth/index.js", "pdf-parse/index.js", "pdfjs-dist/legacy/build/pdf.mjs", "pdfjs-dist/legacy/build/pdf.worker.mjs", "pdfjs-dist/cmaps/map.bcmap", "pdfjs-dist/standard_fonts/font.pfb"]
+        .map((file) => path.join(directory, "node_modules", file));
+      const relative = (file: string) => path.relative(path.dirname(trace), file);
+      for (const physical of [false, true]) {
+        const entries = files.map((file) => relative(physical ? fs.realpathSync(file) : file));
+        expect(findMissingParserDependencies(trace, entries, directory)).toEqual([]);
+        for (const [index, missing] of [[0, "mammoth"], [1, "pdf-parse"], [2, "pdfjs-dist/legacy/build/pdf.mjs"], [3, "pdfjs-dist/legacy/build/pdf.worker.mjs"], [4, "pdfjs-dist/cmaps"], [5, "pdfjs-dist/standard_fonts"]] as const) {
+          expect(findMissingParserDependencies(trace, entries.filter((_, position) => position !== index), directory)).toEqual([missing]);
+        }
+        const unrelated = path.join(directory, "other/pdf.worker.mjs");
+        fs.mkdirSync(path.dirname(unrelated), { recursive: true }); fs.writeFileSync(unrelated, "same filename");
+        expect(findMissingParserDependencies(trace, [...entries.filter((_, index) => index !== 3), relative(unrelated)], directory)).toEqual(["pdfjs-dist/legacy/build/pdf.worker.mjs"]);
+        fs.unlinkSync(files[3]!);
+        expect(findMissingParserDependencies(trace, entries, directory)).toEqual(["pdfjs-dist/legacy/build/pdf.worker.mjs"]);
+        fs.writeFileSync(files[3]!, "fixture");
+      }
+    } finally {
+      if (path.dirname(directory) !== os.tmpdir() || !path.basename(directory).startsWith("resume-life-build-trace-")) throw new Error("Unsafe cleanup path");
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

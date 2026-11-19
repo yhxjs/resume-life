@@ -276,6 +276,7 @@ describe("modules.ts 简历模块与内容清洗", () => {
       expect(summarySection).toEqual({
         kind: "text",
         moduleKey: "summary",
+        moduleType: "summary",
         label: "自我评价",
         text: "精通前端工程化体系搭建\n具备高并发后端架构经验",
         descriptionItems: ["精通前端工程化体系搭建", "具备高并发后端架构经验"],
@@ -297,6 +298,7 @@ describe("modules.ts 简历模块与内容清洗", () => {
       expect(orderedSection).toEqual({
         kind: "text",
         moduleKey: "summary",
+        moduleType: "summary",
         label: "自我评价",
         text: "条目一\n条目二",
         descriptionItems: ["条目一", "条目二"],

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { jsonFetch } from "@/lib/fetcher";
 import { safeLoginReturnPath } from "@/lib/login-return-path";
 import { btnPrimary, cardCls, inputCls, labelCls } from "@/lib/ui";
@@ -37,24 +37,44 @@ function LoginForm({ mode }: { mode: Mode }) {
   const [confirm, setConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const active = useRef(false);
+  const command = useRef<AbortController | null>(null);
+  const errorRef = useRef<HTMLParagraphElement | null>(null);
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; command.current?.abort(); command.current = null; };
+  }, []);
+  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!active.current || command.current) return;
     setError("");
     if (mode !== "login" && password !== confirm) {
       setError("两次输入的密码不一致");
       return;
     }
+    const controller = new AbortController();
+    command.current = controller;
     setSubmitting(true);
+    const isCurrent = () => active.current && command.current === controller && !controller.signal.aborted;
     try {
       const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/init";
-      await jsonFetch(endpoint, {
+      const result = await jsonFetch<unknown>(endpoint, {
         method: "POST",
         body: JSON.stringify({ username, password }),
+        signal: controller.signal,
       });
+      if (!isCurrent()) return;
+      if (!result || typeof result !== "object" || Array.isArray(result) || (result as { ok?: unknown }).ok !== true) {
+        throw new Error("登录确认响应不完整，请重试；若刚完成初始化，可刷新后使用刚才的凭证登录");
+      }
       window.location.assign(safeNext());
     } catch (err) {
+      if (!isCurrent()) return;
       setError(err instanceof Error ? err.message : "操作失败，请重试");
+      command.current = null;
       setSubmitting(false);
     }
   }
@@ -67,7 +87,8 @@ function LoginForm({ mode }: { mode: Mode }) {
           id="login-username"
           className={inputCls}
           value={username}
-          onChange={(e) => setUsername(e.target.value)}
+          onChange={(e) => { if (!command.current) setUsername(e.target.value); }}
+          disabled={submitting}
           autoComplete="username"
           autoFocus
           required
@@ -80,7 +101,8 @@ function LoginForm({ mode }: { mode: Mode }) {
           type="password"
           className={inputCls}
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onChange={(e) => { if (!command.current) setPassword(e.target.value); }}
+          disabled={submitting}
           autoComplete={mode === "login" ? "current-password" : "new-password"}
           required
         />
@@ -93,13 +115,14 @@ function LoginForm({ mode }: { mode: Mode }) {
             type="password"
             className={inputCls}
             value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
+            onChange={(e) => { if (!command.current) setConfirm(e.target.value); }}
+            disabled={submitting}
             autoComplete="new-password"
             required
           />
         </div>
       )}
-      {error && <p className="text-sm text-danger">{error}</p>}
+      {error && <p ref={errorRef} role="alert" tabIndex={-1} className="text-sm text-danger">{error}</p>}
       <button type="submit" disabled={submitting} className={`${btnPrimary} w-full`}>
         {submitting ? "请稍候…" : mode === "login" ? "登录" : "保存并进入"}
       </button>
@@ -110,20 +133,38 @@ function LoginForm({ mode }: { mode: Mode }) {
 export default function LoginPage() {
   const [status, setStatus] = useState<AuthStatusResponse | null>(null);
   const [loadError, setLoadError] = useState("");
+  const active = useRef(false);
+  const loading = useRef<AbortController | null>(null);
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; loading.current?.abort(); loading.current = null; };
+  }, []);
+
+  const loadStatus = useCallback(async () => {
+    if (!active.current || loading.current) return;
+    const controller = new AbortController();
+    loading.current = controller;
+    setLoadError("");
+    try {
+      const data = await jsonFetch<unknown>("/api/auth/status", { signal: controller.signal, cache: "no-store" });
+      if (loading.current !== controller || controller.signal.aborted) return;
+      if (!data || typeof data !== "object" || Array.isArray(data) ||
+          typeof (data as AuthStatusResponse).initialized !== "boolean" || typeof (data as AuthStatusResponse).allowReinit !== "boolean") {
+        throw new Error("登录状态响应不完整，请重新连接");
+      }
+      setStatus(data as AuthStatusResponse);
+    } catch (err) {
+      if (loading.current === controller && !controller.signal.aborted) setLoadError(err instanceof Error ? err.message : "无法连接服务器");
+    } finally {
+      if (loading.current === controller) loading.current = null;
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    jsonFetch<AuthStatusResponse>("/api/auth/status")
-      .then((data) => {
-        if (!cancelled) setStatus(data);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setLoadError(err instanceof Error ? err.message : "无法连接服务器");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    const timer = setTimeout(() => void loadStatus(), 0);
+    return () => clearTimeout(timer);
+  }, [loadStatus]);
 
   const mode: Mode | null = status === null
     ? null
@@ -147,7 +188,7 @@ export default function LoginPage() {
           />
           <div>
             <h1 className="font-serif text-xl font-bold text-ink leading-tight">简历奕生</h1>
-            <p className="mt-0.5 text-sm text-muted">{mode ? MODE_TITLE[mode] : "正在连接服务器…"}</p>
+            <p className="mt-0.5 text-sm text-muted">{mode ? MODE_TITLE[mode] : loadError ? "暂时无法连接" : "正在连接服务器…"}</p>
           </div>
         </div>
 
@@ -157,9 +198,12 @@ export default function LoginPage() {
           </p>
         )}
 
-        {loadError && <p className="mb-4 text-sm text-danger">{loadError}</p>}
+        {loadError && <div role="alert" className="mb-4 text-sm text-danger">
+          <p>{loadError}</p>
+          <button type="button" className="mt-2 underline" onClick={() => void loadStatus()}>重新连接</button>
+        </div>}
         {mode ? (
-          <LoginForm mode={mode} />
+          <LoginForm key={mode} mode={mode} />
         ) : (
           !loadError && <div className="h-40 animate-pulse rounded-lg bg-surface-2" data-testid="login-loading" />
         )}

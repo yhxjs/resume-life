@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { retainParseResource } from "./parse-concurrency";
 import { logServerEvent } from "./server-errors";
+import { hasOcrText } from "./ocr-output";
 
 const LOCAL_OCR_TIMEOUT_MS = 60_000;
 
@@ -98,6 +99,9 @@ export async function ocrPdfPagesLocally(
         const ret = await active.recognize(page.buffer);
         if (stopped) throw new Error("本地 OCR 已停止");
         const text = (ret.data?.text || "").trim();
+        if (page.hasVisualContent && !hasOcrText(text)) {
+          throw new Error(`本地 OCR 第 ${page.pageNumber} 页未识别出有效文字，请检查页面或切换识别方式`);
+        }
         if (text) {
           pageTexts.push(text);
         }

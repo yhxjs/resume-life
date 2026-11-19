@@ -8,6 +8,8 @@ export type ResumeDiffRow = {
   label: string;
   before: string | null;
   after: string | null;
+  beforeRichText?: boolean;
+  afterRichText?: boolean;
   status: "unchanged" | "added" | "removed" | "changed";
 };
 
@@ -37,7 +39,7 @@ const displayValues: Record<string, Record<string, string>> = {
   skillStyle: { pill: "标签", line: "单行", list: "列表" }, avatarShape: { circle: "圆形", rounded: "圆角", square: "方形" },
 };
 
-type Field = { section: string; label: string; value: string };
+type Field = { section: string; label: string; value: string; richText?: boolean };
 type Fields = Map<string, Field>;
 
 function entryName(value: unknown, index: number): string {
@@ -50,14 +52,15 @@ function entryName(value: unknown, index: number): string {
   return `条目 ${index + 1}`;
 }
 
-function flatten(fields: Fields, key: string, label: string, section: string, value: unknown): void {
+function flatten(fields: Fields, key: string, label: string, section: string, value: unknown, richTextFields: readonly string[] = []): void {
   if (value === null || value === undefined || value === "") return;
+  const richText = richTextFields.includes(key.split("/").at(-1)!);
   if (Array.isArray(value)) {
     if (value.every((item) => typeof item === "string")) {
-      if (value.length) fields.set(key, { section, label, value: value.join("\n") });
+      if (value.length) fields.set(key, { section, label, value: value.join("\n"), richText });
     } else value.forEach((item, index) => {
       const id = item && typeof item === "object" && "id" in item ? String(item.id) : String(index);
-      flatten(fields, `${key}/${id}`, entryName(item, index), section, item);
+      flatten(fields, `${key}/${id}`, entryName(item, index), section, item, richTextFields);
     });
   } else if (typeof value === "object") {
     for (const [field, content] of Object.entries(value)) {
@@ -65,11 +68,11 @@ function flatten(fields: Fields, key: string, label: string, section: string, va
       const record = value as Record<string, unknown>;
       if (field === "description" && Array.isArray(record.descriptionItems) && record.descriptionItems.length) continue;
       const fieldLabel = section === "排版设置" && field === "text" ? "正文颜色" : labels[field] ?? field;
-      flatten(fields, `${key}/${field}`, [label, fieldLabel].filter(Boolean).join(" · "), section, content);
+      flatten(fields, `${key}/${field}`, [label, fieldLabel].filter(Boolean).join(" · "), section, content, richTextFields);
     }
   } else {
     const field = key.split("/").at(-1)!;
-    fields.set(key, { section, label, value: typeof value === "boolean" ? value ? "是" : "否" : displayValues[field]?.[String(value)] ?? String(value) });
+    fields.set(key, { section, label, value: typeof value === "boolean" ? value ? "是" : "否" : displayValues[field]?.[String(value)] ?? String(value), richText });
   }
 }
 
@@ -83,7 +86,9 @@ function fieldsOf(snapshot: ResumeSnapshot | null): Fields {
     const key = `module/${item.key}`;
     fields.set(`${key}/label`, { section: item.label, label: "模块名称", value: item.label });
     fields.set(`${key}/type`, { section: item.label, label: "模块类型", value: MODULE_LABELS[item.type] });
-    flatten(fields, `${key}/content`, "", item.label, item.content);
+    // 与编辑字段的存储契约一致：抬头、副项、技能为纯文本，只有经历正文和自评正文是富文本。
+    const richTextFields = item.type === "basic" || item.type === "skills" ? [] : ["description", "descriptionItems", "text"];
+    flatten(fields, `${key}/content`, "", item.label, item.content, richTextFields);
   }
   return fields;
 }
@@ -107,7 +112,10 @@ export function compareResumeVersions(before: ResumeSnapshot | null, after: Resu
     const from = old?.value ?? null;
     const to = next?.value ?? null;
     return { key, section: next?.section ?? old!.section, label: next?.label ?? old!.label,
-      before: from, after: to, status: from === to ? "unchanged" : from === null ? "added" : to === null ? "removed" : "changed" };
+      before: from, after: to,
+      ...(old?.richText ? { beforeRichText: true } : {}),
+      ...(next?.richText ? { afterRichText: true } : {}),
+      status: from === to ? "unchanged" : from === null ? "added" : to === null ? "removed" : "changed" };
   });
   if (before) {
     const modules = (snapshot: ResumeSnapshot) => snapshot.modules.map((module) => ({ id: module.key, name: module.label }));

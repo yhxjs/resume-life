@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { NextResponse } from "next/server";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
@@ -6,7 +7,7 @@ import { PreparationInputError, preparationApplication, createPreparationTask, n
 
 async function handle(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const applicationId = Number((await params).id);
+    const applicationId = parseCanonicalPositiveId((await params).id);
     preparationApplication(applicationId);
     const parsed = await parseApiJson<{ title?: unknown; due_time?: unknown; id?: unknown; done?: unknown } | null>(req);
     if (!parsed.ok) return parsed.response;

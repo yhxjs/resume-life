@@ -1,3 +1,5 @@
+import { hasQuestionContent } from "./question-normalization";
+
 export type ScoreMap = {
   depth: number;
   structure: number;
@@ -6,9 +8,9 @@ export type ScoreMap = {
 };
 
 export const DIMENSIONS: { key: keyof ScoreMap; label: string; hint: string }[] = [
-  { key: "depth", label: "技术深度", hint: "原理与取舍是否讲清" },
-  { key: "structure", label: "结构表达", hint: "STAR 完整性与条理" },
-  { key: "authenticity", label: "真实性", hint: "与项目档案/简历的一致性" },
+  { key: "depth", label: "技术深度", hint: "按题型评价原理、依据与取舍" },
+  { key: "structure", label: "结构表达", hint: "表达清晰有条理，STAR 仅为可选组织方式" },
+  { key: "authenticity", label: "真实性", hint: "具体性、自洽性及与所提供材料的一致性，不代表事实核验" },
   { key: "completeness", label: "完整度", hint: "是否覆盖问题要点" },
 ];
 
@@ -29,10 +31,37 @@ export function normalizeScores(raw: unknown): ScoreMap | null {
   return result;
 }
 
-/** 解析存储的 scores 列；格式损坏时按无分处理而不是让整个接口 500 */
+/** 已存逐题评分按原值读取；拒绝类型转换，合法小数只在汇总时舍入。 */
+export function readStoredScores(raw: unknown): ScoreMap | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const source = raw as Record<string, unknown>;
+  const scores = {} as ScoreMap;
+  for (const { key } of DIMENSIONS) {
+    const value = source[key];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 10) return null;
+    scores[key] = value;
+  }
+  return scores;
+}
+
+/** 新生成的逐题评分只接受 JSON 整数；不放宽为历史存储的小数规则。 */
+export function validateGeneratedScores(raw: unknown): ScoreMap | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const source = raw as Record<string, unknown>;
+  const scores = {} as ScoreMap;
+  for (const { key } of DIMENSIONS) {
+    const value = source[key];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 10) return null;
+    scores[key] = value;
+  }
+  return scores;
+}
+
+/** 合法数字评分保留小数；旧数字字符串沿用归一化兼容，损坏数据按无分处理。 */
 export function safeScores(raw: string | null | undefined): ScoreMap | null {
   try {
-    return normalizeScores(JSON.parse(raw || "null"));
+    const value: unknown = JSON.parse(raw || "null");
+    return readStoredScores(value) ?? normalizeScores(value);
   } catch {
     return null;
   }
@@ -83,6 +112,18 @@ export type InterviewReport = {
   suggestions: string;
   mining_summary?: MiningSummary;
 };
+
+/** 新生成报告的篇幅上限；历史报告读取继续保持兼容。 */
+export const INTERVIEW_REPORT_OUTPUT_LIMITS = {
+  summaryText: 1200,
+  miningText: 2000,
+  resumeBullets: 5,
+  resumeBullet: 600,
+  pendingConfirmations: 20,
+  pendingCategory: 100,
+  pendingItem: 600,
+  pendingSourceHint: 300,
+} as const;
 
 export type InterviewDimensionKey = "depth" | "structure" | "authenticity" | "completeness" | "jd_match";
 
@@ -162,23 +203,66 @@ export function normalizeReport(raw: unknown): InterviewReport | null {
   return report;
 }
 
-/** 挖掘报告还须包含完整的项目复盘与简历要点。 */
-export function normalizeGeneratedReport(raw: unknown, requireMining: boolean): InterviewReport | null {
+/** 完整报告检查；历史分数兼容读取，挖掘成果未知可留空，但不能只有空壳。 */
+export function normalizeCompleteReport(raw: unknown, requireMining: boolean): InterviewReport | null {
   const report = normalizeReport(raw);
   if (!report) return null;
   if (requireMining) {
     const mining = report.mining_summary;
-    if (!mining || [mining.project_name, mining.background, mining.actions, mining.tradeoffs, mining.results, mining.contribution]
-      .some((text) => !text.trim()) || !mining.resume_bullets.length) return null;
+    if (!mining) return null;
     const source = (raw as { mining_summary: Record<string, unknown> }).mining_summary;
+    const textKeys = ["project_name", "background", "actions", "tradeoffs", "results", "contribution"] as const;
+    // 在兼容清洗之前的原始字段上校验，避免把缺失或错误类型当作明确未知。
+    if (textKeys.some((key) => typeof source[key] !== "string")) return null;
     if (!Array.isArray(source.resume_bullets) || source.resume_bullets.some((text) => typeof text !== "string" || !text.trim()) ||
         !Array.isArray(source.pending_confirmations) || source.pending_confirmations.some((item) => {
           if (!item || typeof item !== "object" || Array.isArray(item)) return true;
           const pending = item as Record<string, unknown>;
           return [pending.category, pending.item, pending.source_hint].some((text) => typeof text !== "string" || !text.trim());
         })) return null;
+    if (!textKeys.some((key) => mining[key].length > 0) &&
+        !mining.resume_bullets.length && !mining.pending_confirmations.length) return null;
   }
   return report;
+}
+
+/** 新报告的模型岗位评分须为整数；服务端汇总的其余四维保留小数。 */
+export function validateGeneratedReport(raw: unknown, requireMining: boolean): InterviewReport | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const source = raw as Record<string, unknown>;
+  const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]) =>
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+  if (!hasExactKeys(source, requireMining
+    ? ["depth", "structure", "authenticity", "completeness", "jd_match", "strengths", "weaknesses", "suggestions", "mining_summary"]
+    : ["depth", "structure", "authenticity", "completeness", "jd_match", "strengths", "weaknesses", "suggestions"])) return null;
+  const jdMatch = source.jd_match;
+  if (typeof jdMatch !== "number" || !Number.isInteger(jdMatch) || jdMatch < 0 || jdMatch > 10) return null;
+  if (!requireMining && source.mining_summary !== undefined) return null;
+  const summaryKeys = ["strengths", "weaknesses", "suggestions"] as const;
+  if (summaryKeys.some((key) => typeof source[key] !== "string" || !(source[key] as string).trim() || !hasQuestionContent(source[key] as string) ||
+      (source[key] as string).length > INTERVIEW_REPORT_OUTPUT_LIMITS.summaryText)) return null;
+
+  if (requireMining) {
+    if (!source.mining_summary || typeof source.mining_summary !== "object" || Array.isArray(source.mining_summary)) return null;
+    const mining = source.mining_summary as Record<string, unknown>;
+    if (!hasExactKeys(mining, ["project_name", "background", "actions", "tradeoffs", "results", "contribution", "pending_confirmations", "resume_bullets"])) return null;
+    const textKeys = ["project_name", "background", "actions", "tradeoffs", "results", "contribution"] as const;
+    if (textKeys.some((key) => typeof mining[key] !== "string" ||
+        (mining[key] as string).length > INTERVIEW_REPORT_OUTPUT_LIMITS.miningText ||
+        ((mining[key] as string).length > 0 && !hasQuestionContent(mining[key] as string)))) return null;
+    if (!Array.isArray(mining.resume_bullets) || mining.resume_bullets.length > INTERVIEW_REPORT_OUTPUT_LIMITS.resumeBullets ||
+        mining.resume_bullets.some((item) => typeof item !== "string" || !item.trim() || !hasQuestionContent(item) || item.length > INTERVIEW_REPORT_OUTPUT_LIMITS.resumeBullet) ||
+        !Array.isArray(mining.pending_confirmations) || mining.pending_confirmations.length > INTERVIEW_REPORT_OUTPUT_LIMITS.pendingConfirmations ||
+        mining.pending_confirmations.some((item) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return true;
+          const pending = item as Record<string, unknown>;
+          if (!hasExactKeys(pending, ["category", "item", "source_hint"])) return true;
+          return typeof pending.category !== "string" || !pending.category.trim() || !hasQuestionContent(pending.category) || pending.category.length > INTERVIEW_REPORT_OUTPUT_LIMITS.pendingCategory ||
+            typeof pending.item !== "string" || !pending.item.trim() || !hasQuestionContent(pending.item) || pending.item.length > INTERVIEW_REPORT_OUTPUT_LIMITS.pendingItem ||
+            typeof pending.source_hint !== "string" || !pending.source_hint.trim() || !hasQuestionContent(pending.source_hint) || pending.source_hint.length > INTERVIEW_REPORT_OUTPUT_LIMITS.pendingSourceHint;
+        })) return null;
+  }
+  return normalizeCompleteReport(raw, requireMining);
 }
 
 export type EvaluatorRecommendation = "Strong Hire" | "Hire" | "Lean No" | "No Hire";
@@ -191,14 +275,28 @@ export type EvaluatorEvidence = {
 
 export type EvaluatorReport = {
   recommendation: EvaluatorRecommendation;
-  level: string; // 对标阿里职级，如 P6 (资深工程师)、P7 (技术专家)
-  level_justification: string; // 定级依据与距离上一级的边界判断
-  summary_for_hr: string; // 呈报 HR 核心执行摘要
+  level: string; // 模拟职级参考，非公司官方定级；证据不足时为“暂无法判断”
+  level_justification: string; // 职级参考的依据与证据局限
+  summary_for_hr: string; // 历史字段名；实际为模拟评估摘要
   hire_reasons: string[]; // 核心亮点/推荐理由
   concerns_and_risks: string[]; // 核心顾虑/潜在风险
   placement_suggestion: string; // 团队定位与入职培养/试用期考察建议
-  evidence_quotes?: EvaluatorEvidence[]; // 关键题目实录佐证与心理洞察
+  evidence_quotes: EvaluatorEvidence[]; // 历史字段名；实际是回答依据摘要，旧记录缺少时归一化为空数组
 };
+
+/** 新生成评估的硬上限；历史报告读取不应用这些限制。 */
+export const EVALUATOR_REPORT_OUTPUT_LIMITS = {
+  level: 100,
+  levelJustification: 1200,
+  summaryForHr: 1200,
+  placementSuggestion: 1200,
+  listItems: 5,
+  hireReason: 400,
+  concern: 500,
+  evidenceItems: 3,
+  topic: 160,
+  observation: 600,
+} as const;
 
 export function normalizeEvaluatorReport(raw: unknown): EvaluatorReport | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -239,6 +337,46 @@ export function normalizeEvaluatorReport(raw: unknown): EvaluatorReport | null {
     hire_reasons,
     concerns_and_risks,
     placement_suggestion: o.placement_suggestion.trim(),
-    evidence_quotes: evidence_quotes.length > 0 ? evidence_quotes : undefined,
+    evidence_quotes,
   };
+}
+
+/** 新报告的证据只能引用本次提供的已作答题号，不能通过兼容清洗补造引用。 */
+export function validateGeneratedEvaluatorReport(raw: unknown, answeredTurnIndexes: readonly number[]): EvaluatorReport | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const source = raw as Record<string, unknown>;
+  const exactKeys = (value: Record<string, unknown>, keys: readonly string[]) =>
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+  if (!exactKeys(source, ["recommendation", "level", "level_justification", "summary_for_hr", "hire_reasons", "concerns_and_risks", "placement_suggestion", "evidence_quotes"])) return null;
+  const boundedText = (value: unknown, maxChars: number) =>
+    typeof value === "string" && value.trim().length > 0 && hasQuestionContent(value) && value.length <= maxChars;
+  if (!boundedText(source.level, EVALUATOR_REPORT_OUTPUT_LIMITS.level) ||
+      !boundedText(source.level_justification, EVALUATOR_REPORT_OUTPUT_LIMITS.levelJustification) ||
+      !boundedText(source.summary_for_hr, EVALUATOR_REPORT_OUTPUT_LIMITS.summaryForHr) ||
+      !boundedText(source.placement_suggestion, EVALUATOR_REPORT_OUTPUT_LIMITS.placementSuggestion)) return null;
+
+  const boundedList = (value: unknown, maxItemChars: number): value is string[] =>
+    Array.isArray(value) && value.length <= EVALUATOR_REPORT_OUTPUT_LIMITS.listItems &&
+    value.every((item) => boundedText(item, maxItemChars));
+  if (!boundedList(source.hire_reasons, EVALUATOR_REPORT_OUTPUT_LIMITS.hireReason) ||
+      !boundedList(source.concerns_and_risks, EVALUATOR_REPORT_OUTPUT_LIMITS.concern)) return null;
+  const recommendation = typeof source.recommendation === "string" ? source.recommendation.trim() : "";
+  if ((recommendation === "Strong Hire" || recommendation === "Hire") && source.hire_reasons.length === 0) return null;
+  if (recommendation === "No Hire" && source.concerns_and_risks.length === 0) return null;
+
+  const evidence = source.evidence_quotes;
+  if (!Array.isArray(evidence) || evidence.length > EVALUATOR_REPORT_OUTPUT_LIMITS.evidenceItems) return null;
+  const allowed = new Set(answeredTurnIndexes);
+  const seen = new Set<number>();
+  for (const item of evidence) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const entry = item as Record<string, unknown>;
+    if (!exactKeys(entry, ["turn_idx", "topic", "observation"])) return null;
+    if (typeof entry.turn_idx !== "number" || !Number.isSafeInteger(entry.turn_idx) || entry.turn_idx < 1 ||
+        !allowed.has(entry.turn_idx) || seen.has(entry.turn_idx) ||
+        !boundedText(entry.topic, EVALUATOR_REPORT_OUTPUT_LIMITS.topic) ||
+        !boundedText(entry.observation, EVALUATOR_REPORT_OUTPUT_LIMITS.observation)) return null;
+    seen.add(entry.turn_idx);
+  }
+  return normalizeEvaluatorReport(raw);
 }

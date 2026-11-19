@@ -234,7 +234,7 @@ export function DrillStartForm({
               <ul className="space-y-3 text-xs leading-relaxed text-muted">
                 <li className="flex items-start gap-2.5">
                   <span className="font-mono font-bold text-primary">01.</span>
-                  <span><strong>即时小分批改：</strong>每作答一题，AI 即刻给出技术深度、结构表达、真实性、完整度四项得分。</span>
+                  <span><strong>即时小分批改：</strong>每作答一题，AI 即刻给出技术深度、结构表达、材料一致性与完整度评分；“真实性”分数不代表事实核验。</span>
                 </li>
                 <li className="flex items-start gap-2.5">
                   <span className="font-mono font-bold text-primary">02.</span>

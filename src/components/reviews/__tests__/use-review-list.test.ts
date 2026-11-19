@@ -1,82 +1,105 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useReviewList } from "../use-review-list";
 import { jsonFetch } from "@/lib/fetcher";
-import type { ReviewCard, ReviewList } from "@/lib/spaced-repetition-card-types";
+import { addReviewDays, getReviewDate } from "@/lib/spaced-repetition";
+import type { ReviewList, ReviewListCard } from "@/lib/spaced-repetition-card-types";
 
-let slots: unknown[] = [];
-let cursor = 0;
-let search: { load: (signal: AbortSignal) => Promise<ReviewList>; onStart: () => void; onSuccess: (page: ReviewList) => void; onError: (error: Error) => void } | undefined;
-let effects: Array<() => unknown> = [];
-vi.mock("react", async (original) => ({
-  ...await original<typeof import("react")>(),
-  useState: (initial: unknown) => { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], (next: unknown) => { slots[index] = typeof next === "function" ? (next as (value: unknown) => unknown)(slots[index]) : next; }]; },
-  useRef: (initial: unknown) => { const index = cursor++; if (!(index in slots)) slots[index] = { current: initial }; return slots[index]; },
-  useCallback: (fn: unknown) => fn,
-  useEffect: (effect: () => unknown) => { effects.push(effect); },
-}));
-vi.mock("@/hooks/use-debounced-search", () => ({ useDebouncedSearch: (options: typeof search) => { search = options; } }));
 vi.mock("@/lib/fetcher", () => ({ jsonFetch: vi.fn() }));
-const first: ReviewList = { items: [], nextCursor: "page-2", summary: { date: "2026-09-27", due: 1, total: 2, notebook: 1, remedial: 0, overdue: 0, completed_today: 0 } };
-function ReviewListHarness({ source }: { source: "all" | "notebook" }) { return useReviewList({ scope: "due", source, limit: 3 }); }
-function render(source: "all" | "notebook" = "all") { cursor = 0; return ReviewListHarness({ source }); }
+afterEach(() => { cleanup(); vi.resetAllMocks(); });
+const date = getReviewDate();
+const card = (id: number): ReviewListCard => ({ id, source: "notebook", source_id: id, source_label: "错题", question: `题目 ${id}`, mastery: "new", interval_days: 0, ease_factor: 250, repetitions: 0, review_count: 0, lapses: 0, next_review_date: date, sort_date: date, last_reviewed_at: "" });
+const cursor = (id: number) => Buffer.from(JSON.stringify({ updatedAt: date, id })).toString("base64url");
+const page = (ids: number[], nextCursor: string | null = null): ReviewList => ({ items: ids.map(card), nextCursor, summary: { date, total: 5, due: 5, notebook: 5, remedial: 0, overdue: 0, completed_today: 0 } });
+const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; };
 
-beforeEach(() => { slots = []; cursor = 0; search = undefined; effects = []; vi.clearAllMocks(); });
-
-describe("复习列表请求", () => {
-  it("默认今日请求带浏览器时区和分页上限", async () => {
-    render(); expect(search).toBeDefined();
-    vi.mocked(jsonFetch).mockResolvedValue(first);
-    search!.onStart(); const page = await search!.load(new AbortController().signal); search!.onSuccess(page);
-    const url = new URL(String(vi.mocked(jsonFetch).mock.calls[0]![0]), "http://localhost");
-    expect(url.searchParams.get("scope")).toBe("due"); expect(url.searchParams.get("source")).toBe("all"); expect(url.searchParams.get("limit")).toBe("3");
-    expect(url.searchParams.get("time_zone")).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
-    expect(render().data).toEqual(first);
+describe("复习列表真实 React 请求生命周期", () => {
+  it("请求带浏览器时区、分页上限并禁用缓存", async () => {
+    vi.mocked(jsonFetch).mockResolvedValue(page([1]));
+    const hook = renderHook(() => useReviewList({ scope: "due", source: "all", limit: 3 }));
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+    const [raw, init] = vi.mocked(jsonFetch).mock.calls[0]!;
+    const url = new URL(raw, "http://localhost");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ scope: "due", source: "all", limit: "3", time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+    expect(init).toMatchObject({ cache: "no-store" }); expect(hook.result.current.data).toEqual(page([1]));
   });
 
-  it("分页失败保留题目与游标，可从同一页重试", async () => {
-    render(); expect(search).toBeDefined(); search!.onStart(); search!.onSuccess(first);
-    vi.mocked(jsonFetch).mockRejectedValueOnce(new Error("翻页失败"));
-    await render().loadMore();
-    expect(render().data).toEqual(first); expect(render().error).toBe("翻页失败");
-    vi.mocked(jsonFetch).mockResolvedValueOnce({ ...first, nextCursor: null });
-    await render().loadMore();
-    expect(render().data?.nextCursor).toBeNull(); expect(render().error).toBe("");
-    expect(vi.mocked(jsonFetch).mock.calls.every(([url]) => String(url).includes("cursor=page-2"))).toBe(true);
+  it("分页失败保留原游标，同一事件重复点击只发一次；重试清除错误", async () => {
+    vi.mocked(jsonFetch).mockResolvedValueOnce(page([1], cursor(1))).mockRejectedValueOnce(new Error("翻页失败")).mockResolvedValueOnce(page([2]));
+    const hook = renderHook(() => useReviewList({ scope: "due", source: "all", limit: 1 }));
+    await waitFor(() => expect(hook.result.current.data).not.toBeNull());
+    await act(async () => { await Promise.all([hook.result.current.loadMore(), hook.result.current.loadMore()]); });
+    expect(jsonFetch).toHaveBeenCalledTimes(2); expect(hook.result.current.error).toBe("翻页失败");
+    expect(hook.result.current.data?.nextCursor).toBe(cursor(1));
+    await act(() => hook.result.current.loadMore());
+    expect(hook.result.current.data?.items.map(item => item.id)).toEqual([1, 2]); expect(hook.result.current.error).toBe("");
+    expect(vi.mocked(jsonFetch).mock.calls.slice(1).every(([url]) => new URL(url, "http://localhost").searchParams.get("cursor") === cursor(1))).toBe(true);
   });
 
-  it("更换来源后旧分页响应不能覆盖新筛选数据", async () => {
-    render(); expect(search).toBeDefined(); search!.onStart(); search!.onSuccess(first);
-    let resolve!: (page: ReviewList) => void;
-    vi.mocked(jsonFetch).mockReturnValue(new Promise<ReviewList>((done) => { resolve = done; }));
-    const pending = render().loadMore();
-    render("notebook"); search!.onStart(); const fresh = { ...first, nextCursor: null, summary: { ...first.summary, total: 1 } }; search!.onSuccess(fresh);
-    resolve({ ...first, nextCursor: "stale" }); await pending;
-    expect(render("notebook").data).toEqual(fresh);
+  it("切换筛选立即隔离旧内容，迟到分页不能覆盖新筛选", async () => {
+    const pending = deferred<ReviewList>();
+    vi.mocked(jsonFetch).mockResolvedValueOnce(page([1], cursor(1))).mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([3]));
+    const hook = renderHook(({ source }: { source: "all" | "notebook" }) => useReviewList({ scope: "due", source, limit: 1 }), { initialProps: { source: "all" } });
+    await waitFor(() => expect(hook.result.current.data).not.toBeNull());
+    let load!: Promise<void>; act(() => { load = hook.result.current.loadMore(); });
+    hook.rerender({ source: "notebook" }); expect(hook.result.current.data).toBeNull(); expect(hook.result.current.loading).toBe(true);
+    await waitFor(() => expect(hook.result.current.data?.items[0]?.id).toBe(3));
+    await act(async () => { pending.resolve(page([2])); await load; });
+    expect(hook.result.current.data?.items.map(item => item.id)).toEqual([3]);
+    expect(vi.mocked(jsonFetch).mock.calls[1]![1]?.signal?.aborted).toBe(true);
   });
 
-  it("刷新保留已加载页数，更换来源后从第一页重新加载", async () => {
-    const card = (id: number): ReviewCard => ({ id, source: "notebook", source_id: id, source_label: "错题", question: `题目 ${id}`, mastery: "new", interval_days: 0, ease_factor: 250, repetitions: 0, review_count: 0, lapses: 0, next_review_date: "2026-09-27", last_reviewed_at: "" });
-    const pageOne: ReviewList = { ...first, items: [card(1), card(2), card(3)] };
-    const pageTwo: ReviewList = { ...first, items: [card(4)], nextCursor: null };
-    render(); search!.onStart(); search!.onSuccess(pageOne);
-    vi.mocked(jsonFetch).mockResolvedValueOnce(pageTwo);
-    await render().loadMore();
-    expect(render().data?.items).toHaveLength(4);
-    vi.mocked(jsonFetch).mockClear().mockResolvedValueOnce(pageOne).mockResolvedValueOnce(pageTwo);
-    render().reload(); render(); search!.onStart();
-    search!.onSuccess(await search!.load(new AbortController().signal));
-    expect(render().data?.items.map(item => item.id)).toEqual([1, 2, 3, 4]);
-    expect(jsonFetch).toHaveBeenCalledTimes(2);
-    const moved = { ...card(1), review_count: 1, next_review_date: "2026-09-28" };
-    vi.mocked(jsonFetch).mockClear().mockResolvedValueOnce(pageOne).mockResolvedValueOnce({ ...pageTwo, items: [card(4), moved] });
-    render().reload(); render(); search!.onStart();
-    search!.onSuccess(await search!.load(new AbortController().signal));
-    expect(render().data?.items.map(item => item.id)).toEqual([1, 2, 3, 4]);
-    expect(render().data?.items[0]?.review_count).toBe(1);
-    vi.mocked(jsonFetch).mockClear().mockResolvedValueOnce(pageOne);
-    render("notebook"); search!.onStart();
-    search!.onSuccess(await search!.load(new AbortController().signal));
-    expect(jsonFetch).toHaveBeenCalledOnce();
-    expect(render("notebook").data?.items).toHaveLength(3);
+  it("刷新保留已加载页数，真实向后移动的卡更新并移到正确位置", async () => {
+    vi.mocked(jsonFetch).mockResolvedValueOnce(page([1, 2], cursor(2))).mockResolvedValueOnce(page([3]));
+    const hook = renderHook(() => useReviewList({ scope: "all", source: "all", limit: 2 }));
+    await waitFor(() => expect(hook.result.current.data).not.toBeNull()); await act(() => hook.result.current.loadMore());
+    const moved = { ...card(1), review_count: 1, repetitions: 1, mastery: "learning" as const, sort_date: addReviewDays(date, 1), next_review_date: addReviewDays(date, 1) };
+    vi.mocked(jsonFetch).mockResolvedValueOnce(page([1, 2], cursor(2))).mockResolvedValueOnce({ ...page([3]), items: [card(3), moved] });
+    act(() => hook.result.current.reload());
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+    expect(jsonFetch).toHaveBeenCalledTimes(4); expect(hook.result.current.data?.items.map(item => item.id)).toEqual([2, 3, 1]);
+    expect(hook.result.current.data?.items.at(-1)?.review_count).toBe(1);
+  });
+
+  it("刷新批次的后页失败整批保留，重试仍重新读取全部已加载页", async () => {
+    vi.mocked(jsonFetch).mockResolvedValueOnce(page([1], cursor(1))).mockResolvedValueOnce(page([2]));
+    const hook = renderHook(() => useReviewList({ scope: "due", source: "all", limit: 1 }));
+    await waitFor(() => expect(hook.result.current.data).not.toBeNull()); await act(() => hook.result.current.loadMore());
+    vi.mocked(jsonFetch).mockResolvedValueOnce(page([3], cursor(3))).mockRejectedValueOnce(new Error("第二页失败"));
+    act(() => hook.result.current.reload());
+    await waitFor(() => expect(hook.result.current.error).toBe("第二页失败"));
+    expect(hook.result.current.data?.items.map(item => item.id)).toEqual([1, 2]);
+    vi.mocked(jsonFetch).mockResolvedValueOnce(page([3], cursor(3))).mockResolvedValueOnce(page([4]));
+    act(() => hook.result.current.reload());
+    await waitFor(() => expect(hook.result.current.data?.items.map(item => item.id)).toEqual([3, 4]));
+  });
+
+  it("reload 同步中止分页，迟到响应及紧接着的加载更多均不能写入", async () => {
+    const pending = deferred<ReviewList>();
+    vi.mocked(jsonFetch).mockResolvedValueOnce(page([1], cursor(1))).mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([3]));
+    const hook = renderHook(() => useReviewList({ scope: "due", source: "all", limit: 1 }));
+    await waitFor(() => expect(hook.result.current.data).not.toBeNull());
+    let load!: Promise<void>; act(() => { load = hook.result.current.loadMore(); hook.result.current.reload(); void hook.result.current.loadMore(); });
+    await act(async () => { pending.resolve(page([2])); await load; });
+    await waitFor(() => expect(hook.result.current.data?.items.map(item => item.id)).toEqual([3])); expect(jsonFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("离页取消首页和续页请求", async () => {
+    const pending = deferred<ReviewList>(); vi.mocked(jsonFetch).mockResolvedValueOnce(page([1], cursor(1))).mockReturnValueOnce(pending.promise);
+    const hook = renderHook(() => useReviewList({ scope: "due", source: "all", limit: 1 }));
+    await waitFor(() => expect(hook.result.current.data).not.toBeNull());
+    let load!: Promise<void>; act(() => { load = hook.result.current.loadMore(); }); hook.unmount();
+    expect(vi.mocked(jsonFetch).mock.calls.every(([, init]) => init?.signal?.aborted)).toBe(true);
+    await act(async () => { pending.resolve(page([2])); await load; });
+  });
+
+  it("同一事件连续读取两页也使用最新边界，不丢已确认的中间页", async () => {
+    vi.mocked(jsonFetch).mockResolvedValueOnce(page([1], cursor(1))).mockResolvedValueOnce(page([2], cursor(2))).mockResolvedValueOnce(page([3]));
+    const hook = renderHook(() => useReviewList({ scope: "due", source: "all", limit: 1 }));
+    await waitFor(() => expect(hook.result.current.data).not.toBeNull());
+    await act(async () => { await hook.result.current.loadMore(); await hook.result.current.loadMore(); });
+    expect(hook.result.current.data?.items.map(item => item.id)).toEqual([1, 2, 3]);
+    expect(vi.mocked(jsonFetch).mock.calls.slice(1).map(([url]) => new URL(url, "http://localhost").searchParams.get("cursor"))).toEqual([cursor(1), cursor(2)]);
   });
 });

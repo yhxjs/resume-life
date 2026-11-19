@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { NextResponse } from "next/server";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
@@ -15,7 +16,7 @@ async function handlePost(request: Request, { params }: Context) {
   try {
     const { id, interviewId } = await params;
     const input = body as Record<string, unknown>;
-    return NextResponse.json(exportInterviewReview(Number(id), Number(interviewId), input.recap_id, input.action));
+    return NextResponse.json(exportInterviewReview(parseCanonicalPositiveId(id), parseCanonicalPositiveId(interviewId), input.recap_id, input.action));
   } catch (error) {
     if (error instanceof InterviewReviewError) return NextResponse.json({ error: error.message }, { status: error.status });
     throw error;

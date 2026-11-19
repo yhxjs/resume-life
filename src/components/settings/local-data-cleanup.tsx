@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { confirmDialog } from "@/components/common/confirm-dialog";
 import { clearSensitiveBrowserData } from "@/lib/browser-sensitive-data";
 import { errorMessage } from "@/lib/error-message";
@@ -9,8 +9,18 @@ import { btnGhost } from "@/lib/ui";
 export function LocalDataCleanup() {
   const [message, setMessage] = useState("");
   const [failed, setFailed] = useState(false);
+  const mounted = useRef(false);
+  const command = useRef<AbortController | null>(null);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; command.current?.abort(); command.current = null; };
+  }, []);
   async function clear() {
-    if (!await confirmDialog({ title: "清除本机敏感副本", message: "将清除当前浏览器的脱敏规则、项目源码路径和此标签页未保存的简历草稿，清除后无法恢复。已保存的简历和下载文件不受影响。", confirmText: "清除副本", danger: true })) return;
+    if (!mounted.current || command.current) return;
+    const controller = new AbortController(); command.current = controller;
+    const confirmed = await confirmDialog({ title: "清除本机敏感副本", message: "将清除当前浏览器的脱敏规则、项目源码路径和此标签页未保存的简历草稿，清除后无法恢复。已保存的简历和下载文件不受影响。", confirmText: "清除副本", danger: true, signal: controller.signal });
+    if (!mounted.current || controller.signal.aborted || command.current !== controller) return;
+    if (!confirmed) { command.current = null; return; }
     try {
       clearSensitiveBrowserData();
       setFailed(false);
@@ -18,6 +28,8 @@ export function LocalDataCleanup() {
     } catch (reason) {
       setFailed(true);
       setMessage(`清除未完成：${errorMessage(reason)}。请检查浏览器存储权限后重试。`);
+    } finally {
+      command.current = null;
     }
   }
   return <section className="rounded-2xl border border-line bg-card p-6 space-y-3">

@@ -1,14 +1,16 @@
 "use client";
 
-import type { NegotiationTurnData, SuggestedReply } from "@/lib/salary-negotiation";
+import type { SuggestedReply } from "@/lib/salary-negotiation";
+import { isHistoricalScore, type HistoricalNegotiationTurn } from "@/lib/salary-negotiation-history";
 import { cardCls } from "@/lib/ui";
 
 interface SalaryPlaygroundMentorProps {
-  turns: NegotiationTurnData[];
+  turns: HistoricalNegotiationTurn[];
   activeTurnNo: number;
   onSelectTurn: (turnNo: number) => void;
   onApplySuggestion: (suggestion: SuggestedReply) => void;
   isFinished: boolean;
+  suggestionsDisabled?: boolean;
 }
 
 export function SalaryPlaygroundMentor({
@@ -17,11 +19,13 @@ export function SalaryPlaygroundMentor({
   onSelectTurn,
   onApplySuggestion,
   isFinished,
+  suggestionsDisabled = false,
 }: SalaryPlaygroundMentorProps) {
   const activeTurn = turns.find((t) => t.turn_no === activeTurnNo) ?? turns[turns.length - 1];
+  const hasCandidateMessage = Boolean(activeTurn?.user_message.trim());
 
   return (
-    <div className={`p-5 ${cardCls} space-y-5 sticky top-20`}>
+    <div className={`p-5 ${cardCls} space-y-5 sticky top-20 wrap-anywhere [&_p]:whitespace-pre-wrap [&_li]:whitespace-pre-wrap`}>
       {/* 军师头部与回合切换 */}
       <div className="flex items-center justify-between border-b border-line pb-3">
         <div>
@@ -32,7 +36,7 @@ export function SalaryPlaygroundMentor({
             </h3>
           </div>
           <p className="text-[11px] text-muted mt-0.5">
-            深度复盘你的说服漏洞并提供高胜率解法
+            分析本轮表达与待确认条件，提供练习建议
           </p>
         </div>
 
@@ -43,6 +47,8 @@ export function SalaryPlaygroundMentor({
               <button
                 key={t.turn_no}
                 type="button"
+                aria-label={`查看第 ${t.turn_no} 回合分析`}
+                aria-pressed={activeTurn?.turn_no === t.turn_no}
                 onClick={() => onSelectTurn(t.turn_no)}
                 className={`h-6 w-6 rounded-md text-[11px] font-mono transition-colors ${
                   activeTurnNo === t.turn_no
@@ -64,20 +70,20 @@ export function SalaryPlaygroundMentor({
           <div className="flex items-center justify-between rounded-xl border border-line bg-surface p-3">
             <div>
               <span className="text-[11px] text-muted block">
-                第 {activeTurn.turn_no} 回合说服力评分
+                {hasCandidateMessage ? `第 ${activeTurn.turn_no} 回合说服力评分` : "开局分析 · 尚未评分"}
               </span>
               <span className="text-[11px] text-faint">
-                {activeTurn.turn_no === 1
-                  ? "初始开局局势拆解"
-                  : "基于你最新一轮的说服逻辑评估"}
+                {hasCandidateMessage
+                  ? "仅评本回合已提交的候选人发言"
+                  : "候选人尚未发言，先核对模拟方案与条件"}
               </span>
             </div>
-            <div className="flex items-baseline gap-1">
+            {hasCandidateMessage && (isHistoricalScore(activeTurn.mentor_analysis.user_argument_score, 1, 10) ? <div className="flex items-baseline gap-1">
               <span className="font-mono text-2xl font-bold text-primary">
                 {activeTurn.mentor_analysis.user_argument_score}
               </span>
               <span className="font-mono text-muted">/10</span>
-            </div>
+            </div> : <span className="text-xs text-muted">未保存有效评分</span>)}
           </div>
 
           {/* 优势筹码与逻辑漏洞 */}
@@ -85,9 +91,10 @@ export function SalaryPlaygroundMentor({
             {/* 优势筹码 */}
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1">
               <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
-                <span>✓ 打出的优势筹码与亮点</span>
+                <span>{hasCandidateMessage ? "✓ 本轮亮点与可用依据" : "✓ 已知有利条件"}</span>
               </div>
               <ul className="space-y-1 pl-3 list-disc text-muted">
+                {activeTurn.mentor_analysis.strengths.length === 0 && <li>旧记录未保存具体亮点</li>}
                 {activeTurn.mentor_analysis.strengths.map((s, idx) => (
                   <li key={idx} className="leading-relaxed">
                     {s}
@@ -99,9 +106,10 @@ export function SalaryPlaygroundMentor({
             {/* 逻辑漏洞 */}
             <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 space-y-1">
               <div className="flex items-center gap-1 text-[11px] font-bold text-amber-700 dark:text-amber-400">
-                <span>⚠ 暴露的逻辑漏洞或破绽</span>
+                <span>⚠ 待澄清与改进事项</span>
               </div>
               <ul className="space-y-1 pl-3 list-disc text-muted">
+                {activeTurn.mentor_analysis.vulnerabilities.length === 0 && <li>旧记录未保存具体待澄清事项</li>}
                 {activeTurn.mentor_analysis.vulnerabilities.map((v, idx) => (
                   <li key={idx} className="leading-relaxed">
                     {v}
@@ -117,7 +125,7 @@ export function SalaryPlaygroundMentor({
               💡 军师核心破局点拨
             </span>
             <p className="text-muted leading-relaxed">
-              {activeTurn.mentor_analysis.tactical_tips}
+              {activeTurn.mentor_analysis.tactical_tips || "旧记录未保存练习建议"}
             </p>
           </div>
 
@@ -125,7 +133,7 @@ export function SalaryPlaygroundMentor({
           {!isFinished && (
             <div className="space-y-2.5 pt-1">
               <span className="text-[11px] font-bold text-ink block">
-                🎯 推荐高情商反制话术示范
+                🎯 练习回复参考（请核对后发送）
               </span>
 
               {activeTurn.mentor_analysis.suggested_replies.map((s, idx) => (
@@ -140,16 +148,17 @@ export function SalaryPlaygroundMentor({
                     <button
                       type="button"
                       onClick={() => onApplySuggestion(s)}
+                      disabled={suggestionsDisabled || !s.content.trim()}
                       className="rounded-md border border-primary/40 bg-card px-2 py-0.5 text-[10px] font-medium text-primary hover:bg-primary hover:text-on-primary transition-colors cursor-pointer"
                     >
                       一键填入输入框 ↗
                     </button>
                   </div>
-                  <p className="rounded-lg bg-card/80 p-2.5 font-sans text-xs text-ink leading-relaxed border border-line/60">
+                  <p className="whitespace-pre-wrap rounded-lg bg-card/80 p-2.5 font-sans text-xs text-ink leading-relaxed border border-line/60">
                     {s.content}
                   </p>
                   <p className="text-[11px] text-muted italic">
-                    心理学原理：{s.rationale}
+                    建议理由：{s.rationale}
                   </p>
                 </div>
               ))}

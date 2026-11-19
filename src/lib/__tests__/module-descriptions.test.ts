@@ -6,6 +6,7 @@ import {
 } from "../module-descriptions";
 import { normalizeContent } from "../modules";
 import type { EducationItem, ProjectItem, WorkItem } from "../modules";
+import { escapePlainTextToRichHtml, stripRichText } from "../rich-text";
 
 // descriptionItems 显式给空数组：真实数据由 normalizeContent 产出，
 // 该函数保证每条记录都有 descriptionItems（见 modules.ts 的
@@ -54,6 +55,24 @@ const projectContent: ProjectItem[] = [
 ];
 
 describe("readDescribableItems", () => {
+  it.each(["work", "projects"] as const)("%s 读取 Markdown 事实正文时不会丢失标题中的限定", (type) => {
+    const content = type === "work" ? workContent : projectContent;
+    const lines = ["# 仅参与接口校验，尚未上线。", "## 角色：在指导下验证接口，未负责架构。", "参与文档核对"];
+    const withText = [{ ...content[0], description: lines.join("\n"), descriptionItems: [] }];
+    const withItems = [{ ...content[0], description: "旧正文", descriptionItems: lines }];
+    expect(readDescribableItems(type, withText)[0]!.text).toBe(lines.join("\n"));
+    expect(readDescribableItems(type, withItems)[0]!.text).toBe(lines.join("\n"));
+  });
+
+  it.each(["work", "projects"] as const)("%s 原始分条中的字段标签与事实限定完整进入编辑器", (type) => {
+    const content = type === "work" ? workContent : projectContent;
+    const lines = ["项目：只参与接口校验，尚未上线。", "角色：在指导下验证接口，未负责架构。", "时间：仅测试两周，结果未统计。", "参与文档核对"];
+    for (const descriptionItems of [lines, []]) {
+      const raw = [{ ...content[0], description: lines.join("\n"), descriptionItems }];
+      expect(readDescribableItems(type, raw)[0]!.text).toBe(lines.join("\n"));
+    }
+  });
+
   it("work：读 description 与 company/title 上下文", () => {
     const items = readDescribableItems("work", workContent);
     expect(items).toHaveLength(2);
@@ -110,6 +129,40 @@ describe("readDescribableItems", () => {
 });
 
 describe("writeDescribableItem", () => {
+  it.each(["work", "projects"] as const)("%s 写入 Markdown 事实正文后仍保留首行和中间限定", (type) => {
+    const content = type === "work" ? workContent : projectContent;
+    const identity = type === "work" ? "公司：字节跳动 职位：前端工程师" : "项目名称：实时数据同步平台 角色：技术负责人";
+    const lines = ["# 仅参与接口校验，尚未上线。", "参与文档核对", "## 角色：在指导下验证接口，未负责架构。"];
+    const text = [`# ${identity}`, ...lines].join("\n");
+    const next = writeDescribableItem(type, content, content[0]!.id, text) as (WorkItem | ProjectItem)[];
+    expect(next[0]!.descriptionItems).toEqual(lines);
+    expect(next[0]!.description).toBe(lines.join("\n"));
+    expect(readDescribableItems(type, next)[0]!.text).toBe(lines.join("\n"));
+    expect(next[1]).toEqual(content[1]);
+  });
+
+  it.each(["work", "projects"] as const)("%s 保存保留首行与中间带标签的事实，仍去除身份抬头", (type) => {
+    const content = type === "work" ? workContent : projectContent;
+    const identity = type === "work" ? "公司：字节跳动 职位：前端工程师" : "项目名称：实时数据同步平台 角色：技术负责人";
+    const lines = ["项目：只参与接口校验，尚未上线。", "参与文档核对", "角色：在指导下验证接口，未负责架构。", "时间：仅测试两周，结果未统计。"];
+    const before = structuredClone(content);
+    const html = `<strong>${identity}</strong><br>${lines.map((line) => `<strong>${line}</strong>`).join("<br>")}`;
+    const next = writeDescribableItem(type, content, content[0]!.id, html) as (WorkItem | ProjectItem)[];
+    expect(next[0]!.descriptionItems?.map(stripRichText)).toEqual(lines);
+    expect(stripRichText(readDescribableItems(type, next)[0]!.text)).toBe(lines.join("\n"));
+    expect(next[1]).toEqual(content[1]);
+    expect(content).toEqual(before);
+  });
+
+  it.each(["work", "projects"] as const)("%s 写入再读取保留路径、正则与标签字面量", (type) => {
+    const texts = [String.raw`维护 C:\new\resume，处理 /\r\n|\n/g`, "记录 <br>、<template> 与 &amp; 字面量"];
+    const content = type === "work" ? workContent : projectContent;
+    const id = type === "work" ? "w1" : "p1";
+    const next = writeDescribableItem(type, content, id, escapePlainTextToRichHtml(texts.join("\n"))) as (WorkItem | ProjectItem)[];
+    expect(next[0]!.descriptionItems?.map(stripRichText)).toEqual(texts);
+    expect(stripRichText(readDescribableItems(type, next)[0]!.text)).toBe(texts.join("\n"));
+  });
+
   it("work：拆行写回 descriptionItems 并同步 description", () => {
     const next = writeDescribableItem("work", workContent, "w1", "<strong>新描述</strong>") as WorkItem[];
     expect(next[0]!.description).toBe("<strong>新描述</strong>");

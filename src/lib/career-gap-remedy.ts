@@ -1,40 +1,41 @@
-/** 离职原因与空窗期高情商重塑工坊的核心类型、数据清洗与经典对策库 */
+/** 离职与空窗沟通准备的核心类型、数据清洗与示例库 */
+import { hasQuestionContent, questionComparisonKey } from "./question-normalization";
 
 export type ScenarioType = "resignation" | "gap" | "both";
 export type PersonaStyle = "pragmatic" | "driven" | "composed";
 
 export type ScriptVersion = {
-  /** 方案标签，如 "四两拨千斤（精炼30秒版）" */
+  /** 方案标签，如 "精炼说明版" */
   label: string;
-  /** 适用场景说明，如 "适合HR初筛或电调，不节外生枝" */
+  /** 适用场景说明，如 "适合 HR 初步沟通或电调" */
   applicableScene: string;
   /** 完整可直接口述的话术内容 */
   script: string;
-  /** 核心逻辑拆解（为什么这么说能加分） */
+  /** 表达思路与事实限定说明 */
   keyPoints: string[];
 };
 
 export type HrDrill = {
-  /** HR刁钻连环追问问题 */
+  /** 基于已知经历的可能追问 */
   question: string;
-  /** HR此提问背后的真实顾虑与测试点 */
+  /** 该问题可能核实的信息，不代表已知招聘方真实心理 */
   hrConcern: string;
-  /** 破局思路与高情商接招话术 */
+  /** 有事实依据的回答示例，未知内容明确待补充 */
   bestResponse: string;
 };
 
 export type ResignationGapRemedyResult = {
-  /** 核心定调与场景标签（如：“被动裁员向组织瘦身转型”、“裸辞gap向敏捷技术充电沉淀”） */
+  /** 与已知经历相符的方案标题 */
   title: string;
-  /** 诊断一句话金句：点出重塑的核心抓手与心态转变 */
+  /** 概括事实说明与沟通重点 */
   punchline: string;
-  /** HR心理测谎仪：剖析HR在听真实情况时的潜意识隐忧 */
+  /** 材料支持的可能招聘关注点与尚待澄清的信息 */
   hrMindsetAnalysis: {
     coreConcerns: string[];
     riskPoints: string[];
     whatHrWantsToHear: string;
   };
-  /** 重塑底层四步公式：认同事实 + 归因正向 + 沉淀赋能 + 动机绑定 */
+  /** 说明事实、客观解释、已知行动与岗位衔接；缺失信息不补造 */
   reframeFormula: {
     factAcknowledgment: string;
     positiveAttribution: string;
@@ -47,15 +48,15 @@ export type ResignationGapRemedyResult = {
     detailed: ScriptVersion;
     pivoting: ScriptVersion;
   };
-  /** HR深挖连环追问对策预演 */
+  /** 可能追问与回答示例 */
   drills: HrDrill[];
-  /** 绝对禁忌红线清单（千万不可脱口而出的雷区） */
+  /** 应避免的失实表达、无依据承诺或人身攻击 */
   forbiddenList: string[];
   /** 面试点睛小建议 */
   closingTips: string[];
 };
 
-/** 经典高频离职与空窗期对策预置条目 */
+/** 场景示例仅依据 rawPain 改写；个人细节、成果和计划未知时保留待补充。 */
 export type PresetRemedy = {
   id: string;
   category: "resignation" | "gap";
@@ -74,15 +75,15 @@ export const PRESET_REMEDIES: PresetRemedy[] = [
     id: "layoff-biz-cut",
     category: "resignation",
     title: "公司业务线整体关停 / 规模性裁员",
-    badge: "非个人绩效",
+    badge: "说明裁撤范围",
     rawPain: "整个部门或业务线都被砍了，被动拿 N+1 赔偿离职，担心 HR 以为是我个人绩效垫底被优化。",
-    hrConcern: "是不是在团队内部被列为可裁人员？沟通协作或技术能力是否落后？",
-    reframeAngle: "强调不可抗力与组织战略收缩，展示在前团队的良好评价与站好最后一班岗的职业素养。",
+    hrConcern: "招聘方可能核实裁撤范围、离职时间及原岗位职责；整体裁撤本身不能说明个人绩效。",
+    reframeAngle: "说明业务线整体关停与被动离职的事实；如需补充绩效、交接或个人贡献，只使用可核实的信息。",
     quickScript:
-      "前司因为宏观战略调整，全面缩减了我们所负责的创新出海业务线，属于组织架构的整体优化。在职期间我的绩效一直处于团队前列，并且非常负责地配合完成了所有系统交接与平稳过渡。这次离职也让我更清晰地希望在主营业务成熟、战略坚定的平台长期深耕。",
+      "我所在的部门或业务线整体被裁撤，我因此被动离职。关于之前的岗位职责和具体工作，我可以结合实际经历进一步说明：[待补充：真实职责与工作内容]。",
     deepScript:
-      "前司当时面对整体大环境调整，管理层决定做战略聚焦，收缩了包括我们组在内的整条创新业务线。离职并非个人绩效原因，事实上在此之前我主导的核心模块按期高质量交付，主管和团队对我的专业度都非常认可，即便在部门裁撤阶段，我也主动留到最后完成知识沉淀与文档交接。这段经历让我对业务抗风险能力有了更深理解，现在我希望把积累的全栈交付能力沉淀到像贵司这样赛道稳健、业务具备护城河的团队中。",
-    forbidden: "抱怨前司管理层愚蠢盲目扩张、反复倾诉被裁的怨气或强调赔偿金额。",
+      "这次离职发生在整个部门或业务线被裁撤时，属于被动离职，公司按 N+1 给予了补偿。此前我在岗位上负责的工作是：[待补充：实际职责及可核实的工作实例]。如果需要进一步了解我的工作情况，可以从这些具体经历展开讨论。",
+    forbidden: "不要编造绩效排名、主管评价、主导贡献或交接成果；赔偿可按需要如实说明，避免无依据揣测裁撤动机或攻击个人。",
   },
   {
     id: "overtime-burnout",
@@ -90,13 +91,13 @@ export const PRESET_REMEDIES: PresetRemedy[] = [
     title: "常态无序加班 / 身体透支与严重内耗",
     badge: "可持续效能",
     rawPain: "前司天天加班到凌晨，纯粹是管理混乱和无休止开会填坑，身体吃不消被迫提离职。",
-    hrConcern: "抗压能力是不是不行？不能接受快节奏？一遇到紧急项目就会撂挑子？",
-    reframeAngle: "把‘不能加班’重塑为‘追求目标导向的高能效交付与可持续产出’，认同健康攻坚但拒绝低效内耗。",
+    hrConcern: "招聘方可能了解离职前的实际工时、当前可接受的工作安排与岗位节奏是否匹配；不能据此判断抗压能力。",
+    reframeAngle: "如实说明长期加班与身体负担，描述具体工作安排；可询问新岗位工时，不必承诺接受高强度加班。",
     quickScript:
-      "我非常认同在关键业务节点或上线攻坚时的高投入，但前司存在较长期的无序管理与低效扯皮，导致时间被琐碎内耗切碎。我更看重以结果和敏捷为导向的高效协同，希望加入一个工程素养高、节奏有条理的团队，把精力集中在真正创造业务价值的技术攻坚上。",
+      "前一份工作经常加班到凌晨，长时间的会议与临时问题处理给身体带来了较大负担，因此我选择离职。我想进一步了解这个岗位的日常工时、排期和紧急事项安排，确认双方对工作节奏的预期。",
     deepScript:
-      "过往遇到紧急版本或大促攻坚，我一直都是冲在前面的主力，并不排斥高强度拼搏。选择离开主要是我发现前司常态化处于‘无序救火’的循环中——排期频繁临时插单，大量时间被无结论的会议消耗，缺乏系统复盘机制。我是一个推崇‘用工程规范提效、用自动化管线降本’的人。因此我希望转换到一个管理成熟度更高、推崇敏捷高效交付的平台，通过清晰的规划和高质量架构实现长期的良性产出。",
-    forbidden: "直接吐槽‘前司经常加班到半夜把我身体搞垮了’、表现出对加班的绝对抵触与反感。",
+      "我离职的主要原因是前司长期加班到凌晨，会议和临时问题处理占用了很多时间，这种工作安排给身体带来了持续负担。希望这次能具体沟通日常排期、加班频率以及紧急任务的协调方式。我的时间安排与可接受范围是：[待补充：真实边界及仍需确认的条件]。涉及个人健康的细节，我希望只说明与岗位安排有关的部分。",
+    forbidden: "不要编造大促攻坚经历、隐瞒影响岗位安排的必要条件或承诺无条件加班；可以如实说明工时边界与身体负担，避免人身攻击。",
   },
   {
     id: "pay-cut-delay",
@@ -104,83 +105,83 @@ export const PRESET_REMEDIES: PresetRemedy[] = [
     title: "公司降薪 / 拖欠工资 / 福利断崖",
     badge: "经营风险合规",
     rawPain: "公司现金流暴雷，延发工资、强制打折，逼大家主动走人。",
-    hrConcern: "离开是否由于情绪冲动？是否急于找下家而对薪酬缺乏客观理性评估？",
-    reframeAngle: "客观陈述事实，不带个人情绪攻击，强调对自身稳定生活与职业专注的负责态度。",
+    hrConcern: "招聘方可能核实薪资调整、发放情况和离职时间；薪资争议本身不能说明求职者冲动或缺乏理性。",
+    reframeAngle: "说明实际发生的降薪或延发情况，不替公司推定经营原因，不以赞美目标公司财务状况代替核实。",
     quickScript:
-      "前司在经营上出现了一定流动性压力，并在薪资兑现与福利机制上做出了较大幅度的收缩。作为职业人，我尊重企业的经营抉择，但也需要一份健康可持续的工作来维持全身心专注的职业状态。因此在站好交接班后，我选择主动寻找一家现金流健康、制度规范的正规平台。",
+      "前司出现了工资延发和降薪的情况，这是我考虑离开的主要原因。关于新的工作，我想先明确薪资结构、发放时间和书面约定，再结合岗位职责判断是否合适。",
     deepScript:
-      "前司近半年受到整体行业资金面的影响，运营策略发生了较大调整，薪资发放周期和福利机制多次推迟。我在职期间依然尽职尽责完成了项目迭代，但考虑到家庭财务稳定与对长远事业的专注度，我认为理性的选择是重新出发。贵司在业内一直以财务稳健、经营踏实著称，这也是我非常渴望加入的原因。",
-    forbidden: "大肆宣扬前司老板品行不端、言辞过激地指责前雇主违法违规。",
+      "前司发生了工资延发与降薪，影响了原有的薪酬安排，因此我开始考虑新的工作机会。具体发生时间、调整幅度和目前离职进度是：[待补充：可以核实的实际情况]。我希望进一步了解这个岗位的职责、薪资构成与发放安排，依据明确的信息做决定。",
+    forbidden: "不要补造受影响时长、家庭财务状况、交接成果或目标公司的财务声誉；可以如实说明欠薪事实和已确认的争议处理进度。",
   },
   {
     id: "career-ceiling",
     category: "resignation",
     title: "技术停滞 / 业务边缘化 / 触及天花板",
-    badge: "主动求索成长",
+    badge: "说明发展诉求",
     rawPain: "天天维护祖传屎山代码，业务没有新增长点，干了两年感觉废了，学不到新东西。",
-    hrConcern: "是不是对日常维护工作挑肥拣瘦？没有自我驱动力自救？跳槽欲望是不是太频繁？",
-    reframeAngle: "表达对原有业务的感恩与交付成果，将离职定位为‘主动打破舒适圈，寻求更具挑战的业务场景’。",
+    hrConcern: "招聘方可能了解原有维护职责、实际工作内容与期望的发展方向；维护工作本身不是能力或积极性的负面证据。",
+    reframeAngle: "客观说明两年的维护工作与发展诉求，不将日常维护改写成主导重构、性能治理或量化成果。",
     quickScript:
-      "在前司的两年多时间里，我将原有系统从稳定性到性能瓶颈做了一整套治理，业务体系已经进入非常平稳的维护期。我希望在自己技术状态最好的阶段跳出舒适圈，接触更具技术深度、更大规模并发或更具想象力的新业务，继续激发自己的潜能。",
+      "我在前司工作了两年，主要做既有系统维护，业务没有新增长点，感觉目前接触的新内容比较有限。接下来希望发展的方向是：[待补充：真实的学习或岗位目标]，也想了解这个岗位实际包含哪些工作。",
     deepScript:
-      "在前司期间我很感谢团队的信任，让我主导了老系统的模块重构与稳定性建设，核心链路的故障率降低了40%，我也总结沉淀了一套规范文档。但随着系统进入高度稳定的收割期，后续更多是常规配置化支持。我是一个有较强技术好奇心与突破欲望的人，与其在舒适区躺平，我更希望能投身到正在高速发展或技术挑战更复杂的前沿业务中，比如贵司目前深耕的这个方向。",
-    forbidden: "贬低前司技术落后、吐槽老项目全是屎山没人管。",
+      "过去两年，我的工作主要围绕既有系统维护展开。业务没有新增长点，我感觉工作中能接触的新内容比较有限。此前具体负责的内容是：[待补充：真实维护职责和工作实例]。我希望进一步沟通新岗位的维护、新开发与其他职责安排，判断是否符合自己的发展目标。",
+    forbidden: "不要编造主导重构、故障率下降或技术巅峰状态；可以客观说明维护职责和发展需求，避免贬低维护工作或前团队。",
   },
   {
     id: "gap-recharge",
     category: "gap",
-    title: "裸辞休息 / 调整身心状态（3~6个月）",
-    badge: "主动沉淀充电",
+    title: "裸辞休息 / 调整身心状态",
+    badge: "如实说明休整",
     rawPain: "上份工作连轴转了三年身心俱疲，裸辞后休息旅行了两个月，顺便学了点新框架，担心被当成懒散。",
-    hrConcern: "是不是散漫缺乏规划？重回高强度工作能不能迅速上膛？专业技能是否生疏？",
-    reframeAngle: "将空白期定义为‘有计划的人生中场复盘与系统充电’，拿出具体的学习产出与充沛的精神面貌。",
+    hrConcern: "招聘方可能了解空窗时间、当前求职安排与岗位所需技能；休息旅行本身不能说明散漫或能力下降。",
+    reframeAngle: "保留休息旅行两个月及接触新框架的事实，不把零散学习扩写为系统课程或完整项目，也不推定已恢复最佳状态。",
     quickScript:
-      "在连续高强度一线开发三年后，我主动给自己规划了一段有节奏的缓冲期：前一个月陪家人旅行调理身心，后两到三个月我系统通读了微服务架构与 AI 工具链实战，并独立动手做了两个完整项目 demo。目前我的精力和技术状态都处于最佳峰值，随时可以全情投入到新的攻坚战中。",
+      "上一份工作连续三年强度比较大，离职后我休息、旅行了两个月，其间也接触了一些新框架。当前求职方向和可到岗安排是：[待补充：真实情况及仍需确认的事项]。",
     deepScript:
-      "过去几年我一直奔跑在一线，很少有整块时间站在更高视角审视自己的知识架构。这次主动调整是深思熟虑的决定：一方面彻底让身心归零，建立更充沛的体能；另一方面，我制定了清晰的阶段性学习计划，对过去做过的业务进行深度架构复盘，同时深入学习了全栈开发最新技术栈。通过这次充电，不仅技术视野更开阔，心态也更加成熟坚定，现在的我已经做好了全身心迎接新挑战的充分准备。",
-    forbidden: "回答‘就是想躺平玩一玩，没想到现在工作这么难找才找了几个月’。",
+      "上一份工作连续三年强度较大，离职后这两个月主要用于休息和旅行，也学了一些新框架。具体接触的内容是：[待补充：框架名称和真实接触程度]。目前的求职方向、时间安排与到岗条件是：[待补充：真实情况]，也希望进一步了解这个岗位的日常职责。",
+    forbidden: "不要为休息补造学习计划、项目 demo 或康复结论，也不必把休息说成成长成果；时间、学习程度与到岗条件应如实说明。",
   },
   {
     id: "gap-exam-retry",
     category: "gap",
     title: "考公 / 考研备战未上岸重回职场",
-    badge: "坚定职业终局",
+    badge: "澄清后续安排",
     rawPain: "毕业或离职后全职备考了一年，最后没考上，不得不重新找工作，怕被嫌弃心不定。",
-    hrConcern: "是不是骑驴找马？下半年会不会又去请假备战？对互联网/企业岗位是否缺乏热情？",
-    reframeAngle: "坦然接纳人生探索，清晰说明‘心结已解、全力以赴’，突出备考培养的严谨逻辑与抗压韧性。",
+    hrConcern: "招聘方可能了解当前求职方向、是否仍有考试安排及其与工作时间的关系；备考未通过不能说明缺乏投入。",
+    reframeAngle: "如实说明一年全职备考及考试结果，后续是否再考按真实计划填写，不要求承诺永不再考或虚构心态转变。",
     quickScript:
-      "那段时间我为了不留青春遗憾，给自己设了一定期限全职冲刺了一次研究生考试。虽然结果有偏差，但经历这段极致自律的高强度备考，我不仅拓宽了认知，更彻底明确了我的真正热情依然在通过代码解决实际业务问题的职场中。我已经彻底翻过这一页，未来几年将百分百专注于在企业中打磨专业价值，绝不会有二心。",
+      "过去一年我在全职备考，最终没有通过考试，目前重新求职。关于是否继续考试，以及它与工作时间的关系，我的实际安排是：[待补充：已确定的计划或尚未决定的事项]。",
     deepScript:
-      "备考是我在特定阶段做出的自我挑战，也是对自己自驱与专注力的一次极限测试。在备战过程中我养成了极高强度的抗压心智与深度复盘习惯。遗憾虽有，但我非常认同‘行胜于言’，这次尝试让我彻底厘清了自己适合什么：我更喜欢在快速反馈、业务落地的敏捷实战中获得成就感。现在我的心态极其笃定，已经把全部重心重新切换回技术开发，能够以更加沉稳扎实的心态对待每一项业务需求。",
-    forbidden: "表现出强烈的懊恼沮丧，或者含糊其辞说‘如果后面有机会可能还会再试一次’。",
+      "这一年的空窗主要用于全职备考，最终没有通过考试，现在我重新寻找工作。具体考试类别是：[待补充：真实类别]。目前希望应聘的方向是：[待补充：真实目标及相关经历]。后续是否继续考试、是否涉及工作时间调整，我的当前安排是：[待补充：已确定的计划及尚未决定的部分]。",
+    forbidden: "不要将考公自动改成考研，或编造极强自律、抗压成长及永不再考的承诺；可以说明仍在考虑的考试计划与实际时间条件。",
   },
   {
     id: "gap-family-care",
     category: "gap",
-    title: "照料家庭 / 个人健康调理恢复",
-    badge: "后顾之忧已除",
+    title: "照料家庭 / 个人健康休养",
+    badge: "尊重隐私边界",
     rawPain: "因为家中有长辈生病或自己做了个手术需要休养调理，在家待了几个月。",
-    hrConcern: "家庭或身体问题是否会持续影响工作出勤？精力能否跟上高强度要求？",
-    reframeAngle: "真诚明确地告知情况，核心关键在于‘事情已彻底稳妥解决，身体完全康复，无任何后顾之忧’。",
+    hrConcern: "招聘方可能了解可到岗时间与必要的工作安排；具体疾病、家庭细节无需作为能力判断或必须披露的内容。",
+    reframeAngle: "按实际选择家庭照护或个人休养，只说明愿意披露的岗位相关安排，不推定已康复、照护结束或可无条件投入。",
     quickScript:
-      "那段时间主要是因为家中长辈突发健康问题需要手术陪护，作为子女我必须承担起家庭责任。目前老人已经彻底康复，生活完全能自理，后顾之忧已经全部解决。在这期间我也一直关注着行业动态，现在个人的精力与时间可以百分之百无保留地投入到新团队的工作中。",
+      "这几个月主要用于[待补充：按实际选择家庭照护或个人休养]。与岗位有关的时间安排是：[待补充：可到岗时间、必要安排或仍待确认的事项]。更具体的健康和家庭细节，我希望保留隐私。",
     deepScript:
-      "前几个月家里有一段特殊的家庭照料期，我选择暂时放慢脚步陪护家人渡过难关。我很欣慰这段时间的付出让家庭恢复了平稳，目前所有健康问题已完全恢复常态，家庭支持非常充分。这段经历不仅强化了我的责任担当，也让我更加珍惜工作机会。目前我各方面状态都调整到了最佳，能够全神贯注、毫无牵挂地拥抱高强度的业务挑战。",
-    forbidden: "把家里的悲惨遭遇描述得过于繁复煽情，或者留下‘后续可能还会经常要跑医院’的疑虑。",
+      "过去几个月，我因[待补充：家庭照护或个人休养的实际情况，仅说明愿意披露的部分]暂未工作。当前与到岗、出勤有关的条件是：[待补充：已确定的安排及仍需确认的事项]。如有后续安排需要协调，我会在涉及岗位要求时具体说明，也希望了解团队能够提供的安排。健康及家庭的其他细节，我希望保留隐私。",
+    forbidden: "不要编造完全康复、家人可以自理、照护结束或无后顾之忧；可以保留隐私，也应如实沟通影响岗位安排的必要条件。",
   },
   {
     id: "gap-entrepreneurship",
     category: "gap",
     title: "创业折腾 / 自由职业 / 副业试错",
-    badge: "复合商业视角",
+    badge: "区分经历与计划",
     rawPain: "和朋友一起搞独立开发或开工作室，结果搞了半年入不敷出失败了，重新回来打工。",
-    hrConcern: "野心是不是太大不安分？在团队里会不会不服管？是不是拿公司当跳板积累资源？",
-    reframeAngle: "突出端到端商业视角、对成本和业务价值的敬畏，以及深刻理解团队协同的稀缺性与平台价值。",
+    hrConcern: "招聘方可能了解实际分工、当前是否仍有业务及其与新岗位的时间或利益关系；创业经历本身不能说明不服管理。",
+    reframeAngle: "保留半年与朋友共同尝试、入不敷出及重新求职的事实；实际分工、经营原因和后续业务安排分别核实，不自动补成商业能力。",
     quickScript:
-      "那段时间我和朋友尝试做了一款面向垂类市场的工具产品。这半年的创业试错虽然最终因获客成本过高未能持续，但让我从单纯的开发思维跳出来，完整经历了商业定位、成本控制和用户交付全流程。这段宝贵经历让我更加懂得如何站在老板和业务视角思考技术 ROI，也让我更渴望依托大平台的资源杠杆，在成熟的体系里打大胜仗。",
+      "我和朋友共同做了半年的业务尝试，期间入不敷出，目前重新求职。我实际负责的是：[待补充：真实分工]。原业务是否继续、与新工作的时间关系是：[待补充：真实安排或待确认事项]。",
     deepScript:
-      "这次创业尝试对我来说是一次极其珍贵的‘全景式商业洗礼’。过去做研发更多关注代码怎么写得优雅，而独立负责项目后，我深刻体会到了现金流、合规风控、跨角色协同以及平台基建的巨大价值。它极大地提升了我的大局观与危机意识。现在我深知自己的核心长板与热情在于大规模工程实现与架构落地，回归职场是我深思熟虑后的长线规划，我能比一般工程师更加主动地对业务最终结果负责。",
-    forbidden: "给人留下‘等我融到钱或者找到好点子我还要去创业’的印象，或者抱怨合作方坑了自己。",
+      "过去半年，我和朋友一起尝试开展业务，最终没有实现收支平衡，现在重新寻找工作。业务的具体内容、我的分工和已知的经营情况是：[待补充：真实情况]。关于原业务当前状态、是否仍有合作以及与新岗位的时间或利益关系，我的安排是：[待补充：已知情况及尚未确定的部分]。",
+    forbidden: "不要补造获客成本、全流程主导、商业能力提升或已彻底结束创业；如仍有合作或后续计划，按实际沟通时间安排与利益关系。",
   },
 ];
 
@@ -198,8 +199,8 @@ function normalizeScript(raw: unknown, defaultLabel: string): ScriptVersion {
     return {
       label: defaultLabel,
       applicableScene: "通用面试沟通场合",
-      script: "陈述事实，展现成熟职业素养。",
-      keyPoints: ["坦诚归因", "展现价值"],
+      script: "话术未生成，请按已知事实补充。",
+      keyPoints: [],
     };
   }
   const o = raw as Record<string, unknown>;
@@ -211,13 +212,13 @@ function normalizeScript(raw: unknown, defaultLabel: string): ScriptVersion {
   };
 }
 
-/** 清洗并验证 AI 生成的高情商重塑报告 */
+/** 清洗并验证 AI 生成的沟通参考报告 */
 export function normalizeRemedyResult(raw: unknown): ResignationGapRemedyResult | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
 
-  const title = typeof o.title === "string" ? o.title.trim().slice(0, 60) : "个人经历高情商重塑方案";
-  const punchline = typeof o.punchline === "string" ? o.punchline.trim().slice(0, 120) : "真诚是最大的必杀技，高情商是事实的正向着色。";
+  const title = typeof o.title === "string" ? o.title.trim().slice(0, 60) : "离职与空窗沟通参考";
+  const punchline = typeof o.punchline === "string" ? o.punchline.trim().slice(0, 120) : "按已知事实准备表达；未提供的信息保留待补充。";
 
   // HR 心理分析
   const hrRaw = (o.hr_mindset_analysis && typeof o.hr_mindset_analysis === "object" ? o.hr_mindset_analysis : {}) as Record<string, unknown>;
@@ -227,24 +228,24 @@ export function normalizeRemedyResult(raw: unknown): ResignationGapRemedyResult 
     whatHrWantsToHear:
       typeof hrRaw.what_hr_wants_to_hear === "string"
         ? hrRaw.what_hr_wants_to_hear.trim().slice(0, 200)
-        : "HR 期待听到你情绪稳定、复盘深刻，且对新岗位拥有真实且持久的投入度。",
+        : "可补充与岗位相关的事实；招聘方的实际关注点无法仅凭当前材料确定。",
   };
 
-  // 重塑底层四步公式
+  // 经历说明的四个要点
   const fRaw = (o.reframe_formula && typeof o.reframe_formula === "object" ? o.reframe_formula : {}) as Record<string, unknown>;
   const reframeFormula = {
     factAcknowledgment: typeof fRaw.fact_acknowledgment === "string" ? fRaw.fact_acknowledgment.trim().slice(0, 200) : "客观陈述事实，不粉饰不掩盖",
-    positiveAttribution: typeof fRaw.positive_attribution === "string" ? fRaw.positive_attribution.trim().slice(0, 200) : "归因于环境与职业选择，不埋怨他人",
-    growthAndValue: typeof fRaw.growth_and_value === "string" ? fRaw.growth_and_value.trim().slice(0, 200) : "突出空窗/离职期间的自我沉淀与赋能",
-    motivationAlignment: typeof fRaw.motivation_alignment === "string" ? fRaw.motivation_alignment.trim().slice(0, 200) : "将落脚点精准导向目标岗位的发展契机",
+    positiveAttribution: typeof fRaw.positive_attribution === "string" ? fRaw.positive_attribution.trim().slice(0, 200) : "按已知信息客观说明原因；未说明时保留待补充",
+    growthAndValue: typeof fRaw.growth_and_value === "string" ? fRaw.growth_and_value.trim().slice(0, 200) : "未提供相关行动或认识，需按真实情况补充或省略",
+    motivationAlignment: typeof fRaw.motivation_alignment === "string" ? fRaw.motivation_alignment.trim().slice(0, 200) : "只衔接已提供的岗位目标；未说明时保留待补充",
   };
 
   // 三套话术
   const scriptsRaw = (o.scripts && typeof o.scripts === "object" ? o.scripts : {}) as Record<string, unknown>;
   const scripts = {
-    concise: normalizeScript(scriptsRaw.concise, "四两拨千斤（精炼 30 秒版）"),
-    detailed: normalizeScript(scriptsRaw.detailed, "深度坦诚与正向赋能版（1 分钟版）"),
-    pivoting: normalizeScript(scriptsRaw.pivoting, "攻守兼备·话题导流版"),
+    concise: normalizeScript(scriptsRaw.concise, "精炼说明版（约 30 秒）"),
+    detailed: normalizeScript(scriptsRaw.detailed, "详细说明版（约 1 分钟）"),
+    pivoting: normalizeScript(scriptsRaw.pivoting, "岗位衔接版"),
   };
 
   // 确保至少有一套完整话术
@@ -262,7 +263,7 @@ export function normalizeRemedyResult(raw: unknown): ResignationGapRemedyResult 
       if (!question) continue;
       drills.push({
         question,
-        hrConcern: typeof drillObj.hr_concern === "string" ? drillObj.hr_concern.trim().slice(0, 150) : "考察反应与真实心态",
+        hrConcern: typeof drillObj.hr_concern === "string" ? drillObj.hr_concern.trim().slice(0, 150) : "招聘方的实际关注点无法仅凭当前材料确定",
         bestResponse: typeof drillObj.best_response === "string" ? drillObj.best_response.trim().slice(0, 400) : "",
       });
     }
@@ -278,64 +279,125 @@ export function normalizeRemedyResult(raw: unknown): ResignationGapRemedyResult 
     reframeFormula,
     scripts,
     drills,
-    forbiddenList: forbiddenList.length > 0 ? forbiddenList : ["切忌在面试中发泄对前司或前领导的负面情绪"],
-    closingTips: closingTips.length > 0 ? closingTips : ["表达时保持眼神交流与从容语速，体现情绪价值与专业素养"],
+    forbiddenList,
+    closingTips,
   };
 }
 
-function nonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+/** 新生成结果的上限；超限拒绝整份，避免截掉事实限定或待补充说明。 */
+export const REMEDY_OUTPUT_LIMITS = {
+  title: 60, punchline: 120, analysis: 200, formula: 200,
+  label: 40, scene: 100, script: 800, listItem: 100,
+  drillQuestion: 150, drillConcern: 150, drillResponse: 400,
+  adviceItem: 120, listItems: 5, drills: 5, forbiddenItems: 8,
+} as const;
+
+function boundedText(value: unknown, maxChars: number): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.trim().length <= maxChars && hasQuestionContent(value);
 }
 
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function nonEmptyStringList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.length > 0 && value.every(nonEmptyString);
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
 }
 
-/** 校验模型输出完整性并转换为展示结构。 */
+function boundedTextList(value: unknown, maxItems: number, maxChars: number, minItems = 1): value is string[] {
+  return Array.isArray(value) && value.length >= minItems && value.length <= maxItems &&
+    value.every((item) => boundedText(item, maxChars));
+}
+
+/** 新结果完整通过校验后才转换；历史清洗逻辑不替新报告丢项或截断。 */
 export function validateGeneratedRemedyResult(raw: unknown): ResignationGapRemedyResult | null {
-  if (!record(raw)) return null;
-  if (!nonEmptyString(raw.title) || !nonEmptyString(raw.punchline)) return null;
+  if (!record(raw) || !hasOnlyKeys(raw, [
+    "title", "punchline", "hr_mindset_analysis", "reframe_formula", "scripts", "drills", "forbidden_list", "closing_tips",
+  ])) return null;
+  const limits = REMEDY_OUTPUT_LIMITS;
+  if (!boundedText(raw.title, limits.title) || !boundedText(raw.punchline, limits.punchline)) return null;
 
   const mindset = raw.hr_mindset_analysis;
-  if (!record(mindset) || !nonEmptyStringList(mindset.core_concerns) || !nonEmptyStringList(mindset.risk_points) || !nonEmptyString(mindset.what_hr_wants_to_hear)) {
+  if (!record(mindset) || !hasOnlyKeys(mindset, ["core_concerns", "risk_points", "what_hr_wants_to_hear"]) ||
+    !boundedTextList(mindset.core_concerns, limits.listItems, limits.listItem, 0) ||
+    !boundedTextList(mindset.risk_points, limits.listItems, limits.listItem, 0) ||
+    !boundedText(mindset.what_hr_wants_to_hear, limits.analysis)) {
     return null;
   }
   const formula = raw.reframe_formula;
   if (
-    !record(formula) ||
-    !nonEmptyString(formula.fact_acknowledgment) ||
-    !nonEmptyString(formula.positive_attribution) ||
-    !nonEmptyString(formula.growth_and_value) ||
-    !nonEmptyString(formula.motivation_alignment)
+    !record(formula) || !hasOnlyKeys(formula, [
+      "fact_acknowledgment", "positive_attribution", "growth_and_value", "motivation_alignment",
+    ]) ||
+    !boundedText(formula.fact_acknowledgment, limits.formula) ||
+    !boundedText(formula.positive_attribution, limits.formula) ||
+    !boundedText(formula.growth_and_value, limits.formula) ||
+    !boundedText(formula.motivation_alignment, limits.formula)
   ) return null;
 
   const scripts = raw.scripts;
-  if (!record(scripts)) return null;
+  if (!record(scripts) || !hasOnlyKeys(scripts, ["concise", "detailed", "pivoting"])) return null;
   for (const key of ["concise", "detailed", "pivoting"] as const) {
     const script = scripts[key];
-    if (!record(script) || !nonEmptyString(script.label) || !nonEmptyString(script.applicable_scene) || !nonEmptyString(script.script) || !nonEmptyStringList(script.key_points)) {
+    if (!record(script) || !hasOnlyKeys(script, ["label", "applicable_scene", "script", "key_points"]) ||
+      !boundedText(script.label, limits.label) ||
+      !boundedText(script.applicable_scene, limits.scene) || !boundedText(script.script, limits.script) ||
+      !boundedTextList(script.key_points, limits.listItems, limits.listItem)) {
       return null;
     }
   }
 
-  if (!Array.isArray(raw.drills) || raw.drills.length === 0) return null;
+  if (!Array.isArray(raw.drills) || raw.drills.length > limits.drills) return null;
+  const drillQuestions = new Set<string>();
   for (const drill of raw.drills) {
-    if (!record(drill) || !nonEmptyString(drill.question) || !nonEmptyString(drill.hr_concern) || !nonEmptyString(drill.best_response)) return null;
+    if (!record(drill) || !hasOnlyKeys(drill, ["question", "hr_concern", "best_response"]) ||
+      !boundedText(drill.question, limits.drillQuestion) ||
+      !boundedText(drill.hr_concern, limits.drillConcern) || !boundedText(drill.best_response, limits.drillResponse)) return null;
+    const question = drill.question.trim();
+    if (!hasQuestionContent(question)) return null;
+    const questionKey = questionComparisonKey(question);
+    if (!questionKey || drillQuestions.has(questionKey)) return null;
+    drillQuestions.add(questionKey);
   }
-  if (!nonEmptyStringList(raw.forbidden_list) || !nonEmptyStringList(raw.closing_tips)) return null;
+  if (!boundedTextList(raw.forbidden_list, limits.forbiddenItems, limits.adviceItem, 0) ||
+    !boundedTextList(raw.closing_tips, limits.listItems, limits.adviceItem)) return null;
   return normalizeRemedyResult(raw);
 }
 
-/** 解析保存在数据库中的 JSON 字符串 */
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isStoredScript(value: unknown): value is ScriptVersion {
+  return record(value) && typeof value.label === "string" && typeof value.applicableScene === "string" &&
+    typeof value.script === "string" && isStringList(value.keyPoints);
+}
+
+function isStoredRemedyResult(value: unknown): value is ResignationGapRemedyResult {
+  if (!record(value) || typeof value.title !== "string" || typeof value.punchline !== "string") return false;
+  const mindset = value.hrMindsetAnalysis;
+  if (!record(mindset) || !isStringList(mindset.coreConcerns) || !isStringList(mindset.riskPoints) ||
+    typeof mindset.whatHrWantsToHear !== "string") return false;
+  const formula = value.reframeFormula;
+  if (!record(formula) || !["factAcknowledgment", "positiveAttribution", "growthAndValue", "motivationAlignment"]
+    .every((key) => typeof formula[key] === "string")) return false;
+  const scripts = value.scripts;
+  if (!record(scripts) || !isStoredScript(scripts.concise) || !isStoredScript(scripts.detailed) ||
+    !isStoredScript(scripts.pivoting)) return false;
+  if (![scripts.concise, scripts.detailed, scripts.pivoting].some((script) => script.script.trim())) return false;
+  if (!Array.isArray(value.drills) || !value.drills.every((drill) => record(drill) &&
+    typeof drill.question === "string" && typeof drill.hrConcern === "string" && typeof drill.bestResponse === "string")) return false;
+  return isStringList(value.forbiddenList) && isStringList(value.closingTips);
+}
+
+/**
+ * 历史报告按实际展示字段校验，损坏结构返回 null 供页面展示恢复入口。
+ * 不套用新生成结果的篇幅上限，不截断旧话术，也不以默认建议补造缺失材料。
+ */
 export function parseRemedyResult(json: string): ResignationGapRemedyResult | null {
   try {
-    const parsed = JSON.parse(json) as ResignationGapRemedyResult;
-    if (!parsed || typeof parsed !== "object" || !parsed.scripts) return null;
-    return parsed;
+    const parsed: unknown = JSON.parse(json);
+    return isStoredRemedyResult(parsed) ? parsed : null;
   } catch {
     return null;
   }

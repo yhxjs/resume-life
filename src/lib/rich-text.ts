@@ -331,12 +331,15 @@ export function richTextToMarkdown(html: string): string {
   return nodesToMarkdown(nodes);
 }
 
+/** ASCII 星号/连字符须有空白分隔；点号编号仅认空白或既有中文正文，保留版本与域名。 */
+export function stripLeadingListMarker(text: string): string {
+  // 判断点号后的可见边界时跨过强调标签，不能把 <strong>3.</strong>x 当作序号。
+  return text.replace(/^((?:<[^>]+>)*)(?:[•·・●]|[*-](?=(?:<\/(?:strong|span)>)*(?:\s|$))|\d+\.(?=(?:<\/?(?:strong|span)\b[^>]*>)*(?:\s|$|\p{Script=Han}))|\d+、|\d{1,2}\))\s*/iu, "$1").trim();
+}
+
 /** 增强版多行项目描述拆分：支持换行、富文本标签保护与行自闭合 */
 export function splitRichTextToLines(text: string): string[] {
   if (!text) return [];
-  const normalized = text
-    .replaceAll("\\r\\n", "\n")
-    .replaceAll("\\n", "\n");
   const splitNodes = (nodes: RichTextNode[]): RichTextNode[][] => {
     const lines: RichTextNode[][] = [[]];
     for (const node of nodes) {
@@ -355,11 +358,11 @@ export function splitRichTextToLines(text: string): string[] {
     return lines;
   };
 
-  return splitNodes(parseRichTextToNodes(normalized))
+  // 字符串已经过 JSON 解析；只拆真实换行或结构节点，保留路径、正则中的反斜杠。
+  return splitNodes(parseRichTextToNodes(text))
     .map((line) => nodesToHtml(line))
     .map((line) => line.trim())
-    // 剔除可能存在的前导列表符号（例如 •, ·, -, *, 1. 等，同时允许其前后有少量标签包裹）
-    .map((line) => line.replace(/^((?:<[^>]+>)*)(?:[•·・●\-\*]|\d+[\.、])\s*/i, "$1").trim())
+    .map(stripLeadingListMarker)
     .filter(Boolean)
     .map((line) => sanitizeRichText(line));
 }
@@ -369,15 +372,20 @@ export function hasHtmlEntity(text: string): boolean {
   return /&(?:amp|lt|gt|quot|#39|nbsp);/.test(text);
 }
 
-/** 将原始文本（如历史纯文本数据）格式化为富文本编辑器所需的 HTML，保留换行 */
+/** 已知为纯文本的输入：无条件转义，标签和实体样式的正文也必须逐字保留。 */
+export function escapePlainTextToRichHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\r\n?|\n/g, "<br>");
+}
+
+/** 将历史纯文本或已有富文本格式化为编辑器 HTML，保留换行 */
 export function plainTextToRichHtml(val: string): string {
   if (!val) return "";
   // 已有标签先清洗；已转义的纯文本保持原样，避免编辑器回填时叠加实体。
   if (/<[a-z][\s\S]*>/i.test(val)) return sanitizeRichText(val);
   if (hasHtmlEntity(val)) return val.replace(/\r\n?|\n/g, "<br>");
-  return val
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\r\n?|\n/g, "<br>");
+  return escapePlainTextToRichHtml(val);
 }

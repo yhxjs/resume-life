@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { PreparationReturnLink } from "@/components/application/preparation-return-link";
 import { useParams } from "next/navigation";
@@ -33,12 +33,16 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
   const preparationHref = usePreparationHref();
   const [viewMode, setViewMode] = useState<"review" | "chat">("review");
   const [reportTab, setReportTab] = useState<ReportTab>("candidate");
+  const reviewNavigation = useRef<HTMLDivElement>(null);
   const {
-    data, setData, loadError, retryLoad, answer, setAnswer, busy, error,
+    data, setData, loadError, retryLoad, answer, setAnswer, busy, confirmingFinish, error,
+    readRecovery, retryResultRead,
     remediating, remedialError, advancing, advanceError,
+    advanceReadRecovery, retryAdvanceRead,
     showReverseChoiceModal,
     showReverseInputModal, setShowReverseInputModal,
     reverseBusy, reverseError, answerTypewriter, current, answeredCount,
+    reverseReadRecovery, retryReverseRead, reverseConflict,
     setTurnNotebook, updateTurnData, submitAnswer, generateReportDirectly,
     finish, handleStartReverse, handleSkipReverse, handleSubmitReverse,
     startRemediation, advance,
@@ -195,6 +199,7 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
         setReportTab={setReportTab}
         focusLabels={focusLabels}
         remediating={remediating}
+        remediationDisabled={advancing || Boolean(advanceReadRecovery)}
         remedialError={remedialError}
         onStartRemediation={startRemediation}
         onEvaluatorReportGenerated={(newReport) => {
@@ -217,18 +222,20 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
         nextRoundDef && !nextCreated ? (
           <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-line bg-card p-5 shadow-card-subtle">
             <div className="min-w-0 space-y-1">
-              <p className="font-serif text-sm font-bold text-ink">本轮面试完成，{nextRoundDef.label}已就绪！</p>
+              <p className="font-serif text-sm font-bold text-ink">{advanceReadRecovery ? "下一轮创建状态待确认" : `本轮面试完成，可进入${nextRoundDef.label}`}</p>
               <p className="text-xs text-muted leading-relaxed">
-                {nextRoundDef.desc} · 前轮报告已自动呈报下一位考官，将换角度深挖短板
+                {nextRoundDef.desc} · 下一轮模拟练习会参考前轮报告，调整提问侧重点
               </p>
             </div>
             <button
               type="button"
               className={btnPrimary}
-              onClick={advance}
-              disabled={advancing}
+              onClick={advanceReadRecovery ? retryAdvanceRead : advance}
+              disabled={advancing || remediating}
             >
-              {advancing ? "考官正在准备第一题…" : `进入 ${nextRoundDef.label}`}
+              {advanceReadRecovery
+                ? advancing ? "正在读取系列状态…" : "重新读取系列状态"
+                : advancing ? "考官正在准备第一题…" : `进入 ${nextRoundDef.label}`}
             </button>
           </div>
         ) : (
@@ -239,7 +246,7 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
               </p>
               <p className="text-xs text-muted">
                 {data.series_status === "finished"
-                  ? "跨轮综合评审与录用建议已生成，可随时查看。"
+                  ? "跨轮练习总评已生成，可随时查看；结论仅作模拟参考。"
                   : !nextRoundDef
                     ? "三轮报告已齐备，点击下方生成跨轮总评。"
                     : "下一轮的状态与动作见总览页。"}
@@ -251,14 +258,14 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
           </div>
         )
       )}
-      {advanceError && <p className={`mt-2 text-sm ${textErr}`}>{advanceError}</p>}
+      {advanceError && <p role="alert" className={`mt-2 text-sm wrap-anywhere ${textErr}`}>{advanceError}</p>}
 
-      {/* 复盘模式：题号导航条 + 逐题并排卡片 */}
-      {isReviewMode ? (
-        <div className="space-y-6">
+      {/* 切换实况只隐藏复盘，保留草稿、所选版本及在途请求，避免重新挂载后重复调用。 */}
+      {isFinished && (
+        <div hidden={!isReviewMode} className="space-y-6">
           {/* 题号快速定位条 */}
           {data.turns.length > 0 && (
-            <div className="sticky top-16 z-20 flex flex-wrap items-center gap-2 rounded-2xl border border-line bg-card/95 p-3.5 backdrop-blur-md shadow-card-subtle">
+            <div ref={reviewNavigation} role="navigation" aria-label="复盘题目导航" className="sticky top-16 z-20 flex flex-wrap items-center gap-2 rounded-2xl border border-line bg-card/95 p-3.5 backdrop-blur-md shadow-card-subtle">
               <span className="font-serif text-xs font-bold text-muted mr-1">快速跳题：</span>
               {data.turns.map((t) => {
                 let score = null;
@@ -270,7 +277,15 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
                     key={t.id}
                     type="button"
                     onClick={() => {
-                      document.getElementById(`turn-${t.id}`)?.scrollIntoView({ behavior: motionSafeScrollBehavior(), block: "start" });
+                      const target = document.getElementById(`turn-${t.id}`);
+                      const navigation = reviewNavigation.current;
+                      if (!target || !navigation) return;
+                      // 手机跳题栏可能换成多行，实时测量以免题头被吸顶导航遮挡。
+                      const stickyTop = Number.parseFloat(window.getComputedStyle(navigation).top) || 0;
+                      window.scrollTo({
+                        top: target.getBoundingClientRect().top + window.scrollY - stickyTop - navigation.getBoundingClientRect().height - 16,
+                        behavior: motionSafeScrollBehavior(),
+                      });
                     }}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-xs text-ink transition-all hover:border-primary hover:text-primary"
                   >
@@ -310,13 +325,14 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
             )}
           </div>
         </div>
-      ) : (
+      )}
+      {!isReviewMode && (
         /* 原有时间线对话流模式 */
         <div className="space-y-4">
           {data.turns.map((t) => (
             <div key={t.id} className="space-y-2">
               <div className="max-w-[92%] rounded-2xl rounded-tl-sm border border-line bg-surface/50 p-4 shadow-2xs">
-                <div className="flex items-center justify-between gap-3 border-b border-line/60 pb-2">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line/60 pb-2">
                   <p className="font-mono text-xs font-bold text-primary">
                     面试官 · 第 {t.idx} 题{t.kind === "followup" ? "（追问）" : ""}
                   </p>
@@ -328,7 +344,7 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
                     onChanged={(id) => setTurnNotebook(t.id, id)}
                   />
                 </div>
-                <p className="mt-2 font-serif text-[15px] font-bold text-ink leading-relaxed whitespace-pre-wrap">
+                <p className="mt-2 font-serif text-[15px] font-bold text-ink leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
                   {t.question}
                 </p>
               </div>
@@ -341,6 +357,7 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
                       {t.answer}
                     </p>
                   </div>
+                  {t.scores_error && <p role="alert" className={`ml-4 text-sm ${textErr}`}>{t.scores_error}</p>}
                   {t.scores && (
                     <div className="ml-4 flex flex-wrap items-center gap-1.5 pt-1">
                       <span className="text-xs text-muted font-serif">本题评分：</span>
@@ -381,6 +398,9 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
         setAnswer={setAnswer}
         busy={busy}
         error={error}
+        confirmingFinish={confirmingFinish}
+        readRecovery={readRecovery}
+        onRetryRead={retryResultRead}
         answeredCount={answeredCount}
         displayedText={answerTypewriter.displayedText}
         isTyping={answerTypewriter.isTyping}
@@ -397,13 +417,13 @@ function InterviewDetail({ interviewId }: { interviewId: string }) {
         busy={busy}
         reverseBusy={reverseBusy}
         reverseError={reverseError}
+        reverseReadRecovery={reverseReadRecovery}
+        reverseConflict={reverseConflict}
+        onRetryReverseRead={retryReverseRead}
         onSkipChoice={handleSkipReverse}
         onStartChoice={handleStartReverse}
         onCloseInput={() => setShowReverseInputModal(false)}
-        onGiveUpInput={() => {
-          setShowReverseInputModal(false);
-          generateReportDirectly();
-        }}
+        onGiveUpInput={handleSkipReverse}
         onSubmitReverse={handleSubmitReverse}
       />
     </div>

@@ -72,7 +72,7 @@ test("投递分页追加、故障重试与写后列表和统计刷新相互独�
   await expect.poll(() => api.applicationListRequests.length).toBe(5);
   expect(api.applicationStatsRequests).toBe(3);
   await expect(page.getByText(/合成列表失败/)).toBeVisible();
-  await expect(page.getByText("合成公司 52", { exact: true })).toBeVisible();
+  await expect(page.getByText("合成公司 52", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "重试加载", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "重试加载", exact: true }).click();
@@ -118,7 +118,7 @@ function newPagedListState(): PagedListState {
 
 /**
  * 四个列表页共用的分页桩：首批失败一次、续页失败一次、筛选替换失败一次，之后均成功。
- * `matched` 命中即视为「筛选后的新首页」——用于验证筛选失败不会丢弃已有列表。
+ * `matched` 命中即视为「筛选后的新首页」——筛选失败不得展示旧查询结果。
  */
 async function fulfillPagedList(
   route: Route,
@@ -172,6 +172,9 @@ function notebookEntry(id: number, question: string) {
     scores: null,
     created_at: "2026-09-16T00:00:00.000Z",
     updated_at: "2026-09-16T00:00:00.000Z",
+    review_card_id: null,
+    review_mastery: null,
+    next_review_date: null,
   };
 }
 
@@ -290,9 +293,9 @@ const PAGED_PAGES: PagedPageCase[] = [
   },
 ];
 
-// 同一套分页竞态场景逐页跑：首批失败、续页失败、筛选替换失败，三处都必须可重试且不丢弃已有条目
+// 首批失败、续页失败、筛选替换失败均可重试；仅续页失败保留当前查询已加载的条目。
 for (const pageCase of PAGED_PAGES) {
-  test(`${pageCase.path} 首批、续页与筛选替换失败后均可重试且不丢弃已有条目`, async ({ page }) => {
+  test(`${pageCase.path} 首批与筛选失败不展示旧数据，续页失败保留当前结果`, async ({ page }) => {
     await mockApi(page);
     const state = newPagedListState();
     await pageCase.install(page, state);
@@ -318,11 +321,13 @@ for (const pageCase of PAGED_PAGES) {
     await expect(pageCase.locate(page, pageCase.moreItem)).toBeVisible();
     await expect(pageCase.countItems(page)).toHaveCount(3);
 
-    // 筛选替换失败：报错但保留已有三条
+    // 筛选替换失败：报错且不混入上一查询的三条记录
     await pageCase.changeFilter(page);
     await expect(page.getByText(/合成筛选失败/)).toBeVisible();
-    await expect(pageCase.locate(page, pageCase.firstItem)).toBeVisible();
-    await expect(pageCase.countItems(page)).toHaveCount(3);
+    await expect(pageCase.locate(page, pageCase.firstItem)).toHaveCount(0);
+    await expect(pageCase.locate(page, pageCase.secondItem)).toHaveCount(0);
+    await expect(pageCase.locate(page, pageCase.moreItem)).toHaveCount(0);
+    await expect(pageCase.countItems(page)).toHaveCount(0);
 
     // 筛选重试成功：整列替换为新结果
     await page.getByRole("button", { name: "重试加载", exact: true }).click();

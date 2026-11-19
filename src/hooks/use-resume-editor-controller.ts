@@ -26,6 +26,8 @@ type ResumeData = {
   addedKey?: string;
 };
 
+type EditorSession = { id: string; queue: ResumeSaveQueue; controller: AbortController };
+
 function shouldIgnoreMutationError(error: unknown, mounted: boolean) {
   return !mounted || isAbortError(error);
 }
@@ -62,6 +64,8 @@ export function useResumeEditorController(id: string) {
   const templateMutationRef = useRef(0);
   const styleMutationRef = useRef(0);
   const queueRef = useRef<ResumeSaveQueue | null>(null);
+  const editorSessionRef = useRef<EditorSession | null>(null);
+  const moduleDeletionRef = useRef<{ session: EditorSession } | null>(null);
   const mountedRef = useRef(false);
   const [saveError, setSaveError] = useState("");
   const [storageError, setStorageError] = useState(false);
@@ -90,6 +94,8 @@ export function useResumeEditorController(id: string) {
     mountedRef.current = true;
     const queue = getResumeSaveQueue(id);
     queueRef.current = queue;
+    const session: EditorSession = { id, queue, controller: new AbortController() };
+    editorSessionRef.current = session;
     const unsubscribe = queue.subscribe((state) => {
       setStatus(state.status);
       setSaveError(state.error);
@@ -143,6 +149,9 @@ export function useResumeEditorController(id: string) {
     return () => {
       cancelled = true;
       mountedRef.current = false;
+      session.controller.abort();
+      if (editorSessionRef.current === session) editorSessionRef.current = null;
+      if (moduleDeletionRef.current?.session === session) moduleDeletionRef.current = null;
       unsubscribe();
       window.removeEventListener("pagehide", flush);
       window.removeEventListener("online", retry);
@@ -218,24 +227,34 @@ export function useResumeEditorController(id: string) {
   }
 
   async function removeModule(key: string) {
-    const mod = modules?.find((m) => m.key === key);
-    if (!modules || !mod) return;
-    const idx = modules.findIndex((m) => m.key === key);
-    const ok = await confirmDialog({
-      title: "删除模块",
-      message: `确定删除「${mod.label}」模块吗？该模块已填写的内容将一并删除。`,
-      danger: true,
-    });
-    if (!ok) return;
+    const session = editorSessionRef.current;
+    const mod = modulesRef.current?.find((m) => m.key === key);
+    if (!mountedRef.current || !session || session.id !== id || !mod || moduleDeletionRef.current) return;
+    const command = { session };
+    moduleDeletionRef.current = command;
+    const isCurrent = () => editorSessionRef.current === session && moduleDeletionRef.current === command && !session.controller.signal.aborted;
     try {
-      const updated = await queueRef.current!.mutate({ removeModule: key }, applyUpdated);
+      const ok = await confirmDialog({
+        title: "删除模块",
+        message: `确定删除「${mod.label}」模块吗？该模块已填写的内容将一并删除。`,
+        danger: true,
+        signal: session.controller.signal,
+      });
+      if (!ok || !isCurrent()) return;
+      const idx = modulesRef.current?.findIndex((m) => m.key === key) ?? -1;
+      if (idx < 0) return;
+      // 已确认的写入继续由共享队列排空；页面离开仅取消本地确认与结果应用。
+      const updated = await session.queue.mutate({ removeModule: key }, (document) => {
+        if (isCurrent()) applyUpdated(document);
+      });
+      if (!isCurrent()) return;
       const next = updated.modules;
-      if (activeKey === key) {
-        setActiveKey(next[Math.min(idx, next.length - 1)]?.key ?? "");
-      }
+      setActiveKey((current) => current === key ? next[Math.min(idx, next.length - 1)]?.key ?? "" : current);
     } catch (err) {
-      if (shouldIgnoreMutationError(err, mountedRef.current)) return;
-      await alertDialog({ title: "删除模块失败", message: errorMessage(err) });
+      if (!isCurrent() || shouldIgnoreMutationError(err, mountedRef.current)) return;
+      await alertDialog({ title: "删除模块失败", message: errorMessage(err), signal: session.controller.signal });
+    } finally {
+      if (moduleDeletionRef.current === command) moduleDeletionRef.current = null;
     }
   }
 

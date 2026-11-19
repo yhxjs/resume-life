@@ -29,6 +29,11 @@ export function BackupRestoreSection({
   validating,
   preserveAiConfig,
   restoring,
+  locked,
+  confirming,
+  unknown,
+  allowingRetry,
+  onAllowRetry,
   restoreFeedback,
   onImportPasswordChange,
   onFileSelect,
@@ -44,6 +49,11 @@ export function BackupRestoreSection({
   validating: boolean;
   preserveAiConfig: boolean;
   restoring: boolean;
+  locked: boolean;
+  confirming: boolean;
+  unknown: boolean;
+  allowingRetry: boolean;
+  onAllowRetry: () => void;
   restoreFeedback: Feedback | null;
   onImportPasswordChange: (password: string) => void;
   onFileSelect: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -71,7 +81,7 @@ export function BackupRestoreSection({
           autoComplete="off"
           value={importPassword}
           onChange={(event) => onImportPasswordChange(event.target.value)}
-          disabled={restoring}
+          disabled={locked}
         />
       </label>
 
@@ -81,10 +91,11 @@ export function BackupRestoreSection({
           aria-label="备份文件"
           ref={fileInputRef}
           onChange={onFileSelect}
+          disabled={locked}
           accept={`${BACKUP_EXTENSION},${BACKUP_MEDIA_TYPE}`}
           className="hidden"
         />
-        <button type="button" className={btnGhost} onClick={onChooseFile} disabled={restoring}>
+        <button type="button" className={btnGhost} onClick={onChooseFile} disabled={locked}>
           {selectedFile ? "更换备份文件" : "选择备份文件 (.rlbackup)"}
         </button>
         {selectedFile && (
@@ -132,7 +143,7 @@ export function BackupRestoreSection({
                 type="checkbox"
                 checked={preserveAiConfig}
                 onChange={(event) => onPreserveAiConfigChange(event.target.checked)}
-                disabled={restoring}
+                disabled={locked}
                 className="mt-0.5 h-4 w-4 rounded border-line text-primary focus:ring-primary/20"
               />
               <div>
@@ -146,12 +157,14 @@ export function BackupRestoreSection({
 
           <div className="pt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-[11px] text-danger font-medium">点击后将二次确认，再完全覆盖现有业务数据。</span>
-            <button type="button" className={btnDangerSolid} onClick={onRestore} disabled={restoring}>
+            <button type="button" className={btnDangerSolid} onClick={onRestore} disabled={locked && !confirming}>
               {restoring ? "正在恢复并覆盖…" : "完全覆盖并恢复系统数据"}
             </button>
           </div>
         </div>
       )}
+
+      {unknown && <button type="button" className={btnGhost} onClick={onAllowRetry} aria-busy={allowingRetry}>核对后允许再次恢复</button>}
 
       {restoreFeedback && (
         <div

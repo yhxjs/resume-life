@@ -137,6 +137,7 @@ function syntheticInterview(finished: boolean, reverseCompleted = false) {
 
 const syntheticSalaryNegotiation = {
   id: 9005,
+  revision: "a".repeat(64),
   target_company_tier: "top_tech",
   target_role: "高级前端工程师",
   expected_salary: "35k * 15",
@@ -343,7 +344,7 @@ test("reverse interview choice and input dialogs follow their real flow", async 
     });
   });
   await page.goto("/interviews/9004");
-  await page.locator('textarea[placeholder^="建议采用分点阐述"]').fill("合成回答");
+  await page.getByRole("textbox", { name: "以候选人身份组织作答：", exact: true }).fill("合成回答");
   await page.getByRole("button", { name: "提交回答", exact: true }).click();
 
   const choice = page.getByRole("dialog", { name: "主提问环节已全部完成！", exact: true });
@@ -395,8 +396,12 @@ test("salary finalize dialog cannot close while report generation is pending", a
     await finalizeRequest.promise;
     await route.fulfill({
       json: {
+        id: syntheticSalaryNegotiation.id,
+        base_revision: syntheticSalaryNegotiation.revision,
+        revision: "b".repeat(64),
         status: "finished",
         final_package: "34k * 15",
+        finished_at: "2026-09-16T00:00:00Z",
         report: {
           final_package_summary: "34k * 15",
           persuasion_grade: "A",
@@ -410,27 +415,27 @@ test("salary finalize dialog cannot close while report generation is pending", a
     });
   });
   await page.goto("/tools/salary/9005");
-  const trigger = page.getByRole("button", { name: "达成共识 / 结束复盘", exact: true });
+  const trigger = page.getByRole("button", { name: "结束模拟 / 生成复盘", exact: true });
   await trigger.click();
-  const dialog = page.getByRole("dialog", { name: "达成一致 · 结束并生成复盘报告", exact: true });
-  const initial = dialog.getByRole("textbox", { name: "最终确认表态（可选）", exact: true });
+  const dialog = page.getByRole("dialog", { name: "结束模拟并生成复盘报告", exact: true });
+  const initial = dialog.getByRole("textbox", { name: "结束补充（可选）", exact: true });
   await expect(initial).toBeFocused();
   await checkFocusLoop(page, dialog);
-  await dialog.getByRole("heading", { name: "达成一致 · 结束并生成复盘报告", exact: true }).click();
+  await dialog.getByRole("heading", { name: "结束模拟并生成复盘报告", exact: true }).click();
   await expect(dialog).toBeVisible();
   await clickBackdrop(dialog);
   await expect(dialog).toBeHidden();
   await expect(trigger).toBeFocused();
 
   await trigger.click();
-  await dialog.getByRole("button", { name: "确认封板并生成报告", exact: true }).click();
+  await dialog.getByRole("button", { name: "结束模拟并生成报告", exact: true }).click();
   await expect(dialog.getByRole("button", { name: "正在生成复盘报告…", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await clickBackdrop(dialog);
   await expect(dialog).toBeVisible();
   finalizeRequest.release();
   await expect(dialog).toBeHidden();
-  await expect(page.getByText("🏆 薪酬谈判终局复盘报告", { exact: true })).toBeVisible();
+  await expect(page.getByText("薪酬谈判模拟复盘报告", { exact: true })).toBeVisible();
   expect(runtimeErrors).toEqual([]);
 });
 
@@ -446,13 +451,12 @@ test("defense drill drawer is a named dialog with contained focus", async ({ pag
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "即时防御演练场", exact: true });
   await expect(dialog.getByRole("button", { name: "关闭", exact: true })).toBeFocused();
-  const box = await dialog.boundingBox();
-  expect(box).not.toBeNull();
-  if (!box) throw new Error("对话框没有可测量的布局盒");
-  expect(box.x).toBeGreaterThanOrEqual(0);
-  expect(box.y).toBeGreaterThanOrEqual(0);
-  expect(box.x + box.width).toBeLessThanOrEqual(390);
-  expect(box.y + box.height).toBeLessThanOrEqual(844);
+  await expect(dialog).toHaveCSS("position", "fixed");
+  // 初始焦点可早于 dialog-in 动画结束；等待实际布局进入视口，不采样动画中间帧。
+  await expect.poll(async () => {
+    const box = await dialog.boundingBox();
+    return box !== null && box.x >= 0 && box.y >= 0 && box.x + box.width <= 390 && box.y + box.height <= 844;
+  }).toBe(true);
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   expect(await dialog.locator("button").evaluateAll((buttons) =>
     buttons.filter((button) => !(
@@ -469,7 +473,8 @@ test("defense drill drawer is a named dialog with contained focus", async ({ pag
 
   await page.setViewportSize({ width: 1024, height: 844 });
   await trigger.click();
-  await dialog.getByText("被抓包的原句", { exact: true }).click();
+  await expect(dialog).toHaveCSS("position", "fixed");
+  await dialog.getByText("引用预览", { exact: true }).click();
   await expect(dialog).toBeVisible();
   await clickBackdrop(dialog);
   await expect(dialog).toBeHidden();
@@ -591,6 +596,7 @@ for (const [timezoneId, original, displayed] of [
         id: 9002, company: "合成公司", role: "测试岗位", salary_range: "", stage: "interested", resume_id: null,
         jd: "", interview_id: null, interview_series_id: null, next_interview_at: original, notes: "",
         created_at: "2026-09-16T00:00:00Z", updated_at: "2026-09-16T00:00:00Z",
+        interviews: [], stage_history: [], preparation_tasks: [],
       };
       const api = await mockApi(page, [application]);
       await page.goto("/applications");
@@ -601,6 +607,9 @@ for (const [timezoneId, original, displayed] of [
       await dialog.getByRole("textbox", { name: /投递备注/ }).fill("只修改备注");
       await dialog.getByRole("button", { name: "更新卡片", exact: true }).click();
       await expect.poll(() => api.applicationWrites[0]?.next_interview_at).toBe(original);
+      await expect(dialog).toBeHidden();
+      expect(api.applicationWrites).toHaveLength(1);
+      expect(api.applications()[0]).toMatchObject({ id: application.id, next_interview_at: original, notes: "只修改备注" });
     });
   });
 }

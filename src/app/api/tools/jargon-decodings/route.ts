@@ -3,9 +3,9 @@ import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction, now } from "@/lib/db";
-import { extractJson, LlmConfigError } from "@/lib/llm";
-import { normalizeJargonDecoderResult } from "@/lib/jargon-decoder";
-import { JARGON_DECODER_SYSTEM_PROMPT } from "@/lib/jargon-decoder-llm";
+import { LlmConfigError } from "@/lib/llm";
+import { validateGeneratedJargonDecoderResult } from "@/lib/jargon-decoder";
+import { buildJargonDecoderMessages, JARGON_DECODER_SYSTEM_PROMPT } from "@/lib/jargon-decoder-llm";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
 import { createCursorPage, parsePaginationParams } from "@/lib/cursor-pagination";
@@ -40,31 +40,23 @@ async function handlePost(req: Request) {
       "parse",
       { feature: LLM_FEATURES.jargonDecode },
       JARGON_DECODER_SYSTEM_PROMPT,
-      [
-        {
-          role: "user",
-          parts: [
-            { trust: "untrusted", tag: "source_text_to_decode", text },
-            { trust: "trusted", text: "\n\n请启动暗号解码器，对上述文本进行深度穿透分析。" },
-          ],
-        },
-      ],
-      { signal: req.signal, requireJson: true }
+      buildJargonDecoderMessages(text),
+      { signal: req.signal, requireJson: "strict" }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);
     return NextResponse.json({ error: message }, { status: err instanceof ModelInputBudgetError ? 413 : 502 });
   }
 
-  let result: ReturnType<typeof normalizeJargonDecoderResult> = null;
+  let result: ReturnType<typeof validateGeneratedJargonDecoderResult> = null;
   try {
-    result = normalizeJargonDecoderResult(extractJson<unknown>(raw));
+    result = validateGeneratedJargonDecoderResult(JSON.parse(raw), text);
   } catch {
     // 无效 JSON 或结构不完整时由下方统一返回 502。
   }
   if (!result) {
     return NextResponse.json(
-      { error: "AI 解码结果异常：未成功识别出暗号或结构不完整，请稍后重试" },
+      { error: "AI 解码结果异常：结构不完整或线索缺少原文依据，请重试" },
       { status: 502 }
     );
   }

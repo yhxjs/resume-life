@@ -22,13 +22,23 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
-      - name: Generate SBOM and checksums
+      - name: Verify dependency patch and audited exception
+        run: npm run audit:dependencies -- --output-dir artifacts/dependency-audit
+      - name: Generate SBOM from lockfile
         shell: bash
         run: |
           mkdir -p artifacts
-          npm sbom --sbom-format cyclonedx > artifacts/resume-life-sbom.cdx.json
-          sha256sum package-lock.json artifacts/resume-life-sbom.cdx.json > artifacts/supply-chain.sha256
+          npm --version
+          npm sbom --sbom-format cyclonedx --package-lock-only > artifacts/resume-life-sbom.cdx.json
+          node --input-type=module -e 'import { readFileSync } from "node:fs"; const sbom = JSON.parse(readFileSync("artifacts/resume-life-sbom.cdx.json", "utf8")); if (sbom.bomFormat !== "CycloneDX" || !Array.isArray(sbom.components)) throw new Error("Generated SBOM is not a valid CycloneDX component document");'
+      - name: Generate supply-chain checksums
+        shell: bash
+        run: |
+          test -s artifacts/resume-life-sbom.cdx.json
+          test -s artifacts/dependency-audit/picomatch-security.json
+          sha256sum -- package-lock.json .github/dependency-audit-policy.json scripts/patch-picomatch.mjs scripts/audit-dependencies.mjs artifacts/resume-life-sbom.cdx.json artifacts/dependency-audit/picomatch-security.json > artifacts/supply-chain.sha256
       - name: Upload supply chain evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: supply-chain-evidence
@@ -47,10 +57,8 @@ jobs:
           path: coverage/lcov.info
       - name: Page coverage metric
         run: npm run check:page-coverage
-      - run: npm audit --omit=dev --audit-level=moderate
-      # dev 依赖在 CI 中同样会被执行（playwright / vitest / eslint / tsc），
-      # 因此完整依赖链也必须通过 high 门槛。
-      - run: npm audit --audit-level=high
+      # audit:dependencies keeps the raw production/all reports and preserves
+      # moderate/high thresholds; only the reviewed, verified patch is excepted.
 
   # 制品证明只在受信任的默认分支推送中执行，普通 PR 只需要读权限即可完成检查。
   attest:
@@ -83,6 +91,14 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - name: Verify dependency patch and audited exception
+        run: npm run audit:dependencies -- --output-dir artifacts/dependency-audit
+      - name: Upload Windows dependency evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-dependency-evidence
+          path: artifacts/dependency-audit/
       - run: npm run setup:ocr
       - run: npx playwright install chromium
       - run: npm run test:coverage

@@ -15,11 +15,12 @@ export function ProjectSummaryReview({ proposal, selectedKeys, onToggleAdoption 
   selectedKeys: SummaryUnitKey[];
   onToggleAdoption: (key: SummaryUnitKey) => void;
 }) {
+  const selectedCount = proposal.comparison.filter((change) => selectedKeys.includes(change.key)).length;
   return (
     <section role="region" aria-label="本次总结差异" className="border-y border-line py-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-ink">本次总结差异</h2>
-        <span className="text-xs text-muted">已采纳 {selectedKeys.length} / {proposal.comparison.length} 段</span>
+        <span className="text-xs text-muted">已采纳 {selectedCount} / {proposal.comparison.length} 段</span>
       </div>
       {proposal.materialChanges.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
@@ -32,7 +33,7 @@ export function ProjectSummaryReview({ proposal, selectedKeys, onToggleAdoption 
         </div>
       )}
       {proposal.comparison.length === 0 ? (
-        <p className="text-xs text-muted">新稿与当前总结内容一致。</p>
+        <p className="text-xs text-muted">新稿与当前草稿内容一致。</p>
       ) : (
         <div className="divide-y divide-line border-t border-line">
           {proposal.comparison.map((change) => {
@@ -58,7 +59,7 @@ export function ProjectSummaryReview({ proposal, selectedKeys, onToggleAdoption 
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <div className="min-w-0">
-                    <span className="text-[11px] font-medium text-muted">当前档案</span>
+                    <span className="text-[11px] font-medium text-muted">当前草稿</span>
                     <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-ink">{change.previous || "（空）"}</p>
                   </div>
                   <div className="min-w-0">

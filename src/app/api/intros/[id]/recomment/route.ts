@@ -1,11 +1,12 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { ModelInputBudgetError } from "@/lib/llm-input-budget";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { introVersionRevision, saveIntroVersion, type IntroVersionSnapshot } from "@/lib/intro-versions";
-import { extractJson, LlmConfigError } from "@/lib/llm";
-import { isIntroKind, normalizeIntroComments, type IntroSentence } from "@/lib/intro";
+import { LlmConfigError } from "@/lib/llm";
+import { isIntroKind, validateGeneratedIntroComments, validateIntroSentences, type IntroSentence } from "@/lib/intro";
 import { INTRO_COMMENT_SYSTEM_PROMPT, buildCommentUserMessage } from "@/lib/intro-llm";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
@@ -13,8 +14,8 @@ import { errorMessage } from "@/lib/error-message";
 /** 对指定版本的当前句子重新逐句点评（句子编辑后点评会置空，用此接口补齐） */
 async function handlePost(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const introId = Number(id);
-  if (!Number.isInteger(introId)) {
+  const introId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(introId) || introId <= 0) {
     return NextResponse.json({ error: "无效的记录 ID" }, { status: 400 });
   }
   const parsedBody = await parseApiJson<unknown>(req);
@@ -40,21 +41,20 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
     return NextResponse.json({ error: "内容已更新，请获取最新版本后重新点评" }, { status: 409 });
   }
 
-  let sentences: IntroSentence[] = [];
+  let rawSentences: unknown;
   try {
-    const parsed = JSON.parse(version.sentences) as unknown;
-    if (Array.isArray(parsed)) {
-      sentences = parsed.filter(
-        (s): s is IntroSentence =>
-          !!s && typeof s === "object" && typeof (s as Record<string, unknown>).text === "string" && (s as IntroSentence).text.trim() !== ""
-      );
-    }
+    rawSentences = JSON.parse(version.sentences) as unknown;
   } catch {
-    // 走下方空句子分支
+    return NextResponse.json({ error: "当前版本句子数据损坏，已保留原稿，请先检查或恢复备份" }, { status: 422 });
   }
-  if (sentences.length === 0) {
+  if (Array.isArray(rawSentences) && rawSentences.length === 0) {
     return NextResponse.json({ error: "当前版本没有可点评的句子" }, { status: 400 });
   }
+  const validated = validateIntroSentences(rawSentences);
+  if ("error" in validated) {
+    return NextResponse.json({ error: `当前版本句子数据异常，已保留原稿：${validated.error}` }, { status: 422 });
+  }
+  const sentences = validated.sentences;
 
   let raw: string;
   try {
@@ -63,7 +63,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       { feature: LLM_FEATURES.introRecomment, entity: { type: "intro", id: introId } },
       INTRO_COMMENT_SYSTEM_PROMPT,
       [{ role: "user", parts: buildCommentUserMessage({ jd: intro.jd, sentences }) }],
-      { signal: req.signal, requireJson: true }
+      { signal: req.signal, requireJson: "strict" }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);
@@ -72,24 +72,20 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
 
   let comments: string[] | null = null;
   try {
-    const parsed = extractJson<{ comments?: unknown } | null>(raw);
-    if (Array.isArray(parsed?.comments) && parsed.comments.length === sentences.length &&
-        parsed.comments.every((comment) => typeof comment === "string" && comment.trim())) {
-      comments = normalizeIntroComments(parsed, sentences.length);
-    }
+    comments = validateGeneratedIntroComments(JSON.parse(raw), sentences.length);
   } catch {
     // 无效 JSON 或结构不完整时由下方统一返回 502。
   }
   if (!comments) {
-    return NextResponse.json({ error: "AI 点评结果异常：缺少有效点评，请重试" }, { status: 502 });
+    return NextResponse.json({ error: "AI 点评结果异常：点评须与原句一一对应、非空且不超长度上限，请重试" }, { status: 502 });
   }
 
-  // normalizeIntroComments 保证返回长度与句子数一致的字符串数组
+  // 只替换点评，保留每句正文的原始字符与顺序。
   const updated: IntroSentence[] = sentences.map((s, i) => ({ text: s.text, comment: comments[i]! }));
-  const result = saveIntroVersion(introId, kind, revision, updated);
+  const result = saveIntroVersion(introId, kind, revision, updated, { jd: intro.jd });
   if (result.status !== 200) {
     return NextResponse.json(
-      { error: result.status === 409 ? "句子已被修改，请基于最新内容重新点评" : "版本不存在" },
+      { error: result.status === 409 ? "句子、岗位已更新或数据已恢复，请基于最新内容重新点评" : "版本不存在" },
       { status: result.status }
     );
   }

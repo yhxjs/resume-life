@@ -1,14 +1,15 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { clearEntityLlmLabels } from "@/lib/llm-label-cleanup";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
 import { dataGeneration, getDb, inTransaction } from "@/lib/db";
-import { isIntroKind, type IntroKind, type IntroSentence } from "@/lib/intro";
+import { isIntroKind, readStoredIntroSentences, type IntroKind, type IntroSentence } from "@/lib/intro";
 import { introVersionRevision, type IntroVersionSnapshot } from "@/lib/intro-versions";
 
-export type IntroVersionRow = { kind: IntroKind; sentences: IntroSentence[]; revision: string };
+export type IntroVersionRow = { kind: IntroKind; sentences: IntroSentence[]; revision: string; read_error?: string; raw_sentences?: string };
 
 /**
- * 加载工坊记录与其两版内容；句子 JSON 损坏的版本以空句子列表呈现。
+ * 异常版本显式标记并提供只读原稿；正常历史正文不截断，不静默过滤异常项。
  *
  * 刻意不导出：route.ts 里除 HTTP 方法之外的导出会被 `next build` 当成路由段配置校验，
  * 报「OmitWithTag<...> 不满足 { [x: string]: never }」。这里只有本文件的 handler 用它。
@@ -31,27 +32,18 @@ function loadIntro(id: number) {
   const versions: IntroVersionRow[] = [];
   for (const row of rows) {
     if (!isIntroKind(row.kind)) continue;
-    let sentences: IntroSentence[] = [];
-    try {
-      const parsed = JSON.parse(row.sentences) as unknown;
-      if (Array.isArray(parsed)) {
-        sentences = parsed.filter(
-          (s): s is IntroSentence =>
-            !!s && typeof s === "object" && typeof (s as Record<string, unknown>).text === "string"
-        );
-      }
-    } catch {
-      // 保留空列表，详情页提示数据异常
-    }
-    versions.push({ kind: row.kind, sentences, revision: introVersionRevision(row, generation) });
+    const stored = readStoredIntroSentences(row.sentences);
+    versions.push({ kind: row.kind, sentences: stored.sentences, revision: introVersionRevision(row, generation),
+      ...(stored.error ? { read_error: stored.error, raw_sentences: row.sentences } : {}),
+    });
   }
   return { ...intro, versions };
 }
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const introId = Number(id);
-  if (!Number.isInteger(introId)) {
+  const introId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(introId) || introId <= 0) {
     return NextResponse.json({ error: "无效的记录 ID" }, { status: 400 });
   }
   const data = loadIntro(introId);
@@ -61,8 +53,8 @@ async function handleGet(_req: Request, { params }: { params: Promise<{ id: stri
 
 async function handleDelete(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const introId = Number(id);
-  if (!Number.isInteger(introId)) {
+  const introId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(introId) || introId <= 0) {
     return NextResponse.json({ error: "无效的记录 ID" }, { status: 400 });
   }
   const db = getDb();

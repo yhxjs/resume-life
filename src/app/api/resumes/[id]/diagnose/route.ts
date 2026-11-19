@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { PreparationInputError, resolvePreparationApplication, linkPreparationResource } from "@/lib/application-preparation";
 import { resolveResumeVersionId, ResumeVersionError } from "@/lib/resume-versions";
@@ -5,47 +6,24 @@ import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { dataGeneration, getDb, inTransaction, now } from "@/lib/db";
 import { randomUUID } from "node:crypto";
-import { extractJson, LlmConfigError } from "@/lib/llm";
-import { loadResume } from "@/lib/resumes";
-import { diagnosisValue, normalizeDiagnosis, sanitizeModulesForDiagnosis, type DiagnosisReport, type DiagnosisSnapshot } from "@/lib/diagnosis";
-import { assertDiagnosisBudget, diagnosisHistory, loadDiagnosis } from "@/lib/diagnosis-history";
+import { isDeepStrictEqual } from "node:util";
+import { LlmConfigError } from "@/lib/llm";
+import { loadResume, loadResumeForModel } from "@/lib/resumes";
+import { ResumeContextError } from "@/lib/resume-errors";
+import { diagnosisValue, diagnosisValuesEqual, validateGeneratedDiagnosis, sanitizeModulesForDiagnosis, type DiagnosisReport, type DiagnosisSnapshot } from "@/lib/diagnosis";
+import { assertDiagnosisBudget, canArchiveDiagnosisSnapshot, diagnosisHistory, loadDiagnosis } from "@/lib/diagnosis-history";
 import { BackupLimitError } from "@/lib/backup-limits";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
-import { splitRichTextToLines } from "@/lib/rich-text";
-
-const SYSTEM_PROMPT = `你是资深技术招聘专家。请对照【岗位要求（JD）】对候选人简历做逐模块体检，输出 JSON：
-{
-  "match": 0 到 10 的总体岗位匹配度（一位小数）,
-  "summary": "总评：两三句话概括简历与该岗位的整体贴合情况与最优先要改的点",
-  "modules": [
-    {
-      "module_key": "照抄输入中该简历模块的 key",
-      "scores": { "depth": 1-10, "structure": 1-10, "authenticity": 1-10, "completeness": 1-10 },
-      "gaps": "该模块与岗位要求的差距：缺失的能力/关键词、表述与 JD 不匹配或不具体的地方",
-      "suggestions": [
-        { "item_id": "条目 id（field=description 时必填，其余为空字符串）", "field": "description", "reason": "为什么要这样改（对应 JD 哪条要求）", "draft": "改写后的完整替换文本" }
-      ]
-    }
-  ]
-}
-评分维度（各 1-10 的整数）：
-- depth 技术深度：内容是否体现原理与取舍
-- structure 结构表达：STAR 完整性与条理
-- authenticity 真实性：表述可信、无夸大编造痕迹
-- completeness 完整度：该模块信息覆盖是否充分
-改写建议规则：
-- 只允许三种目标：教育/工作/项目条目的 description（field="description"，须带该条目的 item_id）、自我评价的 text（field="text"）、技能的 items（field="items"，draft 为字符串数组，覆盖全部技能）
-- 只基于候选人已有内容优化表达：对齐 JD 关键词、突出相关成果、量化结果、补齐 STAR 结构；严禁编造不存在的经历、技能或数据
-- draft 是确认后整段替换原文的最终纯文本，不是修改说明，严禁包含 HTML 标签或排版代码
-- 评估请聚焦经历本身、业务成果与技术深度，不要将排版格式作为缺陷
-- 经历时间线以当前日期为基准，不得将当前日期及之前的经历误判为未来时间
-- 没有值得改的内容就给空数组
-要求：提供的每个职业内容模块都必须出现在 modules 里（哪怕没有建议）；基本身份与联系方式不参与评估；只输出 JSON。`;
+import { stripRichText } from "@/lib/rich-text";
+import { writeDiagnosisValue } from "@/lib/module-descriptions";
+import { ModelInputBudgetError } from "@/lib/llm-input-budget";
+import { buildDiagnosisMessages } from "@/lib/diagnosis-llm";
+import { DIAGNOSIS_PRODUCTION_SYSTEM_PROMPT } from "@/lib/diagnosis-production-prompt";
 
 async function handleGet(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isSafeInteger(numericId) || numericId <= 0) {
     return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   }
@@ -54,13 +32,14 @@ async function handleGet(req: Request, { params }: { params: Promise<{ id: strin
   const query = new URL(req.url).searchParams;
   const diagnosisId = query.get("diagnosis_id");
   const jobId = query.get("job_id");
-  if (diagnosisId !== null && (!Number.isSafeInteger(Number(diagnosisId)) || Number(diagnosisId) <= 0)) {
+  const selectedDiagnosisId = diagnosisId === null ? null : parseCanonicalPositiveId(diagnosisId);
+  if (diagnosisId !== null && !Number.isSafeInteger(selectedDiagnosisId)) {
     return NextResponse.json({ error: "无效的诊断 ID" }, { status: 400 });
   }
   const latest = diagnosisId === null ? db.prepare(`SELECT id FROM resume_diagnoses WHERE resume_id = ?
     ${jobId === null ? "" : "AND job_id = ?"} ORDER BY created_at DESC, id DESC LIMIT 1`)
     .get(...(jobId === null ? [numericId] : [numericId, jobId])) as { id: number } | undefined : undefined;
-  const current = diagnosisId !== null ? loadDiagnosis(numericId, Number(diagnosisId)) : latest ? loadDiagnosis(numericId, latest.id) : null;
+  const current = diagnosisId !== null ? loadDiagnosis(numericId, selectedDiagnosisId!) : latest ? loadDiagnosis(numericId, latest.id) : null;
   if ((!current && (diagnosisId !== null || jobId !== null)) || (current && jobId !== null && current.job_id !== jobId)) {
     return NextResponse.json({ error: "诊断记录不存在" }, { status: 404 });
   }
@@ -69,7 +48,7 @@ async function handleGet(req: Request, { params }: { params: Promise<{ id: strin
 
 async function handlePost(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isSafeInteger(numericId) || numericId <= 0) {
     return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   }
@@ -91,9 +70,8 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
     throw error;
   }
 
-  const data = loadResume(numericId, resumeVersionId);
+  const data = loadResumeForModel(numericId, resumeVersionId);
   if (!data) return NextResponse.json({ error: "简历不存在" }, { status: 404 });
-  if (data.corruptedKeys.length) return NextResponse.json({ error: "简历包含损坏模块，请先修复后再诊断" }, { status: 409 });
   if ((body?.job_id !== undefined && (typeof body.job_id !== "string" || !body.job_id.trim())) ||
       (body?.job_title !== undefined && (typeof body.job_title !== "string" || body.job_title.trim().length > 100)) ||
       (body?.new_job !== undefined && typeof body.new_job !== "boolean") || (body?.new_job && body.job_id)) {
@@ -116,6 +94,9 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
   const jobTitle = (typeof body?.job_title === "string" ? body.job_title.trim() : "") || existingJob?.job_title || matchingJob?.job_title || jd.split("\n")[0]!.slice(0, 60);
   const ts = now();
   const snapshot: DiagnosisSnapshot = { title: data.resume.title, modules: data.modules.map(({ key, type, label, sort, content }) => ({ key, type, label, sort, content })) };
+  if (!canArchiveDiagnosisSnapshot(snapshot)) {
+    return NextResponse.json({ error: "所选版本无法保存完整诊断快照，请核对并修复简历后重新发布，或恢复有效备份后再诊断" }, { status: 422 });
+  }
   const stored = { id: Number.MAX_SAFE_INTEGER, resume_id: numericId, resume_version_id: resumeVersionId, job_id: jobId, job_title: jobTitle, jd,
     report: "", resume_snapshot: JSON.stringify(snapshot), adoptions: "[]", created_at: ts };
   try { assertDiagnosisBudget(stored); } catch (err) {
@@ -123,38 +104,28 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
     return NextResponse.json({ error: "简历内容过大，无法保存完整诊断快照，请精简后再试" }, { status: 413 });
   }
   const assessmentModules = data.modules.filter((module) => module.type !== "basic");
+  if (assessmentModules.length === 0) {
+    return NextResponse.json({ error: "所选版本没有可诊断的职业模块，请添加经历、技能或自我评价等职业模块后重新发布，再重试诊断" }, { status: 422 });
+  }
+  const modelModules = sanitizeModulesForDiagnosis(assessmentModules);
 
   let raw: string;
   try {
     raw = await safeChat(
       "evaluate",
       { feature: LLM_FEATURES.resumeDiagnose, entity: { type: "resume", id: numericId } },
-      SYSTEM_PROMPT,
-      [
-        {
-          role: "user",
-          parts: [
-            { trust: "untrusted", tag: "job_description", text: jd },
-            { trust: "trusted", text: "\n\n" },
-            {
-              trust: "untrusted",
-              tag: "candidate_resume_modules",
-              text: JSON.stringify(sanitizeModulesForDiagnosis(assessmentModules)),
-            },
-            { trust: "trusted", text: "\n\n请输出诊断 JSON。" },
-          ],
-        },
-      ],
-      { signal: req.signal, requireJson: true }
+      `${DIAGNOSIS_PRODUCTION_SYSTEM_PROMPT}\n所有非空文本必须包含可见内容，不用零宽、控制字符或纯标点占位；协议允许的空 gaps 与 suggestions 继续为空。`,
+      buildDiagnosisMessages(jd, modelModules),
+      { signal: req.signal, requireJson: "strict" }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);
-    return NextResponse.json({ error: message }, { status: 502 });
+    return NextResponse.json({ error: message }, { status: err instanceof ModelInputBudgetError ? 413 : 502 });
   }
 
   let report: DiagnosisReport;
   try {
-    const parsed = normalizeDiagnosis(extractJson<unknown>(raw), assessmentModules);
+    const parsed = validateGeneratedDiagnosis(JSON.parse(raw), assessmentModules);
     if (!parsed) throw new Error("结构校验未通过");
     report = parsed;
   } catch (err) {
@@ -171,12 +142,24 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
   }
   return inTransaction(() => {
     if (dataGeneration(db) !== generation) return NextResponse.json({ error: "数据已恢复，请刷新简历后重新诊断" }, { status: 409 });
+    // 诊断目标由模块 key 和条目 ID 定位；与职业材料一起复核，且不把对象键顺序当作内容变化。
+    const sourceConflict = () => NextResponse.json({ error: "所选简历版本或职业材料已变化或删除，请核对后重新诊断" }, { status: 409 });
+    let currentSource;
+    try { currentSource = loadResumeForModel(numericId, resumeVersionId); }
+    catch (error) {
+      if (error instanceof ResumeContextError) return sourceConflict();
+      throw error;
+    }
+    if (!currentSource || !isDeepStrictEqual(
+      sanitizeModulesForDiagnosis(currentSource.modules.filter((module) => module.type !== "basic")), modelModules,
+    )) {
+      return sourceConflict();
+    }
     try { if (applicationId !== null) resolvePreparationApplication(body, { resumeId: numericId, resumeVersionId, jd }); }
     catch (error) {
       if (error instanceof PreparationInputError || error instanceof ResumeVersionError) return NextResponse.json({ error: error.message }, { status: error.status });
       throw error;
     }
-    if (!db.prepare("SELECT id FROM resumes WHERE id = ?").get(numericId)) return NextResponse.json({ error: "简历已删除" }, { status: 409 });
     const saved = db.prepare(`INSERT INTO resume_diagnoses (resume_id, resume_version_id, job_id, job_title, jd, report, resume_snapshot, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(numericId, resumeVersionId, jobId, jobTitle, jd, stored.report, stored.resume_snapshot, ts);
     const current = loadDiagnosis(numericId, Number(saved.lastInsertRowid))!;
@@ -186,7 +169,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
 }
 
 async function handlePatch(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const numericId = Number((await params).id);
+  const numericId = parseCanonicalPositiveId((await params).id);
   if (!Number.isSafeInteger(numericId) || numericId <= 0) return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   const parsed = await parseApiJson<unknown>(req);
   if (!parsed.ok) return parsed.response;
@@ -209,13 +192,25 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
     }
     const data = loadResume(numericId);
     const mod = data?.modules.find((entry) => entry.key === moduleKey);
-    // 经历编辑器会移除列表前缀，采纳记录与真正落库的文本保持一致。
-    const savedValue = suggestion.field === "description" && (mod?.type === "work" || mod?.type === "projects")
-      ? splitRichTextToLines(value as string).join("\n") : value;
-    if (!data || JSON.stringify(diagnosisValue(data.modules, moduleKey, suggestion)) !== JSON.stringify(savedValue)) {
+    // 复用编辑器的写入入口，统一经历抬头清理、列表和富文本整理规则。
+    let savedValue: string | string[] | null = value as string | string[];
+    if (typeof value === "string" && mod &&
+        (mod.type === "work" || mod.type === "projects" || mod.type === "education" || mod.type === "summary")) {
+      const content = writeDiagnosisValue(mod.type, mod.content, suggestion.itemId, value);
+      savedValue = content === null ? null : diagnosisValue([{ ...mod, content }], moduleKey, suggestion);
+    }
+    if (typeof savedValue === "string" && !stripRichText(savedValue).trim()) {
+      return NextResponse.json({ error: "采纳内容整理后为空，请补充正文后重新采纳" }, { status: 400 });
+    }
+    if (!data || savedValue === null || JSON.stringify(diagnosisValue(data.modules, moduleKey, suggestion)) !== JSON.stringify(savedValue)) {
       return NextResponse.json({ error: "采纳内容尚未保存或已被修改，请确认简历保存成功后重试" }, { status: 409 });
     }
-    if (!current.adoptions.some((entry) => entry.moduleKey === moduleKey && entry.suggestionIndex === suggestionIndex)) {
+    const existing = current.adoptions.find((entry) => entry.moduleKey === moduleKey && entry.suggestionIndex === suggestionIndex);
+    // 只把相同实际保存值视为幂等重试；历史技能兼容换行字符串，不改写原记录。
+    if (existing && !diagnosisValuesEqual(suggestion.field, existing.value, savedValue)) {
+      return NextResponse.json({ error: "该建议已记录其他采纳内容，请点击“继续编辑草稿”刷新采纳状态并核对历史记录" }, { status: 409 });
+    }
+    if (!existing) {
       current.adoptions.push({ moduleKey, suggestionIndex, value: savedValue as string | string[], applied_at: now() });
       const adoptions = JSON.stringify(current.adoptions);
       const stored = getDb().prepare("SELECT * FROM resume_diagnoses WHERE resume_id = ? AND id = ?").get(numericId, current.id)!;

@@ -6,13 +6,16 @@ import { ApplicationDialog } from "../application-dialog";
 import { jsonFetch } from "@/lib/fetcher";
 import type { Application } from "@/lib/applications-types";
 
-vi.mock("@/lib/fetcher", () => ({ jsonFetch: vi.fn() }));
+vi.mock("@/lib/fetcher", async original => ({ ...await original<typeof import("@/lib/fetcher")>(), jsonFetch: vi.fn() }));
 
-const savedApplication: Partial<Application> = {
+const savedApplication: Application = {
   id: 77,
   company: "字节跳动",
   role: "资深前端架构师",
-  stage: "applied",
+  stage: "interested", salary_range: "", flow_status: "active", batch_name: "", hiring_stage: null,
+  stage_changed_at: "", terminal_stage: null, terminal_reason: "", terminal_at: "", resume_id: null, resume_version_id: null,
+  interview_id: null, interview_series_id: null, next_interview_at: "", jd: "", notes: "", created_at: "", updated_at: "",
+  interviews: [], stage_history: [], preparation_tasks: [],
 };
 
 beforeEach(() => {
@@ -27,7 +30,10 @@ beforeEach(() => {
     if (method === "GET" && url === "/api/resumes") {
       return [{ id: 3, title: "我的简历", updated_at: "", versions: [{ id: 30, version: 1, name: "v1" }] }] as never;
     }
-    if (method === "POST" && url === "/api/applications") return savedApplication as never;
+    if (method === "POST" && url === "/api/applications") {
+      const body = JSON.parse(String(init?.body));
+      return { ...savedApplication, ...body, hiring_stage: body.stage === "rejected" ? body.terminal_stage : body.hiring_stage, flow_status: body.stage === "rejected" ? "terminated" : body.stage === "offer" ? "passed" : "active" } as never;
+    }
     throw new Error(`unexpected request: ${method} ${url}`);
   });
 });
@@ -88,23 +94,48 @@ describe("ApplicationDialog 新建/编辑投递卡片", () => {
     expect((screen.getByLabelText("关联单轮模拟面试") as HTMLSelectElement).value).toBe("1");
   });
 
-  it("编辑态渲染既有数据与关闭按钮回调 onClose", () => {
+  it("编辑投递仍提交已绑定的旧发布版，不自动切换最新版本", async () => {
+    const application: Application = { ...savedApplication, id: 8, company: "研发公司", role: "后端", resume_id: 4, resume_version_id: 41 };
+    const fallback = vi.mocked(jsonFetch).getMockImplementation()!;
+    vi.mocked(jsonFetch).mockImplementation(async (url, init) => {
+      if (url === "/api/resumes") return [{ id: 4, title: "主简历", versions: [
+        { id: 41, version: 1, name: "通用版" }, { id: 42, version: 2, name: "技术岗" },
+      ] }] as never;
+      if (url === "/api/applications/8" && init?.method === "PATCH") return application as never;
+      return fallback(url, init);
+    });
+    const { onClose, onSuccess } = renderDialog({ initialData: application });
+    await screen.findByRole("option", { name: "v2 · 技术岗" });
+    expect((screen.getByLabelText("关联简历") as HTMLSelectElement).value).toBe("4");
+    expect((screen.getByLabelText("已发布版本") as HTMLSelectElement).value).toBe("41");
+    submit();
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledExactlyOnceWith(application));
+    const writes = vi.mocked(jsonFetch).mock.calls.filter(([, init]) => init?.method);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toEqual(["/api/applications/8", expect.objectContaining({ method: "PATCH", signal: expect.any(AbortSignal) })]);
+    expect(JSON.parse(String(writes[0]![1]?.body))).toMatchObject({ resume_id: 4, resume_version_id: 41 });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("编辑态渲染既有数据与关闭按钮回调 onClose", async () => {
     const { onClose } = renderDialog({
       initialData: { id: 7, company: "阿里", role: "前端", stage: "interested" } as Application,
     });
 
     expect(screen.getByText("编辑求职投递卡片")).toBeTruthy();
     expect((screen.getByLabelText(/公司名称/) as HTMLInputElement).value).toBe("阿里");
+    await screen.findByRole("option", { name: /#5 · 后端 JD 描述/ });
     fireEvent.click(screen.getByRole("button", { name: "关闭弹窗" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("空表单提交显示校验错误且不发起请求", () => {
+  it("空表单提交显示校验错误且不发起请求", async () => {
     renderDialog();
 
     submit();
 
     expect(screen.getByText("公司名称不能为空")).toBeTruthy();
+    await screen.findByRole("option", { name: /#5 · 后端 JD 描述/ });
     expect(vi.mocked(jsonFetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
   });
 

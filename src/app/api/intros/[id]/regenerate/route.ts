@@ -1,13 +1,14 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { ModelInputBudgetError } from "@/lib/llm-input-budget";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { introVersionRevision, saveIntroVersion } from "@/lib/intro-versions";
-import { extractJson, LlmConfigError } from "@/lib/llm";
-import { loadResumeContext } from "@/lib/resumes";
+import { LlmConfigError } from "@/lib/llm";
+import { IntroResumeContextError, loadIntroResumeContext } from "@/lib/intro-resume-context";
 import { ResumeNotFoundError } from "@/lib/resume-errors";
-import { isIntroKind, normalizeSentences } from "@/lib/intro";
+import { isIntroKind, validateGeneratedIntroVersions, type IntroSentence } from "@/lib/intro";
 import { INTRO_SYSTEM_PROMPT, buildGenerateUserMessage } from "@/lib/intro-llm";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
@@ -15,8 +16,8 @@ import { errorMessage } from "@/lib/error-message";
 /** 重新生成一版（30s 或 2min）：整版替换句子与点评，需前端确认后调用 */
 async function handlePost(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const introId = Number(id);
-  if (!Number.isInteger(introId)) {
+  const introId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(introId) || introId <= 0) {
     return NextResponse.json({ error: "无效的记录 ID" }, { status: 400 });
   }
   const parsedBody = await parseApiJson<unknown>(req);
@@ -44,8 +45,9 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
 
   let resumeContext: string;
   try {
-    resumeContext = loadResumeContext(intro.resume_id, intro.resume_version_id);
+    resumeContext = loadIntroResumeContext(intro.resume_id, intro.resume_version_id);
   } catch (error) {
+    if (error instanceof IntroResumeContextError) return NextResponse.json({ error: error.message }, { status: 422 });
     if (!(error instanceof ResumeNotFoundError)) throw error;
     return NextResponse.json({ error: "关联的简历已删除，无法重新生成" }, { status: 404 });
   }
@@ -57,33 +59,34 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       { feature: LLM_FEATURES.introRegenerate, entity: { type: "intro", id: introId } },
       INTRO_SYSTEM_PROMPT,
       [{ role: "user", parts: buildGenerateUserMessage({ jd: intro.jd, resumeContext, kinds: [kind] }) }],
-      { signal: req.signal, requireJson: true }
+      { signal: req.signal, requireJson: "strict" }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);
     return NextResponse.json({ error: message }, { status: err instanceof ModelInputBudgetError ? 413 : 502 });
   }
 
-  let sentences: ReturnType<typeof normalizeSentences> = null;
+  let sentences: IntroSentence[] | null = null;
   try {
-    const parsed = extractJson<{ versions?: unknown } | null>(raw);
-    const found = Array.isArray(parsed?.versions)
-      ? parsed.versions.find((version) => version && typeof version === "object" && version.kind === kind)
-      : null;
-    sentences = normalizeSentences(found?.sentences);
+    const versions = validateGeneratedIntroVersions(JSON.parse(raw), [kind]);
+    sentences = versions?.[0]?.sentences ?? null;
   } catch {
     // 无效 JSON 或结构不完整时由下方统一返回 502。
   }
   if (!sentences) {
-    return NextResponse.json({ error: "AI 生成结果异常：缺少有效版本或句子，请重试" }, { status: 502 });
+    return NextResponse.json({ error: "AI 生成结果异常：版本、句子或点评不完整，或内容超限，请重试" }, { status: 502 });
   }
 
   // 模型等待期间可编辑、删除或恢复数据；提交时必须在同一事务中复核快照。
-  const result = saveIntroVersion(introId, kind, revision, sentences);
+  const result = saveIntroVersion(introId, kind, revision, sentences, {
+    jd: intro.jd,
+    resume: { id: intro.resume_id, versionId: intro.resume_version_id ?? null, context: resumeContext },
+  });
   if (result.status === 409) {
-    return NextResponse.json({ error: "内容已更新或数据已恢复，请基于最新内容重新生成" }, { status: result.status });
+    return NextResponse.json({ error: "内容、岗位或简历材料已更新，或数据已恢复，请基于最新内容重新生成" }, { status: result.status });
   }
   if (result.status === 404) return NextResponse.json({ error: "版本不存在" }, { status: result.status });
+  if (result.status === 422) return NextResponse.json({ error: "当前版本原稿数据异常，已保留原稿" }, { status: result.status });
   return NextResponse.json({ kind, sentences, revision: result.revision });
 }
 

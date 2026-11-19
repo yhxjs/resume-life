@@ -16,6 +16,13 @@ vi.mock("../resumes", () => ({
   if (boundary.resumeError) throw boundary.resumeError;
   return boundary.resume;
 } }));
+vi.mock("../intro-resume-context", async (original) => ({
+  ...await original<typeof import("../intro-resume-context")>(),
+  loadIntroResumeContext: () => {
+    if (boundary.resumeError) throw boundary.resumeError;
+    return boundary.resume;
+  },
+}));
 let directory: string;
 let db: DatabaseSync;
 const req = (body: unknown) => new Request("http://localhost/api", {
@@ -59,6 +66,7 @@ function insertRows(
 function traceSelects(table: string) {
   const prepared: string[] = [];
   const executed: { sql: string; params: SQLInputValue[] }[] = [];
+  const iterated: { sql: string; params: SQLInputValue[]; rows: number; closed: boolean }[] = [];
   const originalPrepare = db.prepare.bind(db);
   const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
     const statement = originalPrepare(sql);
@@ -72,12 +80,24 @@ function traceSelects(table: string) {
             return target.all(...params);
           };
         }
+        if (property === "iterate") {
+          return function* (...params: SQLInputValue[]) {
+            const read = { sql, params, rows: 0, closed: false };
+            iterated.push(read);
+            try {
+              for (const row of target.iterate(...params)) {
+                read.rows++;
+                yield row;
+              }
+            } finally { read.closed = true; }
+          };
+        }
         const value = Reflect.get(target, property, target);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
   });
-  return { prepared, executed, restore: () => prepareSpy.mockRestore() };
+  return { prepared, executed, iterated, restore: () => prepareSpy.mockRestore() };
 }
 
 function compactSql(sql: string) {
@@ -130,13 +150,13 @@ describe("import parse request budget", () => {
     expect(boundary.chat).not.toHaveBeenCalled();
   });
 
-  it("allows a JSON body at the exact request budget", async () => {
+  it("完整读取请求体边界内的原文，模型预算超限时保留全文而不截断调用", async () => {
     const emptyBody = JSON.stringify({ text: "" });
-    const expectedModelText = "x".repeat(60_000);
-    const excludedTailMarker = "UNIQUE_TEXT_AFTER_MODEL_LIMIT";
+    const sourcePrefix = "x".repeat(60_000);
+    const tailMarker = "UNIQUE_TEXT_AFTER_MODEL_LIMIT";
     const textLength = MAX_JSON_REQUEST_BYTES - Buffer.byteLength(emptyBody);
-    const text = `${expectedModelText}${excludedTailMarker}${"y".repeat(
-      textLength - expectedModelText.length - excludedTailMarker.length,
+    const text = `${sourcePrefix}${tailMarker}${"y".repeat(
+      textLength - sourcePrefix.length - tailMarker.length,
     )}`;
     const body = JSON.stringify({ text });
     expect(Buffer.byteLength(body)).toBe(MAX_JSON_REQUEST_BYTES);
@@ -148,11 +168,11 @@ describe("import parse request budget", () => {
       body,
     }));
 
-    expect(response.status).toBe(200);
-    expect(boundary.chat).toHaveBeenCalledOnce();
-    const userMessage = boundary.chat.mock.calls[0]![1][1].content;
-    expect(userMessage).toContain(expectedModelText);
-    expect(userMessage).not.toContain(excludedTailMarker);
+    expect(response.status).toBe(413);
+    expect(boundary.chat).not.toHaveBeenCalled();
+    const result = await response.json();
+    expect(result.error).toContain("完整模型输入");
+    expect(result.extractedText).toBe(text);
   });
 
   it("maps malformed JSON to 400 without calling the model", async () => {
@@ -222,6 +242,37 @@ describe("project material route budget", () => {
     const current = db.prepare("SELECT id, title, content FROM project_materials WHERE id = 1").get() as { id: number; title: string; content: string };
     return PATCH(req(value && value.expectedRevision === undefined ? { ...value, expectedRevision: materialRevision(1, current) } : body), materialContext);
   }
+
+  it.each((["create", "update"] as const).flatMap(action => ["title", "content"].flatMap(field =>
+    ([null, 0, true, [], ["材料"], {}] as unknown[]).map(value => ({ action, field, value })),
+  )))("$action rejects $field=$value without losing supplied material", async ({ action, field, value }) => {
+    const before = databaseState();
+    const response = await writeMaterial(action, { title: "完整标题", content: "完整正文 <T> &amp;", [field]: value });
+    expect(response.status).toBe(400);
+    expect(databaseState()).toEqual(before);
+  });
+
+  it.each([undefined, "", " \n "])("create keeps the default title rule for %j and stores the entire original content", async title => {
+    const content = "  第一行  <T> &amp;\n第二行正文保留  ";
+    const response = await writeMaterial("create", { title, content });
+    expect(response.status).toBe(201);
+    const created = await response.json();
+    expect(created).toMatchObject({ title: content.trim().slice(0, 20), source: "paste", filename: "" });
+    expect(db.prepare("SELECT title, content FROM project_materials WHERE id = ?").get(created.id))
+      .toEqual({ title: created.title, content });
+    expect(db.prepare("SELECT title,content FROM project_materials WHERE id = 1").get()).toEqual({ title: "原材料", content: "原内容" });
+  });
+
+  it("both material routes reject JSON primitives/arrays without rewriting the existing material", async () => {
+    const before = databaseState();
+    const create = await import("../../app/api/projects/[id]/materials/route");
+    const update = await import("../../app/api/projects/[id]/materials/[mid]/route");
+    for (const value of [null, [], "正文", 1, true]) {
+      expect((await create.POST(req(value), projectContext)).status).toBe(400);
+      expect((await update.PATCH(req(value), materialContext)).status).toBe(400);
+    }
+    expect(databaseState()).toEqual(before);
+  });
 
   it.each(["create", "update"] as const)(
     "%s rejects an oversized JSON request before changing the database",
@@ -432,10 +483,10 @@ describe("existing interview input budgets", () => {
     expect(boundary.chat).not.toHaveBeenCalled();
     expect(boundary.chatStream).not.toHaveBeenCalled();
   });
-  it("counts the accumulated interview history, including model questions and comments", async () => {
+  it("counts the accumulated original interview questions and answers", async () => {
     seed();
     db.prepare("INSERT INTO interview_turns (interview_id,idx,question,answer,comment,answered_at) VALUES (1,0,?,?,?,'now')")
-      .run("Q".repeat(22000), "A".repeat(22000), "C".repeat(22000));
+      .run("Q".repeat(33000), "A".repeat(33000), "旧点评不参与预算");
     const response = await post("answer", { turn_id: 1, answer: "新回答" });
     if (response.headers.get("content-type")?.includes("event-stream")) await response.text();
     expect(response.status).toBe(413);
@@ -483,7 +534,7 @@ describe("intro regeneration and series context budgets", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       const { POST } = await import("../../app/api/interviews/series/[id]/advance/route");
-      const response = await POST(req({}), context);
+      const response = await POST(req({ from_interview_id: 1 }), context);
       expect(response.status).toBe(500);
       expect(await response.json()).toEqual({ error: "服务器内部错误，请稍后重试", requestId: expect.any(String) });
       expect(boundary.chat).not.toHaveBeenCalled();
@@ -499,7 +550,9 @@ describe("intro regeneration and series context budgets", () => {
     expect(boundary.chat).not.toHaveBeenCalled();
     db.exec("UPDATE intros SET jd='JD'");
     if (action === "regenerate") boundary.resume = "r".repeat(64000);
-    else db.prepare("UPDATE intro_versions SET sentences=?").run(JSON.stringify([{ text: "t".repeat(64000), comment: "" }]));
+    else db.prepare("UPDATE intro_versions SET sentences=?").run(JSON.stringify(
+      Array.from({ length: 60 }, () => ({ text: "<&>".repeat(250), comment: "" })),
+    ));
     const before = db.prepare("SELECT * FROM intro_versions").all();
     expect((await post(req({ kind: "30s" }), context)).status).toBe(413);
     expect(boundary.chat).not.toHaveBeenCalled();
@@ -513,18 +566,18 @@ describe("intro regeneration and series context budgets", () => {
     for (let i = 1; i <= (action === "advance" ? 1 : 3); i++) insert.run(i, JSON.stringify(report));
     const post = action === "advance" ? (await import("../../app/api/interviews/series/[id]/advance/route")).POST : (await import("../../app/api/interviews/series/[id]/finalize/route")).POST;
     db.prepare("UPDATE interview_series SET jd=?").run("字".repeat(12001));
-    expect((await post(req({}), context)).status).toBe(413);
+    expect((await post(req(action === "advance" ? { from_interview_id: 1 } : {}), context)).status).toBe(413);
     expect(boundary.chat).not.toHaveBeenCalled();
     db.exec("UPDATE interview_series SET jd='JD'");
     db.prepare("UPDATE interviews SET report=?").run(JSON.stringify({ ...report, strengths: "s".repeat(64000) }));
-    expect((await post(req({}), context)).status).toBe(413);
+    expect((await post(req(action === "advance" ? { from_interview_id: 1 } : {}), context)).status).toBe(413);
     expect(boundary.chat).not.toHaveBeenCalled();
     expect(db.prepare("SELECT status,final_report FROM interview_series").get()).toEqual({ status: "ongoing", final_report: "" });
   });
 });
 
 describe("budgeted SQL context loading", () => {
-  it("loads project materials with one 50-row cursor batch after a small budget is reached", async () => {
+  it("rejects incomplete project context and closes the source iterator before later materials", async () => {
     db.prepare("INSERT INTO projects (id,name,summary,created_at,updated_at) VALUES (1,'预算项目',?,'','')")
       .run(JSON.stringify({ ...emptySummary(), overview: "o".repeat(500) }));
     insertRows(
@@ -539,18 +592,17 @@ describe("budgeted SQL context loading", () => {
 
     try {
       const { loadProjectContext } = await import("../projects");
-      const context = await loadProjectContext(1, { maxChars: 1_000 });
-
-      expect(context).toHaveLength(1_000);
-      expect(context).toContain("【项目概述】");
-      expect(context).toContain("PROJECT_MATERIAL_1");
-      expect(context).not.toContain("PROJECT_MATERIAL_AFTER_BUDGET");
+      await expect(loadProjectContext(1, { maxChars: 1_000 })).rejects.toThrow("完整项目档案与材料超过 1000 字符限制");
       expect(trace.prepared).toHaveLength(1);
-      expect(trace.executed).toHaveLength(1);
-      expect(compactSql(trace.executed[0]!.sql)).toMatch(
-        /FROM project_materials WHERE project_id = \? AND id > \? ORDER BY id LIMIT \?/i,
+      expect(trace.executed).toHaveLength(0);
+      expect(trace.iterated).toHaveLength(1);
+      expect(compactSql(trace.iterated[0]!.sql)).toMatch(
+        /FROM project_materials m LEFT JOIN project_material_table_provenance p ON p\.material_id = m\.id WHERE m\.project_id = \? ORDER BY m\.id/i,
       );
-      expect(trace.executed[0]!.params).toEqual([1, 0, 50]);
+      expect(trace.iterated[0]!.params).toEqual([1]);
+      expect(trace.iterated[0]!.rows).toBeGreaterThan(0);
+      expect(trace.iterated[0]!.rows).toBeLessThan(50);
+      expect(trace.iterated[0]!.closed).toBe(true);
     } finally {
       trace.restore();
     }
@@ -566,7 +618,8 @@ describe("budgeted SQL context loading", () => {
         index === 500 ? "SUMMARY_MATERIAL_AFTER_BUDGET" : `SUMMARY_MATERIAL_${index}_${"s".repeat(2_000)}`,
       ],
     );
-    const trace = traceSelects("project_materials");
+    const summaryLlm = await import("../project-summary-llm");
+    const serialize = vi.spyOn(summaryLlm, "serializeProjectSummaryMaterial");
 
     try {
       const { POST } = await import("../../app/api/projects/[id]/summarize/route");
@@ -575,17 +628,11 @@ describe("budgeted SQL context loading", () => {
       expect(response.status).toBe(413);
       expect((await response.json()).error).toContain("60000");
       expect(boundary.chatStream).not.toHaveBeenCalled();
-      expect(trace.prepared).toHaveLength(2);
-      expect(trace.executed).toHaveLength(1);
-      expect(trace.prepared.map(compactSql)).toContainEqual(expect.stringMatching(
-        /SELECT id, title, content FROM project_materials WHERE project_id = \? ORDER BY id/i,
-      ));
-      expect(compactSql(trace.executed[0]!.sql)).toMatch(
-        /FROM project_materials WHERE project_id = \? AND id > \? ORDER BY id LIMIT \?/i,
-      );
-      expect(trace.executed[0]!.params).toEqual([1, 0, 50]);
+      expect(serialize.mock.calls.length).toBeGreaterThan(0);
+      expect(serialize.mock.calls.length).toBeLessThan(50);
+      expect(serialize.mock.calls.some(([material]) => material.content.includes("SUMMARY_MATERIAL_AFTER_BUDGET"))).toBe(false);
     } finally {
-      trace.restore();
+      serialize.mockRestore();
     }
   });
 
@@ -609,8 +656,11 @@ describe("budgeted SQL context loading", () => {
       expect(response.status).toBe(201);
       const userMessage = boundary.chat.mock.calls[0]![1][1].content as string;
       const bankBlock = userMessage.match(/<question_bank>\n([\s\S]*)\n<\/question_bank>/)?.[1];
-      expect(bankBlock).toHaveLength(60_000);
-      expect(userMessage).toContain("1|八股|BANK_1_");
+      expect(bankBlock!.length).toBeLessThanOrEqual(60_000);
+      expect(bankBlock!.length).toBeGreaterThan(57_000);
+      const bankRows = bankBlock!.split("\n").map(line => JSON.parse(line));
+      expect(bankRows[0]).toEqual({ id: 1, kind: "八股", question: `BANK_1_${"b".repeat(2_000)}` });
+      expect(bankRows.every(row => row.question === `BANK_${row.id}_${"b".repeat(2_000)}`)).toBe(true);
       expect(userMessage).not.toContain("BANK_AFTER_BUDGET");
       expect(trace.prepared).toHaveLength(1);
       expect(trace.executed).toHaveLength(1);
@@ -651,6 +701,52 @@ describe("budgeted SQL context loading", () => {
     }
   });
 
+  it.each(["参考内容", "<&>"])("保留长 JD，按转义后剩余预算选取完整题库项：%s", async (text) => {
+    insertRows(
+      "INSERT INTO bank_entries (direction,kind,question,created_at) VALUES ('后端','tech',?, '')",
+      80,
+      (index) => [`BANK_START_${index}_${text.repeat(500)}_BANK_END_${index}`],
+    );
+    const jd = `JD_START_${"岗位".repeat(5990)}_JD_END`;
+    boundary.chat.mockResolvedValue('{"questions":[{"question":"生成题","kind":"tech"}]}');
+    const { POST } = await import("../../app/api/drills/route");
+    const response = await POST(req({ source: "bank", jd, count: 1 }));
+    expect(response.status).toBe(201);
+    const messages = boundary.chat.mock.calls[0]![1] as { content: string }[];
+    expect(messages.reduce((sum, message) => sum + message.content.length, 0)).toBeLessThanOrEqual(MAX_MODEL_INPUT_CHARS);
+    expect(messages[1]!.content).toContain(jd);
+    const bankBlock = messages[1]!.content.match(/<question_bank>\n([\s\S]*)\n<\/question_bank>/)![1]!;
+    expect(bankBlock.length).toBeGreaterThan(30_000);
+    const decodedBank = bankBlock.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+    const bankRows = decodedBank.split("\n").map(line => JSON.parse(line));
+    expect(bankRows.every(row => row.question === `BANK_START_${row.id}_${text.repeat(500)}_BANK_END_${row.id}`)).toBe(true);
+    expect(bankBlock).not.toContain("BANK_START_80_");
+    if (text === "<&>") expect(bankBlock).toContain("&lt;&amp;&gt;");
+  });
+
+  it("单条参考题超过剩余预算时跳过参考，仍依据完整 JD 出题", async () => {
+    db.prepare("INSERT INTO bank_entries (direction,kind,question,created_at) VALUES ('后端','tech',?, '')").run("巨型参考".repeat(20_000));
+    boundary.chat.mockResolvedValue('{"questions":[{"question":"JD 生成题","kind":"tech"}]}');
+    const { POST } = await import("../../app/api/drills/route");
+    expect((await POST(req({ source: "bank", jd: "后端开发", count: 1 }))).status).toBe(201);
+    const message = boundary.chat.mock.calls[0]![1][1].content as string;
+    expect(message).toContain("后端开发");
+    expect(message).not.toContain("巨型参考");
+  });
+
+  it("必需的岗位上下文本身超限时不查询题库，也不调用模型", async () => {
+    const trace = traceSelects("bank_entries");
+    try {
+      const { POST } = await import("../../app/api/drills/route");
+      const response = await POST(req({ source: "bank", jd: "文".repeat(MAX_MODEL_INPUT_CHARS), count: 1 }));
+      expect(response.status).toBe(413);
+      expect(trace.executed).toHaveLength(0);
+      expect(boundary.chat).not.toHaveBeenCalled();
+    } finally {
+      trace.restore();
+    }
+  });
+
   it("loads answered interview turns by cursor without exceeding the complete model budget", async () => {
     const report = JSON.stringify({
       depth: 4,
@@ -664,8 +760,8 @@ describe("budgeted SQL context loading", () => {
     });
     db.prepare("INSERT INTO interviews (id,resume_id,jd,report,created_at) VALUES (1,1,'后端 JD',?,'')").run(report);
     const turnIdx = (id: number) => id === 1 ? 30 : id === 2 ? 10 : id === 3 ? 20 : id + 100;
-    const turnQuestion = (id: number) => `TURN_ID_${id}_${"q".repeat(1_800)}`;
-    const turnAnswer = (id: number) => `回答_ID_${id}_${"a".repeat(200)}`;
+    const turnQuestion = (id: number) => `TURN_ID_${id}_${"q".repeat(10)}`;
+    const turnAnswer = (id: number) => `回答_ID_${id}_${"a".repeat(1_800)}`;
     const turnComment = (id: number) => `点评_ID_${id}_${"c".repeat(100)}`;
     insertRows(
       "INSERT INTO interview_turns (interview_id,idx,kind,question,answer,comment,scores,answered_at) VALUES (1,?,?,?,?,?,?, 'now')",
@@ -692,21 +788,38 @@ describe("budgeted SQL context loading", () => {
       const totalChars = messages.reduce((total, message) => total + message.content.length, 0);
       expect(totalChars).toBeLessThanOrEqual(MAX_MODEL_INPUT_CHARS);
       expect(totalChars).toBeGreaterThan(60_000);
-      expect(userMessage).toContain("【本场问答】\n【问答记录】");
+      expect(userMessage).toContain("【本场问答】");
+      expect(userMessage).toContain("【问答记录】");
       for (const index of [1, 2, 3]) {
-        expect(userMessage).toContain(`<interview_question>\n${turnQuestion(index)}\n</interview_question>`);
+        expect(userMessage).toContain(turnQuestion(index));
         expect(userMessage).toContain(`<candidate_answer>\n${turnAnswer(index)}\n</candidate_answer>`);
-        expect(userMessage).toContain(`<model_comment>\n${turnComment(index)}\n</model_comment>`);
+        expect(userMessage).toContain(`<turn_metadata>\n${JSON.stringify({ idx: turnIdx(index), kind: index === 1 ? "followup" : "question" })}\n</turn_metadata>`);
+        expect(userMessage).not.toContain(turnComment(index));
       }
+      expect(userMessage).not.toContain("<model_comment>");
+      const reportBlock = `<interview_report>\n${JSON.stringify({
+        overall: 7.2,
+        scores: { depth: 4, structure: 8, authenticity: 8, completeness: 8, jd_match: 8 },
+        weaknesses: "技术深度不足", suggestions: "加强原理说明",
+      })}\n</interview_report>`;
+      expect(userMessage).toContain(reportBlock);
+      expect(userMessage.replace(reportBlock, "")).not.toContain('"scores"');
       expect(userMessage.indexOf(turnQuestion(1))).toBeLessThan(userMessage.indexOf(turnQuestion(2)));
       expect(userMessage.indexOf(turnQuestion(2))).toBeLessThan(userMessage.indexOf(turnQuestion(3)));
-      expect(userMessage).not.toContain("INTERVIEW_TURN_AFTER_BUDGET");
-      expect(trace.prepared).toHaveLength(1);
-      expect(trace.executed).toHaveLength(1);
-      expect(compactSql(trace.executed[0]!.sql)).toMatch(
+      expect(userMessage).toContain("INTERVIEW_TURN_AFTER_BUDGET");
+      expect(userMessage).not.toContain(turnAnswer(500));
+      expect(userMessage).toContain("后续问答未提供");
+      const answerReads = trace.executed.filter((item) => item.sql.includes("answered_at"));
+      const questionReads = trace.executed.filter((item) => !item.sql.includes("answered_at"));
+      // 出题前读取一次，提交事务中按相同预算复核一次；每次都保持原有游标批次上限。
+      expect(questionReads).toHaveLength(22);
+      expect(questionReads.slice(11)).toEqual(questionReads.slice(0, 11));
+      expect(answerReads).toHaveLength(2);
+      expect(answerReads[1]).toEqual(answerReads[0]);
+      expect(compactSql(answerReads[0]!.sql)).toMatch(
         /FROM interview_turns WHERE interview_id = \? AND answered_at != '' AND id > \? ORDER BY id LIMIT \?/i,
       );
-      expect(trace.executed[0]!.params).toEqual([1, 0, 50]);
+      expect(answerReads[0]!.params).toEqual([1, 0, 50]);
       expect(db.prepare("SELECT source, interview_id, focus FROM drills").get()).toEqual({
         source: "interview",
         interview_id: 1,
@@ -718,6 +831,82 @@ describe("budgeted SQL context loading", () => {
       });
     } finally {
       trace.restore();
+    }
+  });
+
+  it.each([
+    ["普通文本", "原答末尾：仅参与验证，尚未上线。"],
+    ["需转义文本", "<&>".repeat(100)],
+  ])(
+    "追练完整输入恰好达到上限时仍保留全部原答：%s",
+    async (_label, tail) => {
+      const report = JSON.stringify({
+        depth: 4, structure: 8, authenticity: 8, completeness: 8, jd_match: 8,
+        strengths: "优势", weaknesses: "需进一步核实", suggestions: "练习说明验证过程",
+      });
+      db.prepare("INSERT INTO interviews (id,resume_id,jd,report,created_at) VALUES (1,1,'J',?,'')").run(report);
+      const insert = db.prepare("INSERT INTO interview_turns (interview_id,idx,kind,question,answer,answered_at) VALUES (1,?,'question',?,?,'now')");
+      insert.run(1, "如何验证方案？", "FIRST_COMPLETE_ANSWER");
+      insert.run(2, "方案目前是什么状态？", `LAST_COMPLETE_ANSWER_${tail}`);
+      boundary.chat.mockResolvedValue('{"questions":[{"question":"新的巩固题","kind":"tech"}]}');
+      const { POST } = await import("../../app/api/drills/route");
+      const body = { source: "interview", interview_id: 1, count: 1 };
+
+      expect((await POST(req(body))).status).toBe(201);
+      const initialMessages = boundary.chat.mock.calls[0]![1] as { content: string }[];
+      const initialLength = initialMessages.reduce((total, message) => total + message.content.length, 0);
+      db.prepare("UPDATE interviews SET jd = ? WHERE id = 1").run("J".repeat(MAX_MODEL_INPUT_CHARS - initialLength + 1));
+
+      expect((await POST(req(body))).status).toBe(201);
+      const messages = boundary.chat.mock.calls[1]![1] as { content: string }[];
+      expect(messages.reduce((total, message) => total + message.content.length, 0)).toBe(MAX_MODEL_INPUT_CHARS);
+      expect(messages[1]!.content).toContain("FIRST_COMPLETE_ANSWER");
+      const { wrapUntrustedData } = await import("../prompt-safety");
+      expect(messages[1]!.content).toContain(wrapUntrustedData("candidate_answer", `LAST_COMPLETE_ANSWER_${tail}`));
+      expect(messages[1]!.content).not.toContain("后续问答未提供");
+      expect(db.prepare("SELECT COUNT(*) AS count FROM drills").get()).toEqual({ count: 2 });
+    },
+  );
+
+  it("只有后续游标批次确实超限时才移除末条完整原答，为范围提示腾出空间", async () => {
+    db.exec("INSERT INTO interviews (id,resume_id,jd,created_at) VALUES (1,1,'','')");
+    insertRows(
+      "INSERT INTO interview_turns (interview_id,idx,kind,question,answer,answered_at) VALUES (1,?,'question','题目',?,'now')",
+      50,
+      (index) => [index, `COMPLETE_ANSWER_${index}_END`],
+    );
+    const { loadInterviewTurnParts, promptPartsLength } = await import("../drills-context");
+    const completeParts = await loadInterviewTurnParts(1, MAX_MODEL_INPUT_CHARS);
+    const exactBudget = promptPartsLength(completeParts);
+    expect(await loadInterviewTurnParts(1, exactBudget)).toEqual(completeParts);
+    db.prepare("INSERT INTO interview_turns (interview_id,idx,kind,question,answer,answered_at) VALUES (1,51,'question','超限题',?,'now')")
+      .run("X".repeat(exactBudget));
+    const trace = traceSelects("interview_turns");
+    try {
+      const parts = await loadInterviewTurnParts(1, exactBudget);
+      const text = parts.map((part) => part.text).join("");
+      expect(promptPartsLength(parts)).toBeLessThanOrEqual(exactBudget);
+      for (let index = 1; index <= 49; index++) expect(text).toContain(`COMPLETE_ANSWER_${index}_END`);
+      expect(text).not.toContain("COMPLETE_ANSWER_50_END");
+      expect(text).not.toContain("X");
+      expect(text).toContain("后续问答未提供");
+      expect(trace.executed.map((item) => item.params)).toEqual([[1, 0, 50], [1, 50, 50]]);
+    } finally {
+      trace.restore();
+    }
+  });
+
+  it("省略说明本身也计入预算，不足以容纳原答时不返回半条记录", async () => {
+    db.exec("INSERT INTO interviews (id,resume_id,jd,created_at) VALUES (1,1,'',''); INSERT INTO interview_turns (interview_id,idx,kind,question,answer,answered_at) VALUES (1,1,'question','题目','PRIVATE_COMPLETE_ANSWER','now')");
+    const { loadInterviewTurnParts, promptPartsLength } = await import("../drills-context");
+    const omitted = await loadInterviewTurnParts(1, 100);
+    expect(omitted).toHaveLength(1);
+    expect(omitted[0]).toMatchObject({ trust: "trusted", text: expect.stringContaining("后续问答未提供") });
+    const noticeLength = promptPartsLength(omitted);
+    for (const budget of [0, noticeLength - 1, noticeLength, 100]) {
+      const parts = await loadInterviewTurnParts(1, budget);
+      expect(promptPartsLength(parts)).toBeLessThanOrEqual(budget);
+      expect(parts).toEqual(budget < noticeLength ? [] : omitted);
     }
   });
 
@@ -754,9 +943,11 @@ describe("budgeted SQL context loading", () => {
   it("awaits asynchronous project context before evaluating a drill answer", async () => {
     db.exec("INSERT INTO projects (id,name,created_at,updated_at) VALUES (1,'异步项目','',''); INSERT INTO drills (id,source,project_id,created_at) VALUES (1,'project',1,''); INSERT INTO drill_questions (id,drill_id,idx,question) VALUES (1,1,1,'项目题')");
     const loadProjectContext = vi.fn().mockResolvedValue("ASYNC_PROJECT_CONTEXT");
+    const projectContextMatches = vi.fn().mockReturnValue(true);
     vi.doMock("../projects", async (original) => ({
       ...await original<typeof import("../projects")>(),
       loadProjectContext,
+      projectContextMatches,
     }));
     boundary.chat.mockResolvedValue(
       '{"depth":8,"structure":8,"authenticity":8,"completeness":8,"comment":"点评","reference":"参考"}',
@@ -770,6 +961,7 @@ describe("budgeted SQL context loading", () => {
 
       expect(response.status).toBe(200);
       expect(loadProjectContext).toHaveBeenCalledWith(1);
+      expect(projectContextMatches).toHaveBeenCalledWith(1, "ASYNC_PROJECT_CONTEXT");
       const userMessage = boundary.chat.mock.calls[0]![1][1].content as string;
       expect(userMessage).toContain("ASYNC_PROJECT_CONTEXT");
       expect(userMessage).not.toContain("[object Promise]");

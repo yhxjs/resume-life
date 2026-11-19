@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
-import { validateBackupSequences, type BackupSequences } from "@/lib/backup";
+import { backupTablesForDbVersion, validateBackupSequences, type BackupSequences } from "@/lib/backup";
 import { invalidDomainColumn } from "@/lib/backup-domain";
+import { CURRENT_DB_VERSION } from "@/lib/db-schema";
 import {
   BACKUP_FILE_CHUNK_BYTES,
   MAX_BACKUP_FILE_BYTES,
@@ -96,8 +97,13 @@ export function validateManifest(value: Record<string, unknown>, tables: readonl
   if (value.backupVersion !== BACKUP_CONTAINER_VERSION) {
     throw new BackupStagingError(`不支持此备份版本：仅接受格式 ${BACKUP_CONTAINER_VERSION} 的加密备份`);
   }
-  if (!Number.isSafeInteger(value.dbVersion) || !isCanonicalIsoDate(value.createdAt) || !Array.isArray(manifestTables) ||
-      manifestTables.length !== tables.length || !tables.every((table, index) => manifestTables[index] === table)) {
+  if (![1, 2, 3, 4, 5, CURRENT_DB_VERSION].includes(value.dbVersion as number)) {
+    throw new BackupStagingError(`备份数据库版本不匹配：${String(value.dbVersion)} !== ${CURRENT_DB_VERSION}`);
+  }
+  // 各版本必须完整声明对应表集合，即使新增的来源表为空也不能省略。
+  const expectedTables = backupTablesForDbVersion(value.dbVersion as number, tables);
+  if (!isCanonicalIsoDate(value.createdAt) || !Array.isArray(manifestTables) ||
+      manifestTables.length !== expectedTables.length || !expectedTables.every((table, index) => manifestTables[index] === table)) {
     throw new BackupStagingError("备份 manifest 无效");
   }
   let sequences: BackupSequences;

@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { clearEntityLlmLabels } from "@/lib/llm-label-cleanup";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
@@ -8,7 +9,7 @@ import { readCustomTemplate } from "@/lib/custom-templates";
 
 async function handlePatch(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的模板 ID" }, { status: 400 });
   }
@@ -60,7 +61,7 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
 
 async function handleDelete(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的模板 ID" }, { status: 400 });
   }

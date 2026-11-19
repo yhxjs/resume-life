@@ -1,17 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { DIMENSIONS, type ScoreMap } from "@/lib/scores";
 import { Loading, LoadError } from "@/components/common/ui-bits";
-import { LoadingOverlay } from "@/components/common/loading-overlay";
 import { NotebookStarButton } from "@/components/notebook";
 import { useCopyFeedback } from "@/hooks/use-copy-feedback";
 import { jsonFetch } from "@/lib/fetcher";
 import { btnGhost, btnPrimary, textareaTallCls, scoreTextCls, textErr } from "@/lib/ui";
 import { errorMessage } from "@/lib/error-message";
-import { REVIEW_MASTERY_LABELS, type ReviewMastery } from "@/lib/spaced-repetition-card-types";
+import { REVIEW_MASTERY_LABELS, type ReviewLink, type ReviewMastery } from "@/lib/spaced-repetition-card-types";
 
 type Question = {
   id: number;
@@ -43,6 +42,7 @@ type DrillData = {
 };
 
 const KIND_LABELS: Record<string, string> = { tech: "八股", behavior: "行为" };
+type AnswerDraft = { text: string };
 
 /** 练习标题副标：项目题显示项目名，追练题显示追练重点，题库题显示方向或 JD 摘要 */
 function drillSubtitle(data: DrillData): string {
@@ -53,37 +53,46 @@ function drillSubtitle(data: DrillData): string {
 
 export default function DrillPage() {
   const params = useParams<{ id: string }>();
+  return <DrillSession key={params.id} drillId={params.id} />;
+}
+
+function DrillSession({ drillId }: { drillId: string }) {
   const router = useRouter();
   const [data, setData] = useState<DrillData | null>(null);
   const [currentIdx, setCurrentIdx] = useState(1);
-  const [answer, setAnswer] = useState("");
-  const [evaluating, setEvaluating] = useState(false);
+  const [drafts, setDrafts] = useState<Record<number, AnswerDraft>>({});
+  const [answerErrors, setAnswerErrors] = useState<Record<number, string>>({});
+  const [savedSubmissions, setSavedSubmissions] = useState<Record<number, AnswerDraft>>({});
+  const [evaluatingId, setEvaluatingId] = useState<number | null>(null);
+  const submitting = useRef(false);
+  const mounted = useRef(false);
+  const notebookVersions = useRef<Record<number, number>>({});
   const [error, setError] = useState("");
-  const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [restarting, setRestarting] = useState(false);
   const [restartError, setRestartError] = useState("");
-  const { copiedText, copy } = useCopyFeedback();
+  const { copiedText, copy, copyError, copying } = useCopyFeedback();
   const [loadAttempt, setLoadAttempt] = useState(0);
 
-  async function copyReference(text: string) {
-    if (!(await copy(text))) setError("复制失败，请检查浏览器剪贴板权限");
-  }
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    jsonFetch<DrillData>(`/api/drills/${params.id}`)
+    jsonFetch<DrillData>(`/api/drills/${drillId}`)
       .then((d) => {
         // 快速切换 drill 时旧请求可能后到，取消后直接丢弃，避免旧数据覆盖新页面
         if (cancelled) return;
         setData(d);
         const firstUnanswered = d.questions.find((q) => !q.answered_at);
-        if (firstUnanswered) setCurrentIdx(firstUnanswered.idx);
+        setCurrentIdx(firstUnanswered?.idx ?? d.questions[0]?.idx ?? 1);
       })
       .catch((err) => {
         if (!cancelled) setError(errorMessage(err));
       });
     return () => { cancelled = true; };
-  }, [params.id, loadAttempt]);
+  }, [drillId, loadAttempt]);
 
   if (error && !data) return <LoadError message={error} onRetry={() => { setError(""); setLoadAttempt((attempt) => attempt + 1); }} />;
   if (!data) return <Loading />;
@@ -93,51 +102,103 @@ export default function DrillPage() {
   }
 
   const current = data.questions.find((q) => q.idx === currentIdx) ?? data.questions[0]!;
+  const draft = drafts[current.id];
+  const answer = draft?.text ?? "";
+  const editing = draft !== undefined;
+  const evaluating = evaluatingId !== null;
+  const pendingQuestion = data.questions.find((q) => q.id === evaluatingId);
   const answeredCount = data.questions.filter((q) => q.answered_at).length;
   const allAnswered = answeredCount === data.questions.length;
 
-  function setQuestionNotebook(questionId: number, notebookId: number | null) {
+  function setQuestionNotebook(questionId: number, notebookId: number | null, review?: ReviewLink | null) {
+    notebookVersions.current[questionId] = (notebookVersions.current[questionId] ?? 0) + 1;
     setData((prev) =>
       prev
-        ? { ...prev, questions: prev.questions.map((q) => (q.id === questionId ? { ...q, notebook_id: notebookId } : q)) }
+        ? { ...prev, questions: prev.questions.map((q) => (q.id === questionId ? {
+          ...q, notebook_id: notebookId, review_card_id: review?.review_card_id ?? null,
+          review_mastery: review?.review_mastery ?? null, next_review_date: review?.next_review_date ?? null,
+        } : q)) }
         : prev
     );
   }
 
   function jumpTo(idx: number) {
     setCurrentIdx(idx);
-    setAnswer("");
-    setEditingIdx(null);
-    setError("");
   }
 
   function startReanswer() {
-    setAnswer("");
-    setEditingIdx(current.idx);
-    setError("");
+    setDrafts((prev) => ({ ...prev, [current.id]: { text: "" } }));
+    setAnswerErrors((prev) => ({ ...prev, [current.id]: "" }));
+  }
+
+  function updateAnswer(text: string) {
+    // 每次编辑创建新对象，即使改回相同文字也属于新草稿。
+    setDrafts((prev) => ({ ...prev, [current.id]: { text } }));
+  }
+
+  function cancelReanswer() {
+    setDrafts((prev) => {
+      const next = { ...prev };
+      delete next[current.id];
+      return next;
+    });
+    setAnswerErrors((prev) => ({ ...prev, [current.id]: "" }));
   }
 
   async function submitAnswer() {
-    if (!answer.trim()) {
-      setError("请先输入回答");
+    if (submitting.current) return;
+    const savedDraft = savedSubmissions[current.id];
+    if (!answer.trim() && !savedDraft) {
+      setAnswerErrors((prev) => ({ ...prev, [current.id]: "请先输入回答" }));
       return;
     }
-    setError("");
-    setEvaluating(true);
+    const questionId = current.id;
+    const submittedDraft = savedDraft ?? draft!;
+    let saved = savedDraft !== undefined;
+    submitting.current = true;
+    setAnswerErrors((prev) => ({ ...prev, [questionId]: "" }));
+    setEvaluatingId(questionId);
     try {
-      await jsonFetch(`/api/drills/${data!.id}/questions/${current.id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answer }),
+      if (!saved) {
+        await jsonFetch(`/api/drills/${drillId}/questions/${questionId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answer: submittedDraft.text }),
+        });
+        saved = true;
+        if (!mounted.current) return;
+        setSavedSubmissions((prev) => ({ ...prev, [questionId]: submittedDraft }));
+      }
+      if (!mounted.current) return;
+      const versionsBeforeRead = { ...notebookVersions.current };
+      const updated = await jsonFetch<DrillData>(`/api/drills/${drillId}`);
+      if (!mounted.current) return;
+      setData((prev) => ({ ...updated, questions: updated.questions.map((question) => {
+        const local = prev?.questions.find((q) => q.id === question.id);
+        if (!local || (notebookVersions.current[question.id] ?? 0) === (versionsBeforeRead[question.id] ?? 0)) return question;
+        // 评分回读不能覆盖其等待期间已完成的收藏或取消收藏。
+        return { ...question, notebook_id: local.notebook_id, review_card_id: local.review_card_id,
+          review_mastery: local.review_mastery, next_review_date: local.next_review_date };
+      }) }));
+      setSavedSubmissions((prev) => {
+        const next = { ...prev };
+        delete next[questionId];
+        return next;
       });
-      const updated = (await refetch()) as DrillData;
-      setData(updated);
-      setAnswer("");
-      setEditingIdx(null);
+      setDrafts((prev) => {
+        // 只移除实际提交的那份草稿；等待中键入、切题或重答产生的新稿继续保留。
+        if (prev[questionId] !== submittedDraft) return prev;
+        const next = { ...prev };
+        delete next[questionId];
+        return next;
+      });
     } catch (err) {
-      setError(errorMessage(err));
+      if (mounted.current) setAnswerErrors((prev) => ({ ...prev, [questionId]: saved
+        ? `评分已保存，读取结果失败：${errorMessage(err)}。请重新读取，无需重复评分。`
+        : errorMessage(err) }));
     } finally {
-      setEvaluating(false);
+      submitting.current = false;
+      if (mounted.current) setEvaluatingId(null);
     }
   }
 
@@ -154,21 +215,19 @@ export default function DrillPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      if (!mounted.current) return;
       router.push(`/drills/${body.id}`);
     } catch (err) {
+      if (!mounted.current) return;
       setRestartError(errorMessage(err));
       setRestarting(false);
     }
   }
 
-  async function refetch(): Promise<DrillData> {
-    return jsonFetch<DrillData>(`/api/drills/${params.id}`);
-  }
-
   const nextUnanswered = data.questions.find((q) => !q.answered_at);
   const completionText =
     data.source === "interview"
-      ? `本套 ${data.questions.length} 题追练已完成。建议回看面试报告对比短板变化，或再开一场模拟面试检验练习效果。`
+      ? `本套 ${data.questions.length} 题追练已完成。建议结合原面试报告回顾本次作答与待核实事项，或再开一场模拟面试检验练习效果。`
       : data.source === "bank"
         ? `本套 ${data.questions.length} 题已全部完成，可再从题库生成一套新题继续练习。`
         : `本套 ${data.questions.length} 题已全部完成，可针对「${data.project_name}」再生成一套新题继续练习。`;
@@ -255,13 +314,19 @@ export default function DrillPage() {
         </div>
       </div>
 
+      {pendingQuestion && (
+        <p role="status" aria-live="polite" className="text-sm text-muted">
+          {savedSubmissions[pendingQuestion.id] ? `正在读取第 ${pendingQuestion.idx} 题已保存评分` : `第 ${pendingQuestion.idx} 题正在评分`}，可继续编辑草稿或切题；本次只评估已提交的回答。
+        </p>
+      )}
+
       {/* 主做题双栏网格 */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         {/* 左侧主要题目与作答区（7 栏） */}
         <div className="space-y-5 lg:col-span-7">
           <div className="space-y-4 rounded-2xl border border-line bg-card p-6 shadow-card-subtle">
-            <div className="flex items-center justify-between border-b border-line pb-3.5">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3.5">
+              <div className="flex shrink-0 items-center gap-2">
                 <span className="font-mono text-xs font-bold text-primary">
                   QUESTION {String(current.idx).padStart(2, "0")} / {String(data.questions.length).padStart(2, "0")}
                 </span>
@@ -276,13 +341,13 @@ export default function DrillPage() {
                 sourceId={current.id}
                 question={current.question}
                 notebookId={current.notebook_id}
-                onChanged={(id) => setQuestionNotebook(current.id, id)}
+                onChanged={(id, review) => setQuestionNotebook(current.id, id, review)}
               />
             </div>
 
             {/* 考题描述 */}
             <div className="space-y-2">
-              <h2 className="font-serif text-lg sm:text-xl font-bold text-ink leading-relaxed">
+              <h2 className="min-w-0 break-words font-serif text-lg sm:text-xl font-bold text-ink leading-relaxed" style={{ overflowWrap: "anywhere" }}>
                 {current.question}
               </h2>
             </div>
@@ -297,15 +362,10 @@ export default function DrillPage() {
                 <Link href={`/reviews?card=${current.review_card_id}`} className={btnGhost}>开始间隔复习</Link>
               </div>
             )}
-            {(!current.answered_at || editingIdx === current.idx) ? (
+            {(!current.answered_at || editing) ? (
               <div className="relative space-y-3 pt-3 border-t border-line/60">
-                <LoadingOverlay
-                  show={evaluating}
-                  message="AI 考官正在深度批改您的作答…"
-                  description="正在从技术广度、深度、STAR 结构与量化成效四个维度进行综合评分与点评，约需 10 秒，请稍候…"
-                />
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-ink flex items-center gap-1.5">
+                  <label htmlFor={`drill-answer-${current.id}`} className="text-xs font-bold text-ink flex items-center gap-1.5">
                     <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                     <span>{current.answered_at ? "重新回忆并作答：" : "我的现场回答："}</span>
                   </label>
@@ -313,9 +373,10 @@ export default function DrillPage() {
                 </div>
 
                 <textarea
+                  id={`drill-answer-${current.id}`}
                   className={`${textareaTallCls} font-sans text-xs sm:text-sm`}
                   value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
+                  onChange={(e) => updateAnswer(e.target.value)}
                   placeholder={
                     data.source === "bank"
                       ? "针对考点分条作答；行为与业务题建议按 STAR（背景-任务-行动-结果）组织回答…"
@@ -323,7 +384,8 @@ export default function DrillPage() {
                   }
                 />
 
-                {error && <p className={`text-sm ${textErr}`}>{error}</p>}
+                {current.answered_at && <p className="text-xs text-muted">当前草稿尚未提交，已保存回答的评分与参考暂不展示。</p>}
+                {answerErrors[current.id] && <p role="alert" className={`text-sm ${textErr}`}>{answerErrors[current.id]}</p>}
 
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                   <span className="text-xs text-faint">提交后 AI 将针对技术深度与结构进行四维评分</span>
@@ -332,8 +394,8 @@ export default function DrillPage() {
                       <button
                         type="button"
                         className={btnGhost}
-                        onClick={() => jumpTo(current.idx)}
-                        disabled={evaluating}
+                        onClick={cancelReanswer}
+                        disabled={evaluatingId === current.id || !!savedSubmissions[current.id]}
                       >
                         取消重答
                       </button>
@@ -342,9 +404,9 @@ export default function DrillPage() {
                       type="button"
                       className={btnPrimary}
                       onClick={submitAnswer}
-                      disabled={evaluating || !answer.trim()}
+                      disabled={evaluating || (!answer.trim() && !savedSubmissions[current.id])}
                     >
-                      {evaluating ? "AI 考官打分批改中…（约需十秒）" : current.answered_at ? "保存并重新打分" : "提交作答并获取批阅"}
+                      {evaluatingId === current.id ? (savedSubmissions[current.id] ? "读取已保存评分中…" : "AI 考官打分批改中…") : evaluating ? "请等待当前评分完成" : savedSubmissions[current.id] ? "重新读取已保存评分" : current.answered_at ? "保存并重新打分" : "提交作答并获取批阅"}
                     </button>
                   </div>
                 </div>
@@ -389,7 +451,7 @@ export default function DrillPage() {
 
         {/* 右侧当前/选中题目的批改反馈看板（5 栏） */}
         <div className="space-y-5 lg:col-span-5">
-          {current.answered_at && editingIdx !== current.idx ? (
+          {current.answered_at && !editing ? (
             <div className="space-y-5 rounded-2xl border border-line bg-card p-6 shadow-card-subtle">
               <div className="flex items-center justify-between border-b border-line pb-3">
                 <div className="flex items-center gap-2">
@@ -431,17 +493,18 @@ export default function DrillPage() {
                 </div>
               )}
 
-              {/* 改进版满分参考答案 */}
+              {/* 本题的回答参考 */}
               {current.reference && (
-                <div className="space-y-2 rounded-xl border border-primary/25 bg-primary-soft p-4 text-xs leading-relaxed">
+                <div role="region" aria-label="本题回答参考" className="space-y-2 rounded-xl border border-primary/25 bg-primary-soft p-4 text-xs leading-relaxed">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-primary flex items-center gap-1.5">
-                      <span>💎 满分参考答题思路</span>
+                      <span>💎 回答参考思路</span>
                     </span>
                     <button
                       type="button"
-                      onClick={() => void copyReference(current.reference)}
-                      className="text-[10px] text-primary hover:underline"
+                      onClick={() => void copy(current.reference)}
+                      disabled={copying}
+                      className="text-[10px] text-primary hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {copiedText === current.reference ? "已复制 ✓" : "复制参考"}
                     </button>
@@ -449,6 +512,8 @@ export default function DrillPage() {
                   <p className="whitespace-pre-wrap text-ink font-sans">
                     {current.reference}
                   </p>
+                  {copyError?.text === current.reference && <p role="alert" className="text-danger">{copyError.message}</p>}
+                  <p className="text-muted">参考内容不代表你已具备其中的经历或能力，请核对事实、个人分工与适用条件后再练习表达。</p>
                 </div>
               )}
             </div>

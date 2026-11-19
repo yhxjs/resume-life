@@ -8,7 +8,7 @@
 
    ```
    [server-info] {"level":"info","operation":"startup","context":{"node":"v24.21.0","platform":"win32"}}
-   [server-info] {"level":"info","operation":"db.open","context":{"resource":"existing-database","dataDirConfigured":true,"journalMode":"wal","dbVersion":1}}
+   [server-info] {"level":"info","operation":"db.open","context":{"resource":"existing-database","dataDirConfigured":true,"journalMode":"wal","dbVersion":5}}
    ```
 
    `resource` 为 `new-database` 表示这次启动新建了一个空库——通常意味着数据目录选错了（见第 2 节）。
@@ -35,6 +35,8 @@
    ```
 
     日志**只**记录白名单诊断字段（route、table、dbVersion、durationMs 等），不含异常 message/stack、请求正文、模型输出、API Key 或个人资料。`errorType` 仅按可信类型区分 `TypeError`、`SyntaxError`、`RangeError`、`ModelProtocolError`、`ModelInputBudgetError`、`BackupLimitError` 等，任意自定义 `error.name` 不会被输出；`errorCode` 只保留白名单系统/网络代码及 SQLite 分类，最多检查四层 `cause`。健康检查的 `stage` 区分数据库打开/查询/版本/WAL、存储写探针和恢复暂存检查；这些类别可以帮助定位故障，但不会给出原始敏感字段正文，仍需结合界面提示和下面的分类排查。
+
+扫描或关联预检出现 `operation=cli.workdir.cleanup`，表示本次 CLI 临时目录在有限重试后仍未删除。清理失败会保留已生成的结果或原始错误，不会自动重新调用模型；日志通过所属 `requestId` 和 `resource=scan/relation` 关联任务，不记录目录路径或材料正文。此时系统临时目录中可能留下 `resume-life-cli-`／`resume-life-relation-` 目录，请检查服务账户的临时目录权限及文件锁；应用没有后台持续回收机制。
 
 ## 2. 数据看起来「丢了」
 
@@ -69,6 +71,8 @@
 
 `predev` / `prebuild` / `prestart` / `pretest` 都会先跑 `scripts/check-runtime.mjs`。这是刻意的前置失败：本应用依赖 `node:sqlite`，而 `engines`、`.npmrc` 与运行期检查共同把可用范围钉在 Node 24 LTS。
 
+若前置检查通过，但 Turbopack 在处理 CSS 时提示 `--experimental-sqlite is not allowed in NODE_OPTIONS`，还需核对构建子进程实际使用的 Node。Windows 上临时通过 `npx --package=node@24.21.0` 运行主进程时，子进程仍可能从 PATH 找到旧 Node；用 `where.exe node` 排查并统一到项目要求的 Node 24，不应仅据该错误认定 Turbopack 禁止 SQLite 选项。本机复验曾发现子进程使用 Node 16；统一 Node 24 的可执行目录并将传给构建器的环境键规范为 `PATH` 后，保留该选项也可完成生产构建。优先通过版本管理器切换完整终端环境，而非只更换顶层命令的 Node。
+
 ### 3.2 `node:sqlite` 不可用
 
 ```
@@ -85,11 +89,13 @@
 
 ## 4. 备份与恢复
 
+当前数据库结构版本为 `6`。完整 v1/v2/v3/v4/v5 数据库在启动时校验后原子升级；已有 v6 数据库须通过完整结构校验。业务备份接受 v1、v2、v3、v4、v5 与 v6，并按对应版本校验完整表清单。v4 新增真实面试复盘的生成时岗位资料，旧复盘缺少该资料时保持未知，不从当前投递回填。v5 新增项目材料的 DOCX 表格来源记录；旧材料没有来源记录时保持未知，不从标签外观推断。恢复会核对来源 JSON、正文哈希与标识范围，损坏记录整份拒绝。v6 新增同机多进程共享的简历导入来源回执，固定 30 分钟内有效且不缓存正文或文件；正常进程重启仍可使用，登录会话失效、超时或恢复后失效。本机谈薪、简历创建和导入来源回执不导出，恢复时会清除旧回执并切换数据世代。
+
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | 提示密码至少 12 个字符 | 备份密码长度下限 | 换更长的密码；密码无法找回，也不要写进脚本历史 |
 | 拒绝 JSON 文件 | 只接受首版 `.rlbackup` 加密容器 | 在设置页导出 `.rlbackup` 文件，并使用导出时的密码恢复 |
-| 恢复被拒并提示版本不符 | 当前只接受 manifest `1.0.0`、加密头 `1` 和数据库结构版本为 `1`，且全部字段与表清单必须完整；这三个版本号分别描述容器格式、加密封装和数据库结构 | 使用当前应用导出的完整备份，恢复不自动转换其他版本格式 |
+| 恢复被拒并提示版本不符 | 当前接受 manifest `1.0.0`、加密头 `1` 和数据库结构版本为 `1`、`2`、`3`、`4`、`5` 或 `6` 的完整业务备份；三个版本号分别描述容器格式、加密封装和数据库结构 | 使用完整加密备份；v1/v2/v3/v4/v5 业务备份可恢复到 v6，缺少的复盘来源快照和材料表格来源保持未知，本机创建回执不迁入，其他格式仍不自动转换 |
 | 恢复失败且原数据未变 | 校验在系统临时目录中的隔离 SQLite 数据库与文件暂存区完成，失败不触碰现库 | 检查临时目录权限与可用空间，或换完整备份文件；库内数据完好 |
 | 提示快照目录不可写 | 恢复前必须成功创建灾备快照 | 修复 `data/backups` 权限或磁盘空间后重试 |
 | 提示「头像文件不完整」或「分块长度与清单不符」 | 备份文件被截断或传输损坏，`file` 记录与 manifest 里的清单对不上 | 换一份完整的备份文件重试；不要手工裁剪容器内容 |
@@ -153,6 +159,7 @@ try {
 - **未配置**：设置页填 Base URL 与 API Key。两者任一为空即视为未配置，功能入口会提示。
 - **连接测试失败**：`POST /api/settings/test` 对配置无效返回 400；共享模型并发名额已满返回 429；上游不可达或非 2xx 返回 502；整体 15 秒超时返回 504；客户端取消返回 499。错误正文均为 `{ok:false, error}`。探测与普通调用共享三个并发名额，最多生成 1024 输出 token，不自动重试；调用结果在用量页按“模型连接测试”查看。
 - **413**：请求内容超过模型输入预算，应用在发出前就拒绝，不会消耗额度。可减少 JD/简历/问答记录的长度。
+- **响应超过字节上限**：每次 SSE 请求的响应体按 fetch 解压后交付的字节累计，上限为 8 MiB；读取到导致越界的数据块后整块拒绝。可见正文最多 2 MiB，单个 SSE 事件按换行规范化后的 UTF-8 计算最多 256 KiB，非流式响应体仍最多 2 MiB。推理字段、重复元数据、未知事件与心跳都消耗 SSE 响应体预算，所以正文很短也可能触限。该错误按协议失败记录，不自动重试；字节限制与输出 token 预算、超时各自独立。
 - **499**：请求已被取消（用户离开页面或点了取消）。属于正常路径，不是故障。
 - **模型列表拉取失败**：`POST /api/settings/models` 对上游失败返回 502，与「配置无效」的 400 区分开。
 - **用量看板的历史范围**：调用计量日志只保留最近 180 天，更早的记录会在每天首次调用时自动清理（清理会记一条 `llm.metering.pruned`）。需要长期留档请在清理前自行导出。
@@ -182,7 +189,7 @@ try {
 
 ## 7. 端口与访问范围
 
-生产命令只监听 `127.0.0.1:3714`，且应用没有账号体系。需要从其他设备访问时，请放在 VPN 或带身份认证与 TLS 的反向代理之后；不要直接把端口暴露到局域网或公网。
+生产命令只监听 `127.0.0.1:3714`。应用提供本地单用户登录，首次启动设置用户名和密码，后续访问需要有效会话（见 [ADR-0004](./ADR.md#adr-0004)）。需要从其他设备访问时，请放在 VPN 或带身份认证与 TLS 的反向代理之后；不要直接把端口暴露到局域网或公网。
 
 所有 `/api` 请求（含只读 GET）都会校验请求打到的 `Host`：默认白名单只有 `127.0.0.1`、`localhost` 与 `[::1]`。这挡住的是 DNS rebinding——恶意页面把域名解析到 127.0.0.1 后，Origin 与 Host 天然相等，仅比较两者无法拦截。
 
@@ -193,7 +200,11 @@ try {
 - 让代理保留原始 `Host` 头（nginx 默认行为）。应用只认 `Host`，不认客户端可伪造的 `X-Forwarded-Host`。
 - 局域网 IP 直连（如 `192.168.x.x:3714`）默认同样被拒绝，需要显式加入白名单。
 
-端口被占用时改 `PORT` 环境变量后重启。
+端口被占用时需更改启动命令中的 `--port`。仓库的 npm 启动脚本显式固定为 3714，单独设置 `PORT` 环境变量不能覆盖该参数。已完成生产构建后，可从项目根目录用下列命令监听 3715，继续保留回环地址与 SQLite 运行参数：
+
+```bash
+node --experimental-sqlite node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3715
+```
 
 ## 8. 请求体上限
 
@@ -231,3 +242,72 @@ try {
 PDF 之所以用子进程而不是 Worker：pdf-parse 在 Node 下走 pdfjs 的 legacy 构建，该构建加载进 `worker_threads` 会以约一半的概率让整个进程段错误（SIGSEGV），实测 pdfjs-dist 5.4.296 在 Node 23.1 与 24.21 上均可复现。
 
 超过上限时导入会失败并提示「文件内容无法解析」。若确认文件本身正常，通常是页数或嵌套结构过于复杂——把 PDF 拆小或另存为更简单的版本后重试。
+
+### 构建追踪提示缺少 PDF 解析依赖
+
+`npm run check:build-trace` 会逐项核对两个材料解析路由的依赖、PDF worker、字符映射和字体资源。npm 的平铺路径与 pnpm 的 `node_modules/.pnpm/...` 实际路径均按文件真实位置核对；链接与实际路径指向同一文件时应通过，缺失文件或其他目录下的同名文件不能代替所需资源。
+
+若仍提示缺少依赖，先确认依赖已安装，再重新生成构建并检查：
+
+```bash
+npm run build
+npm run check:build-trace
+```
+
+切换包管理器或重新安装依赖后，旧 `.next` 清单可能仍指向此前的安装路径，需要重新构建。仅在宿主 `node_modules` 中找到文件不能证明部署清单已包含它；应保留此检查，并核对 `next.config.ts` 的定向资源收录规则及对应路由的 `.nft.json`。
+
+## 9. 依赖安全检查
+
+安全检查需区分生产依赖和包含开发工具的完整依赖树：
+
+```bash
+npm audit --omit=dev --audit-level=moderate --registry=https://registry.npmjs.org
+npm audit --audit-level=high --registry=https://registry.npmjs.org
+```
+
+部分 npm 镜像未实现审计接口，会返回 `404 NOT_IMPLEMENTED`；这表示检查未完成，不能视为没有漏洞。上面的命令直接使用官方审计接口。
+
+2026-11-18 的原始完整审计报告有 14 个 high 开发依赖传播节点，均源自 GHSA-fc5q-39xc-vjpf；生产依赖为零。上游尚无修复版。本项目保留同名 4.0.7，通过安装期固定哈希补丁和经批准的限时精确政策执行发布检查，详情见 [SECURITY.md](../SECURITY.md)。原始 npm audit 仍可能返回非零，不能把它的报告改称零漏洞。
+
+日常与发布检查使用：
+
+```bash
+npm run audit:dependencies
+```
+
+报告保存在 `.test-artifacts/dependency-audit/`。若跳过了安装脚本，先执行 `node scripts/patch-picomatch.mjs`，再运行 `npm run check:dependency-security`。若提示版本、文件哈希或锁文件漂移，应确认完整安装并审查依赖变更；不能删掉门禁或改写政策来放行。到期后需验证正式修复或重新开展安全审查，当前政策不会自动延期。
+
+不要使用 `npm audit fix --force` 自动降级 ESLint、Vitest 或 Next 配置；保持锁文件和 vendor 适配器，经过兼容验证后再采用上游更新。上述数量是当日快照，后续以实际报告为准。
+
+## 10. 本地 OCR 语言包
+
+`npm run setup:ocr` 从 jsDelivr 获取固定版本的英文与简体中文模型，并校验解压后的字节数和 SHA-256。模型默认写入当前工作目录；设置 `RESUME_LIFE_OCR_DATA_DIR` 时必须使用绝对路径，准备与应用运行须使用同一路径。有效模型已存在时只校验，不重新下载。
+
+### CDN 下载失败
+
+若出现 `fetch failed`、`ECONNRESET` 或超时，先检查能否访问脚本中指定的 jsDelivr 地址。无法访问 CDN、但可访问官方 npm registry 时，可以获取相同的 `@tesseract.js-data/eng@1.0.0` 和 `@tesseract.js-data/chi_sim@1.0.0` 包，提取固定模型并交给原准备函数校验。以下步骤在项目根目录执行，需有 `tar` 命令；Windows 复验通过，Linux 实际执行尚未验证。
+
+```bash
+node -e "for (const language of ['eng', 'chi_sim']) require('node:fs').mkdirSync('.test-artifacts/ocr-download/' + language, { recursive: true })"
+npm pack "@tesseract.js-data/eng@1.0.0" --pack-destination .test-artifacts/ocr-download/eng --registry=https://registry.npmjs.org
+npm pack "@tesseract.js-data/chi_sim@1.0.0" --pack-destination .test-artifacts/ocr-download/chi_sim --registry=https://registry.npmjs.org
+tar -xzf .test-artifacts/ocr-download/eng/tesseract.js-data-eng-1.0.0.tgz -C .test-artifacts/ocr-download/eng package/4.0.0_best_int/eng.traineddata.gz
+tar -xzf .test-artifacts/ocr-download/chi_sim/tesseract.js-data-chi_sim-1.0.0.tgz -C .test-artifacts/ocr-download/chi_sim package/4.0.0_best_int/chi_sim.traineddata.gz
+node --input-type=module -e "
+import fs from 'node:fs';
+import { prepareOcrAssets } from './scripts/prepare-ocr.mjs';
+await prepareOcrAssets({ fetchImpl: async url => {
+  const language = new URL(url).pathname.match(/\/(eng|chi_sim)@1\.0\.0\//)?.[1];
+  if (!language) throw new Error('未审阅的 OCR 模型地址');
+  const filename = '.test-artifacts/ocr-download/' + language + '/package/4.0.0_best_int/' + language + '.traineddata.gz';
+  return new Response(fs.readFileSync(filename));
+} });
+"
+npm run setup:ocr
+```
+
+最后一次 `setup:ocr` 应确认两份模型有效。原准备函数在全部模型大小与 SHA-256 通过后才写入，不修改版本、模型哈希或下载器，也不放宽校验。中间包保留在受忽略保护的 `.test-artifacts/`；模型与中间包均不应提交到仓库。
+
+### 模型目录或初始化失败
+
+确认运行账户能读取 `eng.traineddata` 与 `chi_sim.traineddata`，并核对准备和运行时的工作目录、`RESUME_LIFE_OCR_DATA_DIR`。本地 OCR 默认要求中英文模型，初始化失败会明确报错，不会静默只用英文。需要改用多模态识别时，在设置页选择并配置对应模型后重试。

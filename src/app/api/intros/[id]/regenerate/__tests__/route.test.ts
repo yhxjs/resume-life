@@ -12,7 +12,7 @@ vi.mock("@/lib/safe-llm", async (original) => ({
 
 const TEMP_PREFIX = "resume-life-intro-regenerate-test-";
 const originalSentences = [{ text: "Original introduction", comment: "Original comment" }];
-const generatedSentences = [{ text: "Generated introduction", comment: "Generated comment" }];
+const generatedSentences = [{ text: "Generated introduction.", comment: "Generated comment" }];
 const generatedJson = JSON.stringify({ versions: [{ kind: "30s", sentences: generatedSentences }] });
 const context = { params: Promise.resolve({ id: "1" }) };
 let tempDir: string;
@@ -133,4 +133,21 @@ describe("intro regeneration commit boundary", () => {
     expect((await POST(request(), context)).status).toBe(404);
     expect(safeChat).not.toHaveBeenCalled();
   });
+});
+
+
+it("显式重生成可修复异常原稿，失败前不改原文，成功只更新本版", async () => {
+  const raw = JSON.stringify([{ text: "可读原句", comment: "原点评" }, null]);
+  db.prepare("UPDATE intro_versions SET sentences=? WHERE intro_id=1 AND kind='30s'").run(raw);
+  db.prepare("INSERT INTO intro_versions (intro_id,kind,sentences,updated_at) VALUES (1,'2min',?,'untouched')").run(JSON.stringify(originalSentences));
+  const other = db.prepare("SELECT * FROM intro_versions WHERE kind='2min'").get();
+  const getVersion = () => db.prepare("SELECT * FROM intro_versions WHERE kind='30s'").get();
+  const before = getVersion();
+  safeChat.mockResolvedValueOnce("{broken");
+  const { POST } = await import("../route");
+  expect((await POST(request(), context)).status).toBe(502);
+  expect(getVersion()).toEqual(before);
+  expect((await POST(request(), context)).status).toBe(200);
+  expect(storedSentences()).toEqual(generatedSentences);
+  expect(db.prepare("SELECT * FROM intro_versions WHERE kind='2min'").get()).toEqual(other);
 });

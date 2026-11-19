@@ -1,7 +1,7 @@
 import { getDb, inTransaction, now } from "./db";
 import { createCursorPage, encodeUpdatedAtCursor, type UpdatedAtCursor } from "./cursor-pagination";
 import { getReviewDate, getReviewMastery, scheduleReview } from "./spaced-repetition";
-import type { ReviewAttempt, ReviewCard, ReviewDetail, ReviewGrade, ReviewList, ReviewSource, ReviewSummary } from "./spaced-repetition-card-types";
+import type { ReviewAttempt, ReviewCard, ReviewDetail, ReviewGrade, ReviewLink, ReviewList, ReviewSource, ReviewSummary } from "./spaced-repetition-card-types";
 
 const CARD_COLUMNS = `c.id, c.interval_days, c.ease_factor, c.repetitions, c.review_count, c.lapses,
   c.next_review_date, c.last_reviewed_at,
@@ -22,6 +22,14 @@ function cardWithMastery(row: CardRow, today?: string): ReviewCard {
 function getReviewCard(id: number): ReviewCard | null {
   const row = getDb().prepare(`SELECT ${CARD_COLUMNS} ${CARD_FROM} WHERE c.id=?`).get(id) as CardRow | undefined;
   return row ? cardWithMastery(row) : null;
+}
+
+/** 收藏事务内读取实际转接或新建的复习关联，供来源页面即时同步。 */
+export function getNotebookReviewLink(notebookId: number): ReviewLink | null {
+  const card = getDb().prepare("SELECT id, next_review_date, review_count, repetitions, interval_days FROM review_cards WHERE notebook_id = ?").get(notebookId) as {
+    id: number; next_review_date: string; review_count: number; repetitions: number; interval_days: number;
+  } | undefined;
+  return card ? { review_card_id: card.id, next_review_date: card.next_review_date, review_mastery: getReviewMastery(card) } : null;
 }
 
 export function getReviewSummary(today: string): ReviewSummary {
@@ -50,7 +58,7 @@ export function listReviewCards(options: { today: string; scope: "due" | "all"; 
     ORDER BY c.next_review_date, c.id LIMIT ?`).all(...values, options.limit + 1) as CardRow[];
   const page = createCursorPage(rows, options.limit, row => encodeUpdatedAtCursor({ updatedAt: row.next_review_date, id: row.id }));
   // 游标使用存储日期；尚未学习的题目对任意时区都显示为今日可开始。
-  return { items: page.items.map(row => cardWithMastery(row, options.today)), nextCursor: page.nextCursor, summary: getReviewSummary(options.today) };
+  return { items: page.items.map(row => ({ ...cardWithMastery(row, options.today), sort_date: row.next_review_date })), nextCursor: page.nextCursor, summary: getReviewSummary(options.today) };
 }
 
 export function getReviewDetail(id: number, limit: number, cursor: number | null, today = getReviewDate()): ReviewDetail | null {
@@ -68,6 +76,15 @@ export function getReviewDetail(id: number, limit: number, cursor: number | null
 
 export class ReviewError extends Error {
   constructor(message: string, readonly status: 404 | 409) { super(message); }
+}
+
+/** 按持久提交编号只读核对，不按同文回答或最近历史认领，不推进排期。 */
+export function getReviewSubmission(id: number, requestId: string): { request_id: string; card: ReviewCard; attempt: ReviewAttempt } | null {
+  const attempt = getDb().prepare(`SELECT ${ATTEMPT_COLUMNS} FROM review_attempts WHERE card_id=? AND request_id=?`)
+    .get(id, requestId) as ReviewAttempt | undefined;
+  if (!attempt) return null;
+  const card = getReviewCard(id);
+  return card ? { request_id: requestId, card, attempt } : null;
 }
 
 export function saveReview(id: number, input: { answer: string; grade: ReviewGrade; expected_review_count: number; request_id: string; time_zone?: string }): { card: ReviewCard; attempt: ReviewAttempt } {

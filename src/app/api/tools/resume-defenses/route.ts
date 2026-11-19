@@ -2,19 +2,22 @@ import { withRouteErrorHandling } from "@/lib/api-route";
 import { resolveResumeVersionId, ResumeVersionError } from "@/lib/resume-versions";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
-import { extractJson, LlmConfigError } from "@/lib/llm";
-import { loadResume, loadResumeContext } from "@/lib/resumes";
+import { LlmConfigError } from "@/lib/llm";
+import { loadResumeForModel, formatResumeContext, formatResumeEvidenceText, collectResumeEvidenceParts } from "@/lib/resumes";
+import { ResumeContextError } from "@/lib/resume-errors";
 import {
   listDefenseReports,
-  normalizeDefenseReport,
+  validateGeneratedDefenseReport,
   saveDefenseReport,
 } from "@/lib/resume-defense";
 import {
+  buildResumeDefenseScanMessages,
   RESUME_DEFENSE_SCAN_SYSTEM_PROMPT,
 } from "@/lib/resume-defense-llm";
 import { logServerError, requestIdFrom } from "@/lib/server-errors";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
+import { ModelInputBudgetError } from "@/lib/llm-input-budget";
 
 async function handleGet(request?: Request) {
   try {
@@ -32,17 +35,27 @@ async function handleGet(request?: Request) {
 async function handlePost(req: Request) {
   try {
     const parsedBody = await parseApiJson<unknown>(req);
-  if (!parsedBody.ok) return parsedBody.response;
-  const body = parsedBody.data as {
+    if (!parsedBody.ok) return parsedBody.response;
+    if (!parsedBody.data || typeof parsedBody.data !== "object" || Array.isArray(parsedBody.data)) {
+      return NextResponse.json({ error: "排雷请求必须是 JSON 对象" }, { status: 400 });
+    }
+    const body = parsedBody.data as {
       resumeId?: unknown;
       resumeVersionId?: unknown;
       resume_version_id?: unknown;
       resumeContent?: unknown;
       targetRole?: unknown;
       title?: unknown;
-    } | null;
+    };
+    for (const field of ["resumeContent", "targetRole", "title"] as const) {
+      if (body[field] !== undefined && typeof body[field] !== "string") {
+        return NextResponse.json({ error: "简历原文、目标岗位和报告标题必须是字符串" }, { status: 400 });
+      }
+    }
 
     let resumeContent = typeof body?.resumeContent === "string" ? body.resumeContent.trim() : "";
+    let modelResumeContent = resumeContent;
+    let resumeEvidenceParts: string[] | undefined;
     const targetRole = typeof body?.targetRole === "string" ? body.targetRole.trim() : "";
     let title = typeof body?.title === "string" ? body.title.trim() : "";
     let resumeId: number | null = null;
@@ -52,17 +65,20 @@ async function handlePost(req: Request) {
     }
 
     if (body?.resumeId !== undefined && body?.resumeId !== null) {
-      const numId = Number(body.resumeId);
-      if (!Number.isSafeInteger(numId) || numId <= 0) return NextResponse.json({ error: "请选择有效的简历" }, { status: 400 });
-      resumeId = numId;
-      resumeVersionId = resolveResumeVersionId(numId, body.resume_version_id ?? body.resumeVersionId);
-      const loaded = loadResume(numId, resumeVersionId);
+      if (typeof body.resumeId !== "number" || !Number.isSafeInteger(body.resumeId) || body.resumeId <= 0) {
+        return NextResponse.json({ error: "请选择有效的简历" }, { status: 400 });
+      }
+      resumeId = body.resumeId;
+      resumeVersionId = resolveResumeVersionId(resumeId, body.resume_version_id ?? body.resumeVersionId);
+      const loaded = loadResumeForModel(resumeId, resumeVersionId);
       if (!loaded) return NextResponse.json({ error: "简历不存在" }, { status: 404 });
       if (!title) title = `${loaded.resume.title} - 简历排雷`;
-      resumeContent = loadResumeContext(numId, resumeVersionId);
+      modelResumeContent = formatResumeContext(loaded.modules);
+      resumeContent = formatResumeEvidenceText(loaded.modules);
+      resumeEvidenceParts = collectResumeEvidenceParts(loaded.modules);
     }
 
-    if (!resumeContent) {
+    if (!modelResumeContent) {
       return NextResponse.json(
         { error: "请提供要排雷的简历内容，或选择一份已有简历" },
         { status: 400 }
@@ -78,43 +94,27 @@ async function handlePost(req: Request) {
           ...(resumeId !== null ? { entity: { type: "resume", id: resumeId } } : {}),
         },
         RESUME_DEFENSE_SCAN_SYSTEM_PROMPT,
-        [
-          {
-            role: "user",
-            parts: [
-              ...(targetRole
-                ? [
-                    { trust: "trusted", text: "【目标岗位】\n" } as const,
-                    { trust: "untrusted", tag: "target_role", text: targetRole } as const,
-                    { trust: "trusted", text: "\n\n" } as const,
-                  ]
-                : []),
-              { trust: "trusted", text: "【候选人简历】\n" },
-              { trust: "untrusted", tag: "candidate_resume", text: resumeContent },
-              { trust: "trusted", text: "\n\n请逐行扫描，圈出高危疑点、给出毒舌吐槽、致命追问与防御预案。" },
-            ],
-          },
-        ],
-        { signal: req.signal, requireJson: true }
+        buildResumeDefenseScanMessages(targetRole, modelResumeContent),
+        { signal: req.signal, requireJson: "strict" }
       );
     } catch (err) {
       const msg =
         err instanceof LlmConfigError
           ? err.message
           : errorMessage(err);
-      return NextResponse.json({ error: msg }, { status: 502 });
+      return NextResponse.json({ error: msg }, { status: err instanceof ModelInputBudgetError ? 413 : 502 });
     }
 
-    let parsedReport: ReturnType<typeof normalizeDefenseReport>;
+    let parsedReport: ReturnType<typeof validateGeneratedDefenseReport> = null;
     try {
-      const json = extractJson<unknown>(raw);
-      parsedReport = normalizeDefenseReport(json);
-    } catch (err) {
+      const json: unknown = JSON.parse(raw);
+      parsedReport = validateGeneratedDefenseReport(json, resumeContent, resumeEvidenceParts);
+    } catch {
+      // 无效 JSON 或不完整结果统一拒绝，不用默认负面点评替代模型输出。
+    }
+    if (!parsedReport) {
       return NextResponse.json(
-        {
-          error: `毒舌面试官解析异常（${errorMessage(err)}），请稍后重试`,
-          raw,
-        },
+        { error: "AI 排雷结果异常：结构不完整或引用缺少原文依据，请重试" },
         { status: 502 }
       );
     }
@@ -128,10 +128,11 @@ async function handlePost(req: Request) {
       riskLevel: parsedReport.riskLevel,
       overallRoast: parsedReport.overallRoast,
       items: parsedReport.items,
-    });
+    }, resumeId === null ? undefined : { resumeContext: modelResumeContent });
 
     return NextResponse.json(saved);
   } catch (err) {
+    if (err instanceof ResumeContextError) throw err;
     if (err instanceof ResumeVersionError) return NextResponse.json({ error: err.message }, { status: err.status });
     const requestId = logServerError("resume-defenses.create", err, { requestId: requestIdFrom(req), status: 500 });
     return NextResponse.json(

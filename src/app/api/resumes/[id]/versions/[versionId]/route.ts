@@ -1,12 +1,13 @@
+import { parseCanonicalStoredId } from "@/lib/id-parsing";
 import { NextResponse } from "next/server";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { getResumeVersion } from "@/lib/resume-versions";
 
 async function handleGet(_request: Request, { params }: { params: Promise<{ id: string; versionId: string }> }) {
   const raw = await params;
-  const id = Number(raw.id);
-  const versionId = Number(raw.versionId);
-  if (![id, versionId].every((value) => Number.isSafeInteger(value) && value > 0)) {
+  const id = parseCanonicalStoredId(raw.id);
+  const versionId = parseCanonicalStoredId(raw.versionId);
+  if (![id, versionId].every(Number.isSafeInteger)) {
     return NextResponse.json({ error: "简历或版本 ID 无效" }, { status: 400 });
   }
   const version = getResumeVersion(id, versionId);

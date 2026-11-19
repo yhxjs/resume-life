@@ -104,7 +104,8 @@ export async function readWindowsProxyCandidates(): Promise<ProxyCandidate[]> {
   if (!server) return [];
 
   const candidates: ProxyCandidate[] = [];
-  const entries = server.includes(";") ? server.split(";") : [["http", server].join("=")];
+  const hasProtocolAssignment = /^(?:https?|socks(?:5h?)?|pac)\s*=/iu.test(server.trim());
+  const entries = server.includes(";") || hasProtocolAssignment ? server.split(";") : [["http", server].join("=")];
   for (const entry of entries) {
     const separator = entry.indexOf("=");
     const kind = separator >= 0 ? entry.slice(0, separator).trim().toLowerCase() : "http";

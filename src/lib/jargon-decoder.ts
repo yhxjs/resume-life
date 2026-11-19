@@ -1,19 +1,21 @@
 /** 面试黑话与公司风格暗号解码器的领域类型、清洗规范与预置经典词库 */
+import { hasQuestionContent, questionComparisonKey, textComparisonKey } from "./question-normalization";
+import { resolveUntrustedSourceQuote } from "./prompt-safety";
 
 export type DecodedItem = {
   /** 识别出的黑话/暗号关键词（如“抗压能力强”、“拥抱变化”） */
   keyword: string;
   /** 表面官方含义/说辞 */
   surfaceMeaning: string;
-  /** 背后真实潜台词（揭露内幕） */
+  /** 有依据的可能解释与待核实条件，不代表公司实际情况 */
   hiddenMeaning: string;
-  /** 风险等级：low=轻微, medium=中等警戒, high=高危红线；null=未评估 */
+  /** 文本风险信号：low=弱, medium=待核实, high=强；null=未评估 */
   riskLevel: "low" | "medium" | "high" | null;
   /** 风险类型（如：加班过劳、业务动荡、资源匮乏、管理混乱、考核苛刻） */
   riskCategory: string;
   /** 踩坑警示（入职后可能真实面临的坑） */
   warning: string;
-  /** 面试应对潜规则（被问到此话题时的高分作答策略与禁忌） */
+  /** 核实条件、表达真实诉求与边界的沟通建议 */
   interviewRule: string;
   /** 反向提问避坑指南（面试反问环节反客为主、探虚实的高情商提问） */
   counterQuestions: string[];
@@ -31,7 +33,7 @@ export type RiskRatings = {
 };
 
 export type CompanyProfile = {
-  /** 公司/团队风格画像（一句话犀利定调） */
+  /** 文本支持的公司/团队风格线索；不足时保留未知 */
   teamStyle: string;
   /** 潜在雷区/红线标签列表 */
   riskFlags: string[];
@@ -42,9 +44,9 @@ export type CompanyProfile = {
 export type JargonDecoderResult = {
   /** 岗位/话术速写一句话 */
   targetSummary: string;
-  /** 综合一句话辛辣总结 */
+  /** 一句话概括最值得核实的问题 */
   punchline: string;
-  /** 综合风险指数 1-100 */
+  /** 文本风险信号强度 1-100，不代表实际风险概率；null=未评估 */
   overallRiskScore: number | null;
   /** 4维度风险评分 */
   riskRatings: RiskRatings;
@@ -52,21 +54,30 @@ export type JargonDecoderResult = {
   items: DecodedItem[];
   /** 团队风格画像 */
   companyProfile: CompanyProfile;
-  /** 面试终局精选：最推荐问出的 3-5 个王牌反向提问 */
+  /** 有具体线索时提供优先核实问题；没有线索时为空 */
   goldenQuestions: string[];
 };
 
-/** 预设经典黑话词典库（可用于首页秒查与示范体验） */
+/** 新生成报告的字段上限；历史数据仍使用兼容清洗规则。 */
+export const JARGON_OUTPUT_LIMITS = {
+  target_summary: 30, punchline: 50,
+  surface_meaning: 200, hidden_meaning: 250, risk_category: 40, warning: 50, interview_rule: 300,
+  counter_question: 150, team_style: 30, risk_flag: 30, max_risk_flags: 6, culture_summary: 100,
+  golden_question: 160, min_golden_questions: 2, max_golden_questions: 3,
+  max_items: 8, min_counter_questions: 1, max_counter_questions: 2,
+} as const;
+
+/** 通用释义与核实示例；没有具体公司材料，不能预先赋予风险等级。 */
 export const PRESET_JARGONS: DecodedItem[] = [
   {
     keyword: "抗压能力强",
-    surfaceMeaning: "能够适应高强度节奏，在紧急任务与严苛节点下保持高效产出。",
-    hiddenMeaning: "无偿加班是家常便饭，缺乏合理排期机制，需求突发随时插队，甚至一人顶两三人用。",
-    riskLevel: "high",
-    riskCategory: "加班过劳与不合理排期",
-    warning: "大概率存在常态化‘996’或随时响应机制，身心健康容易透支，且加班通常缺乏对等补偿。",
+    surfaceMeaning: "希望候选人能在一定压力或紧急任务下推进工作。",
+    hiddenMeaning: "可能强调处理紧急任务的能力，也可能涉及较高工作负荷；仅凭这一短语无法确认工时、排期或补偿安排。",
+    riskLevel: null,
+    riskCategory: "工作负荷与排期",
+    warning: "若临时任务频繁且缺少排期与补偿，工作负荷可能超出预期。",
     interviewRule:
-      "不要回答‘我完全不介意加班’（容易被当软柿子），也不要强硬回绝。高分策略：强调‘科学管理压力与预期’，表达理解业务突发峰值，但更注重通过敏捷复盘、风险前置与技术沉淀降低无序救火。",
+      "先核实紧急任务的频率、排期和补偿，再如实表达自己的可用时间与边界。若确有相关经历，可说明如何处理优先级或沟通风险；不必承诺无条件接受加班。",
     counterQuestions: [
       "请问团队通常在什么业务节点下会出现集中高强度攻坚？平时版本发布的标准周期大概是多久？",
       "如果上下游出现突发紧急变更，团队内部通常走怎样的优先级评估和排期协调流程？",
@@ -74,13 +85,13 @@ export const PRESET_JARGONS: DecodedItem[] = [
   },
   {
     keyword: "拥抱变化",
-    surfaceMeaning: "心态开放积极，能够敏锐顺应公司战略演进与市场新机遇。",
-    hiddenMeaning: "业务方向反复横跳，领导想法朝令夕改，上一季度的投入可能下季度直接废弃，KPI 随时重置。",
-    riskLevel: "high",
-    riskCategory: "业务动荡与组织混乱",
-    warning: "沉淀的技术或业务成果很难有长效收益，绩效评价标准不稳定，人员换血频率高。",
+    surfaceMeaning: "希望候选人能适应业务、任务或工作方式的调整。",
+    hiddenMeaning: "可能指正常迭代或探索新业务，也可能意味着方向与考核经常调整；需结合最近实例、决策依据与变更机制判断。",
+    riskLevel: null,
+    riskCategory: "方向调整与变更机制",
+    warning: "若频繁转向却不调整资源和考核，既有投入与交付计划可能受影响。",
     interviewRule:
-      "展示高度的灵活性与全局业务视角。高分策略：阐述自己曾在快速演进业务中，如何通过模块化解耦、配置化设计等架构手段，让系统既能迅速响应新需求，又能保证主干资产不被打烂。",
+      "询问最近一次方向调整如何影响目标、排期与考核。若确有应对变更的经历，可说明实际行动和职责；没有对应经历时可讨论处理思路，不编造成已完成的架构成果。",
     counterQuestions: [
       "请问当前团队负责的核心业务线，今年最核心的 OKR 或战略优先级目标是什么？近期有经历过较大转向吗？",
       "当产品或运营方向产生突发调整时，团队通常如何平衡技术架构重构与业务快速交付？",
@@ -88,13 +99,13 @@ export const PRESET_JARGONS: DecodedItem[] = [
   },
   {
     keyword: "有从 0 到 1 经验",
-    surfaceMeaning: "具备拓荒开荒精神，能自主搭建全新体系与产品架构。",
-    hiddenMeaning: "基建极其薄弱，无历史文档，前人代码不可考，缺乏协作资源，需要你一人包揽架构、开发、运维甚至测试。",
-    riskLevel: "high",
-    riskCategory: "资源匮乏与拓荒风险",
-    warning: "没有现成脚手架和自动化管线，脏活累活全包，试错成本完全转嫁在个人头上，一旦业务跑不通容易背锅。",
+    surfaceMeaning: "具备新业务、产品或体系从初始阶段建设的相关经历。",
+    hiddenMeaning: "可能是在招募新产品或新体系的建设经验，并不直接说明资源匮乏。需核实已有基础、个人职责、团队支持和验收目标。",
+    riskLevel: null,
+    riskCategory: "建设范围与配套资源",
+    warning: "若职责广泛但资源、权限与验收目标不清，交付预期可能不一致。",
     interviewRule:
-      "展现系统性建构能力与踩坑教训。高分策略：重点讲你如何做‘最小可行性落地（MVP）’、如何做好选型评估以及如何逐步沉淀规范，突出你‘既能动手填坑，又能建章立制’的能力。",
+      "先确认岗位负责哪一阶段、哪些模块以及可调用的资源。只说明真实参与范围；若没有独立从零建设的经历，可如实介绍相关部分或提出条件式思路，不认领团队全部成果。",
     counterQuestions: [
       "针对这个从 0 到 1 的方向，目前团队配置的专属资源（前后端、产品、预算等）已到位的有哪些？",
       "公司管理层对该新业务线的试错周期预期是多久？第一阶段验收的核心指标（里程碑）是什么？",
@@ -102,13 +113,13 @@ export const PRESET_JARGONS: DecodedItem[] = [
   },
   {
     keyword: "扁平化管理",
-    surfaceMeaning: "沟通链路短，没有繁冗汇报层级，氛围开放包容。",
-    hiddenMeaning: "管理制度缺位，权责边界模糊，老板直接微观插手细节，晋升缺乏明确职级晋升通道，全凭老板喜好。",
-    riskLevel: "medium",
-    riskCategory: "管理混乱与晋升不透明",
-    warning: "每个人都在当接口人，扯皮时找不到责任归属方，且容易被多头指挥。",
+    surfaceMeaning: "希望表达管理层级较少、沟通链路较短。",
+    hiddenMeaning: "可能表示层级较少、沟通直接，也可能存在职责和决策边界不清的情况；需要了解实际汇报、决策和晋升机制。",
+    riskLevel: null,
+    riskCategory: "职责与决策机制",
+    warning: "若多方提出冲突要求却缺少决策与升级机制，协作可能受阻。",
     interviewRule:
-      "突出自驱与向上沟通管理能力。强调自己在跨角色协作时，主动理顺协作链路、对齐产出文档并推进结论闭环的习惯。",
+      "询问重要事项由谁决策、冲突如何处理、绩效如何评定。若确有跨角色协作经验，可说明具体做法；无需为了符合风格而编造工作习惯。",
     counterQuestions: [
       "团队目前日常的汇报与决策机制是怎样的？对于重要技术决策，通常由谁拍板并跟进？",
       "团队内部是否有清晰的技术职级晋升标准与定期的绩效对齐机制？",
@@ -116,13 +127,13 @@ export const PRESET_JARGONS: DecodedItem[] = [
   },
   {
     keyword: "弹性工作制",
-    surfaceMeaning: "上下班时间灵活自主，不机械打卡，注重工作成果。",
-    hiddenMeaning: "早上弹性上班，晚上弹性不下班；下班后和周末钉钉/微信信息随时要回，生活与工作界限彻底模糊。",
-    riskLevel: "medium",
-    riskCategory: "隐性加班与边界感侵占",
-    warning: "虽然早上不查迟到，但半夜突发报警或群里艾特要求立时处理的概率大幅上升。",
+    surfaceMeaning: "工作时间可在约定范围内灵活安排，具体规则尚未给出。",
+    hiddenMeaning: "可能允许灵活安排上下班时间，但这句话没有说明总工时、核心协作时段或非工作时间的响应要求。",
+    riskLevel: null,
+    riskCategory: "协作时段与响应边界",
+    warning: "若非工作时间仍需持续在线，实际休息时间可能受到影响。",
     interviewRule:
-      "表达对目标结果导向的认同，同时体现自我时间管理与异步协作能力，说明自己习惯通过任务看板清晰透明化工作进度。",
+      "核实核心协作时段、值班频率、响应期限与补偿，再表达真实偏好和可用时间。不必声称自己已有未提供的异步协作习惯，也不默认接受随时在线。",
     counterQuestions: [
       "团队平时的核心在线协作时段大概是几点到几点？非核心时段有常规的紧急值班或响应约定吗？",
       "平时沟通协作以异步文档（如飞书/GitLab）为主，还是以即时会议和即时通讯为主？",
@@ -130,13 +141,13 @@ export const PRESET_JARGONS: DecodedItem[] = [
   },
   {
     keyword: "能独立负责业务闭环 / 强自驱",
-    surfaceMeaning: "主人翁意识强，能端到端对业务结果负责，无需保姆式带教。",
-    hiddenMeaning: "没人带你也没人协助你，跨部门沟通全靠个人去刷脸求人，出问题时责任全在个人闭环。",
-    riskLevel: "medium",
-    riskCategory: "支持匮乏与责任倒挂",
-    warning: "刚入职缺乏必要上手引导，考核标准以结果定生死，容易陷入‘孤军奋战’的窘境。",
+    surfaceMeaning: "希望成员能主动推进任务并对约定范围内的结果负责。",
+    hiddenMeaning: "可能强调自主推进，也可能对支持与责任范围交代不足；独立负责不等于没有带教、协作或升级渠道。",
+    riskLevel: null,
+    riskCategory: "自主权与协作支持",
+    warning: "若个人承担结果责任却缺少相应权限和支持，推进任务可能受阻。",
     interviewRule:
-      "展示闭环推进力与协同共赢。讲述自己过往如何通过主动拆解里程碑、主动拉齐上下游资源、主动定期向主管汇报风险来推动项目成功的案例。",
+      "确认职责、决策权限、入职支持和遇阻时的升级渠道。若确有自主推进任务的经历，可按实际分工说明；不编造独立负责或项目成功的案例。",
     counterQuestions: [
       "新成员加入团队后，前1-3个月通常有怎样的带教（Mentor）机制或入职落地支持？",
       "在推进跨部门业务协同（比如需要数仓或运维支持）时，团队层面有固化的跨组协同机制吗？",
@@ -144,13 +155,13 @@ export const PRESET_JARGONS: DecodedItem[] = [
   },
   {
     keyword: "团队氛围好，大家像一家人",
-    surfaceMeaning: "人际关系简单纯粹，同事相处融洽，互帮互助。",
-    hiddenMeaning: "公私不分，喜欢用‘感情牌’代替合理的薪酬激励与加班费，动辄搞低质量情感绑架或周末团建。",
-    riskLevel: "low",
-    riskCategory: "薪酬福利低与情感绑架",
-    warning: "谈钱伤感情，调薪难度大，用‘我们是一个伐木累’的温情包装压榨本色。",
+    surfaceMeaning: "希望表达团队友好、重视成员之间的协作。",
+    hiddenMeaning: "可能是在描述友好的协作氛围，也可能模糊职业边界；这句话本身不能证明薪酬制度、团建安排或团队关系。",
+    riskLevel: null,
+    riskCategory: "团队协作与职业边界",
+    warning: "若情感诉求被用于替代明确的薪酬或休息约定，个人边界可能受影响。",
     interviewRule:
-      "礼貌回应团队协作的重要性，同时把话题自然引导到‘基于共同目标与高标准专业度的一流团队合作’，体现职业化素养。",
+      "可询问协作实例、反馈机制和团建是否自愿，也可正常核实薪酬与休息安排。是否认同这种氛围由自己的真实偏好决定，不必迎合或承诺额外投入。",
     counterQuestions: [
       "团队除了日常业务合作外，平时在技术分享、代码评审（Code Review）等专业建设上有哪些固定实践？",
       "公司在员工专业能力提升和个人成长路径上，通常提供哪些培训或支持资源？",
@@ -158,13 +169,13 @@ export const PRESET_JARGONS: DecodedItem[] = [
   },
   {
     keyword: "薪资面议 / 空间巨大 / 上不封顶",
-    surfaceMeaning: "根据个人能力定制待遇，优秀者享有极具竞争力的报酬回报。",
-    hiddenMeaning: "基本底薪远低于市场平均，所谓空间巨大全靠画饼或极难达成的提成绩效指标。",
-    riskLevel: "high",
-    riskCategory: "薪资陷阱与画饼承诺",
-    warning: "年终奖或浮动部分缺少白纸黑字的明确兑现细则，招聘阶段压价概率高。",
+    surfaceMeaning: "薪酬金额与结构尚需协商，部分收入可能与绩效或提成挂钩。",
+    hiddenMeaning: "可能表示薪酬待协商或包含浮动部分，但没有给出可比较的固定金额、保证薪数、计算规则和兑现条件。",
+    riskLevel: null,
+    riskCategory: "薪酬结构与兑现条件",
+    warning: "若把不保证的浮动收入计为固定报酬，实际收入可能低于预期。",
     interviewRule:
-      "在终面或 HR 面环节，态度温和但坚定地了解薪酬结构（基本薪资 vs 浮动绩效比例、年终基准月数及往年实际达成中位数）。",
+      "询问固定与浮动报酬、保证薪数、审批和书面确认条件，再按真实诉求协商。历史奖金仅作参考，不当作未来保证，也不编造其他 Offer 或最低可接受价。",
     counterQuestions: [
       "想请教一下该岗位的薪资结构构成中，固定基本薪资与绩效/年终浮动的比例大概是多少？",
       "过去一到两年中，团队整体绩效考核拿到目标或超额回报的比例大概在什么范围？",
@@ -240,8 +251,16 @@ export function normalizeJargonDecoderResult(raw: unknown): JargonDecoderResult 
     }
   }
 
-  // 至少识别出 1 条有效暗号
-  if (items.length === 0) return null;
+  // 明确的空结果是有效判断；缺字段或无效条目不能被当成“没有风险”。
+  if (items.length === 0 && !(
+    Array.isArray(o.items) && o.items.length === 0 &&
+    typeof o.target_summary === "string" && o.target_summary.trim() &&
+    typeof o.punchline === "string" && o.punchline.trim() &&
+    overallRiskScore !== null && Object.values(riskRatings).every((score) => score !== null) &&
+    o.company_profile && typeof o.company_profile === "object" &&
+    "culture_summary" in o.company_profile &&
+    typeof o.company_profile.culture_summary === "string" && o.company_profile.culture_summary.trim()
+  )) return null;
 
   const profileRaw = (o.company_profile && typeof o.company_profile === "object" ? o.company_profile : {}) as Record<string, unknown>;
   const companyProfile: CompanyProfile = {
@@ -263,20 +282,114 @@ export function normalizeJargonDecoderResult(raw: unknown): JargonDecoderResult 
   };
 }
 
-/** 解析保存在数据库中的 JSON 字符串 */
+/** 校验新生成报告的完整性和原文依据，不使用兼容清洗的默认结论。 */
+export function validateGeneratedJargonDecoderResult(raw: unknown, sourceText: string): JargonDecoderResult | null {
+  const record = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value);
+  const hasOnlyKeys = (value: Record<string, unknown>, allowed: readonly string[]) =>
+    Object.keys(value).every((key) => allowed.includes(key));
+  const text = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && hasQuestionContent(value);
+  const boundedText = (value: unknown, max: number): value is string => text(value) && value.trim().length <= max;
+  const texts = (value: unknown): value is string[] => Array.isArray(value) && value.every(text);
+  const score = (value: unknown, max: number): value is number =>
+    typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= max;
+  const questions = (value: unknown, min: number, max: number, maxChars: number): value is string[] => {
+    if (!texts(value) || value.length < min || value.length > max ||
+        value.some((question) => question.trim().length > maxChars || !hasQuestionContent(question))) return false;
+    const keys = value.map((question) => questionComparisonKey(question));
+    return keys.every(Boolean) && new Set(keys).size === value.length;
+  };
+
+  const limits = JARGON_OUTPUT_LIMITS;
+  if (!record(raw) || !hasOnlyKeys(raw, [
+      "target_summary", "punchline", "overall_risk_score", "risk_ratings", "items", "company_profile", "golden_questions",
+    ]) || !boundedText(raw.target_summary, limits.target_summary) || !boundedText(raw.punchline, limits.punchline) || !score(raw.overall_risk_score, 100) ||
+      !record(raw.risk_ratings) || !hasOnlyKeys(raw.risk_ratings, ["overtime", "stability", "resources", "management"]) ||
+      !Array.isArray(raw.items) || raw.items.length > limits.max_items ||
+      !record(raw.company_profile) || !hasOnlyKeys(raw.company_profile, ["team_style", "risk_flags", "culture_summary"]) ||
+      !boundedText(raw.company_profile.team_style, limits.team_style) ||
+      !Array.isArray(raw.company_profile.risk_flags) || raw.company_profile.risk_flags.length > limits.max_risk_flags ||
+      !raw.company_profile.risk_flags.every((flag) => boundedText(flag, limits.risk_flag)) ||
+      new Set((raw.company_profile.risk_flags as string[]).map(textComparisonKey)).size !== raw.company_profile.risk_flags.length ||
+      !boundedText(raw.company_profile.culture_summary, limits.culture_summary) ||
+      !Array.isArray(raw.golden_questions) ||
+      (raw.items.length === 0
+        ? raw.golden_questions.length !== 0
+        : !questions(raw.golden_questions, limits.min_golden_questions, limits.max_golden_questions, limits.golden_question))) return null;
+  const ratings = raw.risk_ratings;
+  if (!score(ratings.overtime, 10) || !score(ratings.stability, 10) ||
+      !score(ratings.resources, 10) || !score(ratings.management, 10)) return null;
+  const dimensionRatings = [ratings.overtime, ratings.stability, ratings.resources, ratings.management] as number[];
+  // 没有列出文本线索时，不能同时声称存在需核实或更强的风险信号。
+  if (raw.items.length === 0 && (raw.overall_risk_score >= 50 ||
+      dimensionRatings.some((rating) => rating >= 4) || raw.company_profile.risk_flags.length !== 0)) return null;
+  if (raw.overall_risk_score < 50 && dimensionRatings.some((rating) => rating >= 4)) return null;
+  if (raw.overall_risk_score >= 50 && raw.overall_risk_score < 75 && dimensionRatings.every((rating) => rating <= 3)) return null;
+  if (raw.overall_risk_score >= 75 && dimensionRatings.every((rating) => rating < 7)) return null;
+
+  const items: DecodedItem[] = [];
+  const keywords = new Set<string>();
+  for (const item of raw.items) {
+    if (!record(item) || !hasOnlyKeys(item, [
+      "keyword", "surface_meaning", "hidden_meaning", "risk_level", "risk_category", "warning", "interview_rule", "counter_questions",
+    ]) || !text(item.keyword) || !boundedText(item.surface_meaning, limits.surface_meaning) || !boundedText(item.hidden_meaning, limits.hidden_meaning) ||
+        !["low", "medium", "high"].includes(item.risk_level as string) || !boundedText(item.risk_category, limits.risk_category) ||
+        !boundedText(item.warning, limits.warning) || !boundedText(item.interview_rule, limits.interview_rule) ||
+        !questions(item.counter_questions, limits.min_counter_questions, limits.max_counter_questions, limits.counter_question)) return null;
+    const keyword = resolveUntrustedSourceQuote(item.keyword.trim(), sourceText);
+    if (keyword === null || !text(keyword)) return null;
+    const keywordKey = textComparisonKey(keyword);
+    if (keywords.has(keywordKey)) return null;
+    keywords.add(keywordKey);
+    items.push({
+      keyword, surfaceMeaning: item.surface_meaning.trim(), hiddenMeaning: item.hidden_meaning.trim(),
+      riskLevel: item.risk_level as DecodedItem["riskLevel"], riskCategory: item.risk_category.trim(),
+      warning: item.warning.trim(), interviewRule: item.interview_rule.trim(),
+      counterQuestions: item.counter_questions.map((question) => question.trim()),
+    });
+  }
+  return {
+    targetSummary: raw.target_summary.trim(), punchline: raw.punchline.trim(), overallRiskScore: raw.overall_risk_score,
+    riskRatings: { overtime: ratings.overtime, stability: ratings.stability, resources: ratings.resources, management: ratings.management },
+    items,
+    companyProfile: {
+      teamStyle: raw.company_profile.team_style.trim(), riskFlags: raw.company_profile.risk_flags.map((flag) => flag.trim()),
+      cultureSummary: raw.company_profile.culture_summary.trim(),
+    },
+    goldenQuestions: raw.golden_questions.map((question) => question.trim()),
+  };
+}
+
+function storedRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function storedTextList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+/** 历史文本按完整展示结构读取，不截断或补造；无效旧评分仍保留为未评估。 */
 export function parseJargonDecoderResult(json: string): JargonDecoderResult | null {
   try {
-    const parsed = JSON.parse(json) as JargonDecoderResult;
-    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.items)) return null;
+    const parsed: unknown = JSON.parse(json);
+    if (!storedRecord(parsed) || typeof parsed.targetSummary !== "string" || typeof parsed.punchline !== "string" ||
+      !Array.isArray(parsed.items) || !parsed.items.every((item) => storedRecord(item) &&
+        ["keyword", "surfaceMeaning", "hiddenMeaning", "riskCategory", "warning", "interviewRule"]
+          .every((key) => typeof item[key] === "string") && storedTextList(item.counterQuestions)) ||
+      !storedRecord(parsed.companyProfile) || typeof parsed.companyProfile.teamStyle !== "string" ||
+      typeof parsed.companyProfile.cultureSummary !== "string" || !storedTextList(parsed.companyProfile.riskFlags) ||
+      !storedTextList(parsed.goldenQuestions)) return null;
+    const stored = parsed as Omit<JargonDecoderResult, "riskRatings"> & { riskRatings?: unknown };
+    const ratings = storedRecord(stored.riskRatings) ? stored.riskRatings : {};
     return {
-      ...parsed,
-      items: parsed.items.map((item) => ({ ...item, riskLevel: normalizeRiskLevel(item.riskLevel) })),
-      overallRiskScore: normalizeInt(parsed.overallRiskScore, 1, 100),
+      ...stored,
+      items: stored.items.map((item) => ({ ...item, riskLevel: normalizeRiskLevel(item.riskLevel) })),
+      overallRiskScore: normalizeInt(stored.overallRiskScore, 1, 100),
       riskRatings: {
-        overtime: normalizeInt(parsed.riskRatings?.overtime, 1, 10),
-        stability: normalizeInt(parsed.riskRatings?.stability, 1, 10),
-        resources: normalizeInt(parsed.riskRatings?.resources, 1, 10),
-        management: normalizeInt(parsed.riskRatings?.management, 1, 10),
+        overtime: normalizeInt(ratings.overtime, 1, 10),
+        stability: normalizeInt(ratings.stability, 1, 10),
+        resources: normalizeInt(ratings.resources, 1, 10),
+        management: normalizeInt(ratings.management, 1, 10),
       },
     };
   } catch {

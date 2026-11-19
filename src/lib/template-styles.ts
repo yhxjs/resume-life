@@ -1,6 +1,9 @@
 import { bannerStyles } from "./template-banner-styles";
 import type { TemplateKey } from "./template-catalog";
 
+/** 技能标签底色的 alpha 通道；渲染与新生成颜色校验共用。 */
+export const SKILL_PILL_ALPHA_HEX = "1f";
+
 /**
  * 简历样式参数（深度定制）：从页面布局到每个元素的字号/字重/颜色/间距全部可调，
  * 内置模板与样式工厂保存的自定义模板共用同一套渲染参数。

@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
 import { loadResume } from "@/lib/resumes";
@@ -8,7 +9,7 @@ import { guardResumeExport } from "@/lib/resume-export-guard";
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   }
@@ -34,7 +35,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
   if (!parsed.ok) return parsed.response;
   const { anonymizeConfig, confirmedIssueIds, skipExportCheck } = parsed.data;
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   }

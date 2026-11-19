@@ -26,7 +26,7 @@ import DefenseDetailPage from "../tools/defense/[id]/page";
 import { LlmUsagePanel } from "@/components/settings/llm-usage-panel";
 import { confirmDialog } from "@/components/common/confirm-dialog";
 import { fetchSse } from "@/lib/fetch-sse";
-import { useInterviewCommands } from "@/hooks/use-interview-session";
+import { useInterviewCommands, type InterviewData } from "@/hooks/use-interview-session";
 import DrillPage from "../drills/[id]/page";
 import IntroPage from "../intros/[id]/page";
 import SeriesPage from "../interviews/series/[id]/page";
@@ -40,8 +40,8 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => "/",
 }));
-vi.mock("@/lib/fetcher", () => ({ jsonFetch: vi.fn() }));
-vi.mock("@/lib/fetch-sse", () => ({ fetchSse: vi.fn() }));
+vi.mock("@/lib/fetcher", async (original) => ({ ...await original<typeof import("@/lib/fetcher")>(), jsonFetch: vi.fn() }));
+vi.mock("@/lib/fetch-sse", async original => ({ ...await original<typeof import("@/lib/fetch-sse")>(), fetchSse: vi.fn() }));
 vi.mock("@/components/common/confirm-dialog", () => ({
   confirmDialog: vi.fn().mockResolvedValue(true), alertDialog: vi.fn().mockResolvedValue(undefined),
 }));
@@ -92,7 +92,7 @@ describe("主要页面的加载失败反馈", () => {
       await waitFor(() => expect(screen.getByText(_name === "简历" ? "后端工程师" : "计费引擎")).toBeTruthy());
       expect(screen.queryByRole("status")).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
-      expect(jsonFetch).toHaveBeenLastCalledWith(path);
+      expect(jsonFetch).toHaveBeenLastCalledWith(path, expect.objectContaining({ cache: "no-store", signal: expect.any(AbortSignal) }));
     },
   );
 
@@ -137,16 +137,32 @@ describe("主要页面的加载失败反馈", () => {
     expect(await screen.findByText("已加载的面试")).toBeTruthy();
   });
 
-  it.each([["JD 画像", JdDetailPage], ["空窗对策", GapDetailPage], ["暗号解码", DecoderDetailPage]])(
+  it.each([
+    ["JD 画像", JdDetailPage, "/api/tools/jd-portraits/9001", true],
+    ["空窗对策", GapDetailPage, "/api/tools/career-gap-remedies/9001", true],
+    ["暗号解码", DecoderDetailPage, "/api/tools/jargon-decodings/9001", true],
+  ] as const)(
     "%s 删除失败仍显示错误并保留报告",
-    async (_name, Page) => {
-      vi.mocked(jsonFetch).mockResolvedValueOnce({ id: 9001, result: null, created_at: "2026-10-01", jd: "测试岗位", text: "测试文本", raw_story: "测试经历", scenario_type: "gap", target_role: "后端", persona_style: "pragmatic" });
+    async (_name, Page, endpoint, reconciles) => {
+      const saved = { id: 9001, result: null, created_at: "2026-10-01", jd: "测试岗位", source_text: "测试文本", raw_story: "测试经历", scenario_type: "gap", target_role: "后端", persona_style: "pragmatic" };
+      vi.mocked(jsonFetch).mockResolvedValueOnce(saved);
       render(<Page />);
       const button = await screen.findByRole("button", { name: /删除/ });
       vi.mocked(jsonFetch).mockRejectedValueOnce(new Error("删除暂不可用"));
+      if (reconciles) vi.mocked(jsonFetch).mockResolvedValueOnce(saved);
       fireEvent.click(button);
       expect((await screen.findByRole("alert")).textContent).toContain("删除暂不可用");
-      expect(screen.getByRole("button", { name: /删除/ })).toBeTruthy();
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByRole("button", { name: /删除/ })).toBe(button);
+      expect(vi.mocked(jsonFetch).mock.calls.filter(([, options]) => options?.method === "DELETE")).toEqual([
+        [endpoint, expect.objectContaining({ method: "DELETE" })],
+      ]);
+      expect(jsonFetch).toHaveBeenCalledTimes(reconciles ? 3 : 2);
+      if (reconciles) {
+        expect(vi.mocked(jsonFetch).mock.calls[2]).toEqual([endpoint, expect.objectContaining({ cache: "no-store", signal: expect.any(AbortSignal) })]);
+        expect(screen.getByRole("alert").textContent).toContain("记录目前仍存在");
+        expect(screen.queryByRole("status")).toBeNull();
+      }
     },
   );
 
@@ -193,8 +209,15 @@ describe("主要页面的加载失败反馈", () => {
     expect(screen.queryByRole("status", { name: "正在加载版本快照…" })).toBeNull();
   });
 
-  it("面试回答提交后的数据刷新失败会保留输入并解除进行中状态", async () => {
-    vi.mocked(jsonFetch).mockResolvedValueOnce({ id: 9001, turns: [{ id: 1, answered_at: "" }] });
+  it("作答已保存但读取失败保留输入，阻止重复提交，只读恢复后才清除已保存原答", async () => {
+    const initial: InterviewData = {
+      id: 9001, resume_title: "原简历", jd: "岗位要求", rounds: 3, style: "gentle", status: "ongoing",
+      series_id: null, round_no: 0, series_status: null, series_rounds: [],
+      report: null, evaluator_report: null, reverse_interview: null, created_at: "", finished_at: "",
+      turns: [{ id: 1, idx: 1, kind: "question", question: "原题", answer: "", comment: "", scores: null,
+        reference: "", retries: [], answered_at: "", notebook_id: null }],
+    };
+    vi.mocked(jsonFetch).mockResolvedValueOnce(initial);
     vi.mocked(fetchSse).mockImplementation(async (_url, options) => { await options.onDone?.({}); });
     const { result } = renderHook(() => useInterviewCommands("9001"));
     await waitFor(() => expect(result.current.current?.id).toBe(1));
@@ -202,7 +225,17 @@ describe("主要页面的加载失败反馈", () => {
     vi.mocked(jsonFetch).mockRejectedValueOnce(new Error("最新面试记录加载失败"));
     await act(() => result.current.submitAnswer());
     expect(result.current.answer).toBe("尚需保留的真实回答");
-    expect(result.current.error).toBe("最新面试记录加载失败");
+    expect(result.current.error).toBe("作答已保存，读取结果失败：最新面试记录加载失败。请重新读取面试状态。");
     expect(result.current.busy).toBe(false);
+    expect(result.current.readRecovery).toEqual({ kind: "answer", confirmed: true });
+    await act(() => result.current.submitAnswer());
+    expect(fetchSse).toHaveBeenCalledOnce(); expect(jsonFetch).toHaveBeenCalledTimes(2);
+    vi.mocked(jsonFetch).mockResolvedValueOnce({ ...initial, turns: [{ ...initial.turns[0], answer: "尚需保留的真实回答", answered_at: "saved",
+      scores: { depth: 7, structure: 8, authenticity: 7, completeness: 8 }, comment: "原答点评" }] });
+    await act(() => result.current.retryResultRead());
+    expect(result.current.answer).toBe(""); expect(result.current.readRecovery).toBeNull();
+    expect(result.current.error).toBe(""); expect(result.current.busy).toBe(false);
+    expect(fetchSse).toHaveBeenCalledOnce(); expect(jsonFetch).toHaveBeenCalledTimes(3);
+    expect(jsonFetch).toHaveBeenLastCalledWith("/api/interviews/9001", expect.objectContaining({ cache: "no-store", signal: expect.any(AbortSignal) }));
   });
 });

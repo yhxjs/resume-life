@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { getDatabaseStats, type DatabaseStats } from "@/lib/backup";
-import { getApplicationStats, type ApplicationStats } from "@/lib/applications";
+import { getDatabaseStats } from "@/lib/backup";
+import { getApplicationStats } from "@/lib/applications";
 import { getOverallScore } from "@/lib/overall-score";
 import { resolveSession, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { STAGES } from "./home-stages";
@@ -10,31 +10,10 @@ import { TodayReviews } from "@/components/reviews/today-reviews";
 
 export const dynamic = "force-dynamic";
 
-const EMPTY_DB_STATS: DatabaseStats = {
-  resumes: 0,
-  projects: 0,
-  interviews: 0,
-  drills: 0,
-  bank_entries: 0,
-  notebook_entries: 0,
-  intros: 0,
-  templates: 0,
-  totalRecords: 0,
-  hasAiConfig: false,
-  dbVersion: 0,
-};
-
-const EMPTY_APPLICATION_STATS: ApplicationStats = {
-  counts: { interested: 0, applied: 0, interviewing: 0, interview: 0, reviewing: 0, offer: 0, rejected: 0 },
-  totalActive: 0,
-  upcomingInterviews: [],
-  rates: { appliedRate: 0, interviewRate: 0, offerRate: 0 },
-};
-
-/** 统计读取失败时返回 null 降级：入口页仍要渲染出来，好让用户看到错误提示与排障指引 */
-function readStats<T>(read: () => T): T | null {
+/** 包装成功值，区分合法的无评分 null 与读取失败；各组统计独立降级。 */
+function readStats<T>(read: () => T): { value: T } | null {
   try {
-    return read();
+    return { value: read() };
   } catch {
     return null;
   }
@@ -48,27 +27,24 @@ export default async function HomePage() {
     redirect("/login");
   }
   // 服务端同步直调数据
-  const rawDbStats = readStats(getDatabaseStats);
-  const rawAppStats = readStats(getApplicationStats);
-  const dbStats = rawDbStats ?? EMPTY_DB_STATS;
-  const appStats = rawAppStats ?? EMPTY_APPLICATION_STATS;
-  const statsUnavailable = rawDbStats === null || rawAppStats === null;
-  const overallScore = getOverallScore();
+  const dbStats = readStats(getDatabaseStats)?.value ?? null;
+  const appStats = readStats(getApplicationStats)?.value ?? null;
+  const scoreStats = readStats(getOverallScore);
+  const statsUnavailable = dbStats === null || appStats === null || scoreStats === null;
+  const overallScore = scoreStats?.value ?? null;
 
-  const totalInterviewsAndDrills = dbStats.interviews + dbStats.drills;
-  const upcoming = appStats.upcomingInterviews?.[0]; // 最近一场待办面试
+  const totalInterviewsAndDrills = dbStats ? dbStats.interviews + dbStats.drills : null;
+  const upcoming = appStats?.upcomingInterviews?.[0]; // 最近一场待办面试
 
   return (
     <div className="mx-auto max-w-7xl space-y-8">
       {/* 统计读取失败时的降级提示：数据库未就绪或初始化失败，入口页仍要能打开 */}
       {statsUnavailable && (
-        <div className="flex items-center gap-2.5 rounded-xl border border-danger/30 bg-danger-wash px-4 py-3 text-sm text-ink shadow-card-subtle">
+        <div role="alert" className="flex flex-wrap items-center gap-2.5 rounded-xl border border-danger/30 bg-danger-wash px-4 py-3 text-sm text-ink shadow-card-subtle">
           <span className="flex h-2.5 w-2.5 shrink-0 rounded-full bg-danger" />
           <span className="font-serif font-bold text-danger shrink-0">统计数据暂不可用：</span>
           <span className="min-w-0 text-ink">
-            下方数值按 0 显示。数据库可能未就绪或初始化失败，请对照
-            <span className="mx-1 font-mono text-xs">docs/TROUBLESHOOTING.md</span>
-            排查。
+            不可用项显示为“—”，其他已读取数据仍保留。请刷新页面重试。
           </span>
         </div>
       )}
@@ -140,7 +116,7 @@ export default async function HomePage() {
                 <span>求职漏斗看板</span>
               </div>
               <span className="text-xs text-on-primary/80 transition-transform group-hover:translate-x-0.5">
-                {appStats.totalActive > 0 ? `${appStats.totalActive} 家推进中 →` : "进入管理 →"}
+                {appStats ? (appStats.totalActive > 0 ? `${appStats.totalActive} 条推进中 →` : "进入管理 →") : "查看看板 →"}
               </span>
             </Link>
 
@@ -166,7 +142,7 @@ export default async function HomePage() {
                 <span>管理我的简历</span>
               </div>
               <span className="text-xs text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-primary">
-                {dbStats.resumes} 份已存 →
+                {dbStats ? `${dbStats.resumes} 份已存 →` : "查看简历 →"}
               </span>
             </Link>
           </div>
@@ -193,12 +169,12 @@ export default async function HomePage() {
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="font-mono text-3xl font-bold tabular-nums text-ink">
-              {dbStats.resumes}
+              {dbStats?.resumes ?? "—"}
             </span>
-            <span className="text-xs text-faint">份不同定制版</span>
+            <span className="text-xs text-faint">份已存简历</span>
           </div>
           <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted">
-            <span>支持 A4 打印与导出</span>
+            <span>{dbStats ? "支持 A4 打印与导出" : "简历统计读取失败"}</span>
             <span className="font-medium text-primary group-hover:underline">查看 ↗</span>
           </div>
         </Link>
@@ -208,17 +184,17 @@ export default async function HomePage() {
           className="group rounded-xl border border-line bg-card p-4 shadow-card-subtle transition-all hover:border-accent/40 hover:bg-surface/30"
         >
           <div className="flex items-center justify-between text-xs text-muted">
-            <span>活跃投递中</span>
+            <span>推进中的投递</span>
             <span className="h-2 w-2 rounded-full bg-accent/40 transition-colors group-hover:bg-accent" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="font-mono text-3xl font-bold tabular-nums text-accent">
-              {appStats.totalActive}
+              {appStats?.totalActive ?? "—"}
             </span>
-            <span className="text-xs text-faint">家进入流程</span>
+            <span className="text-xs text-faint">条投递记录</span>
           </div>
           <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted">
-            <span>{appStats.counts.interviewing} 家约面 · {appStats.counts.offer} 录用</span>
+            <span>{appStats ? `面试中 ${appStats.counts.interviewing} · Offer ${appStats.counts.offer}` : "投递统计读取失败"}</span>
             <span className="font-medium text-accent group-hover:underline">看板 ↗</span>
           </div>
         </Link>
@@ -228,17 +204,17 @@ export default async function HomePage() {
           className="group rounded-xl border border-line bg-card p-4 shadow-card-subtle transition-all hover:border-primary/40 hover:bg-surface/30"
         >
           <div className="flex items-center justify-between text-xs text-muted">
-            <span>实战模考演练</span>
+            <span>模考与练习</span>
             <span className="h-2 w-2 rounded-full bg-primary/40 transition-colors group-hover:bg-primary" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="font-mono text-3xl font-bold tabular-nums text-ink">
-              {totalInterviewsAndDrills}
+              {totalInterviewsAndDrills ?? "—"}
             </span>
-            <span className="text-xs text-faint">场模拟已完成</span>
+            <span className="text-xs text-faint">条演练记录</span>
           </div>
           <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted">
-            <span>{dbStats.interviews} 模考 · {dbStats.drills} 专项题</span>
+            <span>{dbStats ? `${dbStats.interviews} 场模考 · ${dbStats.drills} 组练习` : "演练统计读取失败"}</span>
             <span className="font-medium text-primary group-hover:underline">演练 ↗</span>
           </div>
         </Link>
@@ -248,7 +224,7 @@ export default async function HomePage() {
           className="group rounded-xl border border-line bg-card p-4 shadow-card-subtle transition-all hover:border-primary/40 hover:bg-surface/30"
         >
           <div className="flex items-center justify-between text-xs text-muted">
-            <span>四维综合胜率</span>
+            <span>历史四维均分</span>
             <span className="h-2 w-2 rounded-full bg-primary/40 transition-colors group-hover:bg-primary" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
@@ -257,20 +233,19 @@ export default async function HomePage() {
                 <span className="font-mono text-3xl font-bold tabular-nums text-primary">
                   {overallScore.toFixed(1)}
                 </span>
-                <span className="text-xs text-faint">/ 10 分综合评级</span>
+                <span className="text-xs text-faint">/ 10 分</span>
               </>
             ) : (
               <>
                 <span className="font-serif text-xl font-bold text-muted">
-                  {dbStats.hasAiConfig ? "准备就绪" : "待配置"}
+                  {scoreStats ? "暂无评分" : "—"}
                 </span>
-                <span className="text-xs text-faint">AI 驱动</span>
               </>
             )}
           </div>
           <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted">
             <span>
-              {overallScore !== null ? "基于历史真实答题均分" : "完成首次模考即可生成"}
+              {scoreStats === null ? "评分读取失败，请刷新重试" : overallScore !== null ? "基于已评分的练习与模考" : "练习或模考评分后显示"}
             </span>
             <span className="font-medium text-primary group-hover:underline">复盘 ↗</span>
           </div>

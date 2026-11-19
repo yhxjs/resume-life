@@ -4,7 +4,10 @@ export type ProofingCategory = "日期" | "联系方式" | "学校" | "公司" |
 export type ProofingField = { id: string; category: ProofingCategory; label: string; value: string };
 export type SourceMatch = { start: number; end: number };
 
-const METRIC = /\d+(?:[.,]\d+)?\s*(?:%|％|万元|万|亿|千|百|倍|人|次|个|台|元|小时|天|ms|s)/giu;
+// 同一词法用于草稿提取与原文定位，不能把符号、分组数字或区间端点截成另一项指标。
+const METRIC_NUMBER = String.raw`[+\-−]?(?:\d+(?:[.,]\d+)*|[.,]\d+)(?:e[+\-−]?\d+)?`;
+const METRIC_UNIT = String.raw`(?:(?:万亿|千亿|百亿|十亿|亿|千万|百万|十万|万|千|百)(?:元|人|次|个|台)?|%|倍|人|次|个|台|元|小时|天|ms(?![a-z])|s(?![a-z]))`;
+const METRIC = new RegExp(String.raw`(?<![a-z\d_.,+\-−])(?:(?:[<>]=?|[≤≥≈])\s*)?${METRIC_NUMBER}(?:\s*(?:[-~～–—]|至|到)\s*${METRIC_NUMBER})?\s*${METRIC_UNIT}`, "giu");
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -31,7 +34,7 @@ export function collectProofingFields(modules: Record<string, unknown>): Proofin
     add(`${prefix}.end`, "日期", `教育 ${index + 1} · 结束`, entry.end);
   });
 
-  for (const [moduleKey, itemLabel] of [["work", "工作"], ["projects", "项目"]] as const) {
+  for (const [moduleKey, itemLabel] of [["work", "工作"], ["projects", "项目"], ["custom", "自定义"]] as const) {
     entries(modules[moduleKey]).forEach((entry, index) => {
       const prefix = `${moduleKey}[${index}]`;
       if (moduleKey === "work") add(`${prefix}.company`, "公司", `工作 ${index + 1} · 公司`, entry.company);
@@ -44,10 +47,14 @@ export function collectProofingFields(modules: Record<string, unknown>): Proofin
       const descriptions = descriptionItems.length ? descriptionItems : [entry.description];
       const subValues = entries(entry.subItems).map((subItem) => subItem.value);
       let metricIndex = 0;
-      for (const content of [...descriptions, ...subValues]) {
-        if (typeof content !== "string") continue;
-        for (const match of stripRichText(content).matchAll(METRIC)) {
-          add(`${prefix}.metric[${metricIndex++}]`, "量化指标", `${itemLabel} ${index + 1} · 指标`, match[0]);
+      // 正文是富文本；副项是纯文本，不能解码实体或删除其中的标签字面量。
+      const contents = [
+        ...descriptions.filter((value): value is string => typeof value === "string").map(stripRichText),
+        ...subValues.filter((value): value is string => typeof value === "string"),
+      ];
+      for (const content of contents) {
+        for (const match of metricTokens(content)) {
+          add(`${prefix}.metric[${metricIndex++}]`, "量化指标", `${itemLabel} ${index + 1} · 指标`, match.value);
         }
       }
     });
@@ -76,7 +83,24 @@ function comparable(value: string, mode: MatchMode): { text: string; starts: num
   return { text, starts, ends };
 }
 
+function metricKey(value: string): string {
+  return value.normalize("NFKC").toLowerCase().replace(/\s/gu, "").replace(/−/gu, "-");
+}
+
+function metricTokens(value: string): (SourceMatch & { value: string; key: string })[] {
+  const normalized = comparable(value, "plain");
+  return [...normalized.text.matchAll(METRIC)].map((match) => {
+    const start = normalized.starts[match.index]!;
+    const end = normalized.ends[match.index + match[0].length - 1]!;
+    return { start, end, value: value.slice(start, end), key: metricKey(match[0]) };
+  });
+}
+
 export function findSourceMatches(source: string, field: ProofingField): SourceMatch[] {
+  if (field.category === "量化指标") {
+    const needle = metricKey(field.value);
+    return metricTokens(source).filter((match) => match.key === needle).map(({ start, end }) => ({ start, end }));
+  }
   const mode: MatchMode = field.id === "basic.phone" ? "phone" : field.category === "日期" ? "date" : "plain";
   const haystack = comparable(source, "plain");
   const needle = comparable(field.value, mode).text;

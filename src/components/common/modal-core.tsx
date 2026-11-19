@@ -19,6 +19,8 @@ export interface ModalProps {
   loadingText?: ReactNode;
   /** 遮罩辅助提示文案 */
   loadingDescription?: ReactNode;
+  /** 提供时在加载遮罩内显示取消入口；由调用方停止任务并更新 loading。 */
+  onLoadingCancel?: () => void;
   children: ReactNode;
 }
 
@@ -28,7 +30,7 @@ const surfaceClassName: Record<ModalSurface, string> = {
   default: "max-w-lg",
   compact: "max-w-md",
   command: "mt-2 max-w-xl self-start !p-0 sm:mt-[10vh] overflow-hidden",
-  drawer: "fixed inset-y-0 right-0 !h-[100dvh] !max-h-[100dvh] w-screen max-w-xl !rounded-none !border-y-0 !border-r-0 !p-0 !overflow-hidden flex flex-col",
+  drawer: "inset-y-0 right-0 !h-[100dvh] !max-h-[100dvh] max-w-xl !rounded-none !border-y-0 !border-r-0 !p-0 !overflow-hidden flex flex-col",
 };
 
 export function ModalCore({
@@ -42,6 +44,7 @@ export function ModalCore({
   loading = false,
   loadingText,
   loadingDescription,
+  onLoadingCancel,
   children,
   surface,
 }: ModalProps & { surface: ModalSurface }) {
@@ -72,7 +75,7 @@ export function ModalCore({
         aria-busy={loading ? "true" : undefined}
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
-        className={`relative ${dialogCardCls} max-h-[calc(100dvh-1.25rem)] overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 ${surfaceClassName[surface]}`}
+        className={`${surface === "drawer" ? "fixed" : "relative"} ${dialogCardCls} max-h-[calc(100dvh-1.25rem)] overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 ${surfaceClassName[surface]}`}
       >
         <span id={titleId} className="sr-only">{title}</span>
         {hasDescription && <p id={descriptionId} className="sr-only">{description}</p>}
@@ -81,6 +84,7 @@ export function ModalCore({
           show={loading}
           message={loadingText ?? "正在处理中，请稍候…"}
           description={loadingDescription}
+          onCancel={onLoadingCancel}
         />
       </div>
     </div>

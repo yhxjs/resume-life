@@ -21,6 +21,8 @@ export const PRIVATE_BUILD_PATHS = [
   "./.plan.md",
   "./.process.json",
   "./.checklist.json",
+  "./.open-source-analysis.md",
+  "./.open-source-proposal.md",
   "./server.log",
   "./server-err.log",
   "./audit-report-resume-life-2026-09-28.html",

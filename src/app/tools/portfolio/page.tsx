@@ -6,7 +6,8 @@ import { jsonFetch } from "@/lib/fetcher";
 import { apiFetch } from "@/lib/api-fetch";
 import { Loading, LoadError, PageHeader, SectionTitle } from "@/components/common/ui-bits";
 import { btnGhost, btnPrimary, inputCls, labelCls } from "@/lib/ui";
-import type { PortfolioSourcesData, PortfolioExportOptions } from "@/lib/portfolio-types";
+import type { PortfolioSourcesData, PortfolioExportOptions, PortfolioProjectSelection } from "@/lib/portfolio-types";
+import { MAX_PORTFOLIO_PROJECTS } from "@/lib/portfolio-export-budget";
 import { DEFAULT_ANONYMIZE_CONFIG } from "@/lib/resume-anonymize";
 import { PortfolioLivePreview } from "@/components/portfolio/portfolio-live-preview";
 import { PORTFOLIO_TEMPLATES, type PortfolioTemplateId } from "@/lib/portfolio-templates";
@@ -24,6 +25,7 @@ export default function PortfolioWorkspacePage() {
   const [accentColor, setAccentColor] = useState("#b8ef67");
   const [themeMode, setThemeMode] = useState<"auto" | "light" | "dark">("dark");
   const [siteTemplate, setSiteTemplate] = useState<PortfolioTemplateId>("flow");
+  const [selectedProjects, setSelectedProjects] = useState<PortfolioProjectSelection[]>([]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -40,9 +42,21 @@ export default function PortfolioWorkspacePage() {
   }, [attempt]);
 
   const options = useMemo<PortfolioExportOptions | null>(() => resumeId ? {
-    resumeId, versionId, siteTitle, siteSubtitle, accentColor, themeMode, siteTemplate,
-    selectedProjects: [], anonymizeConfig: DEFAULT_ANONYMIZE_CONFIG,
-  } : null, [resumeId, versionId, siteTitle, siteSubtitle, accentColor, themeMode, siteTemplate]);
+    resumeId, versionId, siteTitle, siteSubtitle, accentColor, themeMode, siteTemplate, selectedProjects,
+    anonymizeConfig: DEFAULT_ANONYMIZE_CONFIG,
+  } : null, [resumeId, versionId, siteTitle, siteSubtitle, accentColor, themeMode, siteTemplate, selectedProjects]);
+
+  const toggleProject = (projectId: number) => {
+    setSelectedProjects(current => {
+      const index = current.findIndex(project => project.projectId === projectId);
+      if (index !== -1) {
+        return current.filter((project, currentIndex) => currentIndex !== index)
+          .map((project, order) => ({ ...project, order }));
+      }
+      if (current.length >= MAX_PORTFOLIO_PROJECTS) return current;
+      return [...current, { projectId, featured: true, order: current.length }];
+    });
+  };
 
   const download = async () => {
     if (!options || exporting) return;
@@ -98,6 +112,45 @@ export default function PortfolioWorkspacePage() {
               <Link href={`/resumes/${resumeId}`} className={`${btnGhost} w-full`}>编辑简历内容 <span aria-hidden>↗</span></Link>
             </>}
           </section>
+          <section className="space-y-4 border-b border-line pb-6" aria-label="项目档案">
+            <div className="flex items-center justify-between gap-3">
+              <SectionTitle>项目档案</SectionTitle>
+              <span className="shrink-0 text-xs text-muted">{selectedProjects.length} / {MAX_PORTFOLIO_PROJECTS}</span>
+            </div>
+            <p className="text-xs leading-relaxed text-muted">按需加入预览和下载包。项目正文可能包含公司、客户或其他敏感信息，公开前请逐项核对。</p>
+            {!sources?.projects.length ? (
+              <div className="space-y-2 text-sm text-muted">
+                <p>项目库暂无可用档案。</p>
+                <Link href="/knowledge" className={btnGhost}>前往知识库整理项目档案</Link>
+              </div>
+            ) : (
+              <div className="max-h-72 space-y-2 overflow-y-auto rounded-xl border border-line/60 bg-surface/50 p-2">
+                {sources.projects.map(project => {
+                  const checked = selectedProjects.some(item => item.projectId === project.id);
+                  const disabled = !checked && selectedProjects.length >= MAX_PORTFOLIO_PROJECTS;
+                  const summary = project.summary.brief || project.summary.overview || "暂无项目摘要";
+                  return (
+                    <label key={project.id} className={`flex min-w-0 gap-3 rounded-lg border p-3 transition-colors ${
+                      checked ? "border-primary/50 bg-primary/5" : "border-line bg-card"
+                    } ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={disabled}
+                        onChange={() => toggleProject(project.id)}
+                        aria-label={`加入作品集：${project.name}`}
+                        className="mt-1 h-4 w-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-primary"
+                      />
+                      <span className="min-w-0 [overflow-wrap:anywhere]">
+                        <span className="block text-sm font-medium text-ink">{project.name}</span>
+                        <span className="mt-1 block text-xs leading-relaxed text-muted">{summary}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </section>
           <section className="space-y-4 border-b border-line pb-6" aria-label="主页外观">
             <SectionTitle>主页外观</SectionTitle>
             <div className="space-y-1.5"><label htmlFor="portfolio-template" className={labelCls}>主页模板</label>
@@ -116,8 +169,8 @@ export default function PortfolioWorkspacePage() {
           </section>
           <section id="portfolio-privacy" className="space-y-3 text-xs leading-relaxed text-muted">
             <h2 className="font-semibold text-ink">公开版本 · 基础信息脱敏</h2>
-            <p id="portfolio-privacy-note">姓名和联系方式按默认规则遮盖；经历正文与其他敏感内容仍需人工核对。</p>
-            <p>下载后先在本地解压，检查主页和简历中的姓名、公司信息及联系方式；确认后再公开部署。</p>
+            <p id="portfolio-privacy-note">姓名和联系方式按默认规则遮盖；工作经历、项目档案和其他敏感内容仍需人工核对。</p>
+            <p>下载后先在本地解压，检查主页和简历中的身份信息、公司资料及项目内容；确认后再公开部署。</p>
             <button type="button" className={`${btnGhost} w-full`} onClick={download} disabled={!options || exporting}>{exporting ? "正在打包…" : "下载静态简历 Zip"}</button>
           </section>
         </div>

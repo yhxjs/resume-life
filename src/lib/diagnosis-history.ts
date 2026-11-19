@@ -1,22 +1,57 @@
 import { getDb } from "@/lib/db";
 import { assertBackupRecordBytes } from "@/lib/backup-limits";
+import { isStoredDiagnosisReport, isStoredDiagnosisSnapshot, isStoredDiagnosisAdoptions } from "@/lib/backup-domain";
 import type { DiagnosisHistoryItem, DiagnosisHistoryResponse, DiagnosisRecord } from "@/lib/diagnosis";
 
 type StoredDiagnosis = Omit<DiagnosisRecord, "report" | "resume_snapshot" | "adoptions"> & {
   report: string; resume_snapshot: string; adoptions: string;
 };
 
+/** 只核对记录指向及值类型，不比较模型草稿与用户手动写入内容。 */
+function adoptionsMatchReport(report: NonNullable<DiagnosisRecord["report"]>, adoptions: DiagnosisRecord["adoptions"]): boolean {
+  const seen = new Set<string>();
+  for (const adoption of adoptions) {
+    const modules = report.modules.filter((module) => module.moduleKey === adoption.moduleKey);
+    if (modules.length !== 1) return false;
+    const suggestion = modules[0]!.suggestions[adoption.suggestionIndex];
+    if (!suggestion) return false;
+    // 历史技能记录允许换行字符串；正文采纳值始终为富文本字符串。
+    if (suggestion.field !== "items" && typeof adoption.value !== "string") return false;
+    const key = JSON.stringify([adoption.moduleKey, adoption.suggestionIndex]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+  }
+  return true;
+}
+
 /** 快照和采纳内容必须能完整进入备份容器，避免保存后无法导出。 */
 export function assertDiagnosisBudget(row: Record<string, unknown>): void {
   assertBackupRecordBytes(Buffer.byteLength(JSON.stringify({ kind: "row", table: "resume_diagnoses", data: row }), "utf8"));
 }
 
+/** 诊断归档保留完整原文；可用于模型的职业材料不等于可回看、备份的完整快照。 */
+export function canArchiveDiagnosisSnapshot(value: unknown): boolean {
+  return isStoredDiagnosisSnapshot(value);
+}
+
 function decode(row: StoredDiagnosis): DiagnosisRecord {
-  let report: DiagnosisRecord["report"] = null;
-  try { report = JSON.parse(row.report); } catch { /* 损坏报告仍保留记录入口。 */ }
-  return { ...row, report,
-    resume_snapshot: JSON.parse(row.resume_snapshot),
-    adoptions: JSON.parse(row.adoptions),
+  const corruptedFields: NonNullable<DiagnosisRecord["corruptedFields"]> = [];
+  function read<T>(field: typeof corruptedFields[number], check: (value: unknown) => boolean, fallback: T): T {
+    try {
+      const parsed: unknown = JSON.parse(row[field]);
+      if (check(parsed)) return parsed as T;
+    } catch { /* 损坏记录仍保留入口，原数据不做修补或覆盖。 */ }
+    corruptedFields.push(field);
+    return fallback;
+  }
+  const report = read<DiagnosisRecord["report"]>("report", isStoredDiagnosisReport, null);
+  const resume_snapshot = read<DiagnosisRecord["resume_snapshot"]>("resume_snapshot", isStoredDiagnosisSnapshot, { title: "", modules: [] });
+  const adoptions = read<DiagnosisRecord["adoptions"]>("adoptions", isStoredDiagnosisAdoptions, []);
+  if (report && !corruptedFields.includes("adoptions") && !adoptionsMatchReport(report, adoptions)) {
+    corruptedFields.push("adoptions");
+  }
+  return { ...row, report: corruptedFields.length ? null : report, resume_snapshot, adoptions,
+    ...(corruptedFields.length ? { corruptedFields } : {}),
   };
 }
 
@@ -30,7 +65,11 @@ export function loadDiagnosis(resumeId: number, diagnosisId: number): DiagnosisR
 export function diagnosisHistory(resumeId: number, current: DiagnosisRecord | null): DiagnosisHistoryResponse {
   const db = getDb();
   const history = db.prepare(`SELECT id, job_id, job_title,
-      created_at, CASE WHEN json_valid(report) THEN json_extract(report, '$.match') ELSE NULL END AS match
+      created_at, CASE WHEN json_valid(report) THEN
+        CASE WHEN json_type(report, '$.match') IN ('integer', 'real')
+          AND json_extract(report, '$.match') BETWEEN 0 AND 10
+          THEN json_extract(report, '$.match') END
+        END AS match
     FROM resume_diagnoses WHERE resume_id = ? ORDER BY created_at DESC, id DESC`).all(resumeId) as DiagnosisHistoryItem[];
   const previous = current ? db.prepare(`SELECT * FROM resume_diagnoses
     WHERE resume_id = ? AND job_id = ? AND (created_at < ? OR (created_at = ? AND id < ?))

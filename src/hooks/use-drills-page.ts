@@ -1,24 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { alertDialog, confirmDialog } from "@/components/common/confirm-dialog";
 import { jsonFetch } from "@/lib/fetcher";
 import { useCursorList } from "@/hooks/use-cursor-list";
+import { useDrillDeletion } from "@/hooks/use-drill-deletion";
 import { errorMessage } from "@/lib/error-message";
+import type { DrillItem } from "@/lib/drill-history";
+export type { DrillItem } from "@/lib/drill-history";
 
 export type ProjectBrief = { id: number; name: string };
 export type DirectionStat = { direction: string; count: number };
-export type DrillItem = {
-  id: number;
-  source: string;
-  direction: string;
-  jd: string;
-  focus: string;
-  created_at: string;
-  project_name: string | null;
-  total: number;
-  answered: number;
-};
 
 export function useDrillsPage() {
   const [projects, setProjects] = useState<ProjectBrief[] | null>(null);
@@ -32,7 +23,7 @@ export function useDrillsPage() {
   const [projectsReloadVersion, setProjectsReloadVersion] = useState(0);
 
   const {
-    items: drills,
+    items: storedDrills,
     nextCursor,
     loadingMore,
     listError,
@@ -51,6 +42,8 @@ export function useDrillsPage() {
       return `/api/drills${qs ? `?${qs}` : ""}`;
     },
   });
+  const deletion = useDrillDeletion(reloadList);
+  const drills = storedDrills?.filter(drill => !deletion.deletedIds.has(drill.id)) ?? null;
 
   /** DrillHistory 仍按 (cursor?) 调用：无参=重取首页，带游标=续页 */
   function loadDrills(cursor?: string) {
@@ -94,17 +87,6 @@ export function useDrillsPage() {
     };
   }, [directionsReloadVersion]);
 
-  async function remove(id: number) {
-    if (!(await confirmDialog({ title: "删除练习", message: "确定删除这次练习及其全部题目？", danger: true }))) return;
-    try {
-      await jsonFetch(`/api/drills/${id}`, { method: "DELETE" });
-    } catch (err) {
-      await alertDialog({ title: "删除失败", message: errorMessage(err) });
-      return;
-    }
-    reloadList();
-  }
-
   const loadError = listError;
 
   return {
@@ -126,6 +108,7 @@ export function useDrillsPage() {
     keyword,
     setKeyword,
     loadDrills,
-    remove,
+    deletion,
+    remove: deletion.remove,
   };
 }

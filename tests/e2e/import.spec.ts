@@ -1,17 +1,18 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs";
+import { MODULE_KEYS, normalizeContent } from "../../src/lib/modules";
 
 test("解析草稿并排校对易错字段并从编辑器定位原文", async ({ page, request }) => {
   const source = "示例科技与示例科技合作\n电话 13800138000\n2022-03 至今，吞吐提升 35%";
   await page.route("**/api/import/parse", async (route) => {
     await route.fulfill({ json: {
       title: "校对简历",
-      modules: {
+      modules: Object.fromEntries(MODULE_KEYS.map((key) => [key, normalizeContent(key, ({
         basic: { name: "测试用户", phone: "13800138000", email: "", location: "", birthday: "", links: "" },
         education: [],
         work: [{ id: "w1", company: "示例科技", title: "工程师", start: "2022.03", end: "至今", description: "吞吐提升 35%", descriptionItems: ["吞吐提升 35%"] }],
         projects: [], skills: { items: [] }, summary: { text: "" }, custom: [],
-      },
+      } as Record<string, unknown>)[key])])),
     } });
   });
   await page.goto("/resumes/import");

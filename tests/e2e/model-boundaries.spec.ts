@@ -1,3 +1,4 @@
+import { listenForFetch } from "../support/http-server";
 import { expect, test, type APIResponse } from "@playwright/test";
 import { createServer } from "node:http";
 import {
@@ -27,7 +28,7 @@ test("production routes enforce report integrity, backup validation and model in
     outgoing.writeHead(200, { "Content-Type": "text/event-stream" });
     outgoing.end(`data: ${JSON.stringify({ choices: [{ delta: { content: value } }] })}\n\ndata: [DONE]\n\n`);
   });
-  await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  await listenForFetch(provider);
   const address = provider.address();
   if (!address || typeof address === "string") throw new Error("Missing local provider address");
   const done = async (response: APIResponse) => {
@@ -38,7 +39,7 @@ test("production routes enforce report integrity, backup validation and model in
     if (!result) throw new Error("响应里没有 event: done 记录");
     return JSON.parse(result[1]!);
   };
-  const evaluator = { recommendation: "Lean No", level: "P5", level_justification: "系统设计需验证", summary_for_hr: "建议追加考察", hire_reasons: [], concerns_and_risks: ["证据不足"], placement_suggestion: "补充技术面" };
+  const evaluator = { recommendation: "Lean No", level: "P5", level_justification: "系统设计需验证", summary_for_hr: "建议追加考察", hire_reasons: [], concerns_and_risks: ["证据不足"], placement_suggestion: "补充技术面", evidence_quotes: [] };
   try {
     expect((await request.put("/api/settings", { data: {
       base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "synthetic-e2e-key", api_format: "openai_chat", model_parse: "synthetic",
@@ -69,7 +70,8 @@ test("production routes enforce report integrity, backup validation and model in
     expect(result.evaluator_report).toBeNull();
     expect(result.report).toMatchObject({ overall: 9, strengths: "保留候选人优势" });
     reply = evaluator;
-    expect((await request.post(`/api/interviews/${id}/evaluator-report`)).status()).toBe(200);
+    const evaluation = await request.post(`/api/interviews/${id}/evaluator-report`);
+    expect(evaluation.status(), await evaluation.text()).toBe(200);
     const afterRetry = await (await request.get(`/api/interviews/${id}`)).json();
     expect(afterRetry.report).toEqual(result.report);
     expect(afterRetry.finished_at).toBe(result.finished_at);

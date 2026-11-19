@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { NextResponse } from "next/server";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
@@ -5,8 +6,8 @@ import { branchResumeVersion, ResumeVersionError } from "@/lib/resume-versions";
 
 async function handlePost(request: Request, { params }: { params: Promise<{ id: string; versionId: string }> }) {
   const raw = await params;
-  const id = Number(raw.id);
-  const versionId = Number(raw.versionId);
+  const id = parseCanonicalPositiveId(raw.id);
+  const versionId = parseCanonicalPositiveId(raw.versionId);
   if (![id, versionId].every((value) => Number.isSafeInteger(value) && value > 0)) {
     return NextResponse.json({ error: "简历或版本 ID 无效" }, { status: 400 });
   }

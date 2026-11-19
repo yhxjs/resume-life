@@ -184,16 +184,30 @@ export function openReadOnlyDatabase(): DatabaseSync {
   }
 }
 
+/** 固定读取同一个 WAL 快照。关闭只读连接也会结束快照，包含异常退出的情况。 */
+export function withReadSnapshot<T>(read: (database: DatabaseSync) => T): T {
+  const database = openReadOnlyDatabase();
+  try {
+    database.exec("BEGIN");
+    const result = read(database);
+    assertDataGeneration();
+    return result;
+  } finally {
+    database.close();
+  }
+}
+
 let txDepth = 0;
 
 const commandState = globalThis as typeof globalThis & { resumeLifeCommands?: Set<string> };
 const activeCommands = commandState.resumeLifeCommands ??= new Set<string>();
 
-/** 同进程重复命令在模型调用前拒绝；跨进程一致性仍由提交事务和条件写入保证。 */
+/** 同目录、同恢复世代的重复命令在模型调用前拒绝；旧任务不能阻塞恢复后的新命令。 */
 export function acquireCommandLock(key: string): (() => void) | null {
-  if (activeCommands.has(key)) return null;
-  activeCommands.add(key);
-  return () => { activeCommands.delete(key); };
+  const scopedKey = JSON.stringify([DB_PATH, dataGeneration(), key]);
+  if (activeCommands.has(scopedKey)) return null;
+  activeCommands.add(scopedKey);
+  return () => { activeCommands.delete(scopedKey); };
 }
 
 /** 把多条写语句包进同一事务：任一步失败整体回滚，避免留下中间态；支持安全嵌套 */

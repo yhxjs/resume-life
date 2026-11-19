@@ -18,6 +18,9 @@ interface ReverseInterviewModalsProps {
   busy: boolean;
   reverseBusy: boolean;
   reverseError: string;
+  reverseReadRecovery: { confirmed: boolean } | null;
+  reverseConflict: boolean;
+  onRetryReverseRead: () => void;
   onSkipChoice: () => void;
   onStartChoice: () => void;
   onCloseInput: () => void;
@@ -32,6 +35,9 @@ export function ReverseInterviewModals({
   busy,
   reverseBusy,
   reverseError,
+  reverseReadRecovery,
+  reverseConflict,
+  onRetryReverseRead,
   onSkipChoice,
   onStartChoice,
   onCloseInput,
@@ -39,6 +45,7 @@ export function ReverseInterviewModals({
   onSubmitReverse,
 }: ReverseInterviewModalsProps) {
   const [question, setQuestion] = useState("");
+  const locked = reverseBusy || reverseReadRecovery !== null;
 
   return (
     <>
@@ -59,10 +66,10 @@ export function ReverseInterviewModals({
           <h3 className="text-lg font-bold text-ink">主提问环节已全部完成！</h3>
         </div>
         <p className="mt-3 text-sm leading-relaxed text-muted">
-          在真实面试尾声，面试官通常会留出「候选人反问环节（Reverse Interview）」。一个有深度、切中岗位业务与架构痛点的好问题，往往是获得面试官青睐的重要加分项。
+          你可以通过反问核实岗位职责、工作安排、团队支持或薪酬条件，练习提出有助于求职判断的具体问题。
         </p>
         <div className="mt-3 rounded-lg border border-primary/20 bg-primary-soft/40 p-3 text-xs leading-relaxed text-ink">
-          💡 <span className="font-semibold text-primary">考官模拟：</span>AI 考官将以当前面试官人设真实解答你的疑问，并对你的提问水平、切入视角进行专业诊断打分（作为纯参考加分项呈现）。
+          💡 <span className="font-semibold text-primary">模拟练习：</span>AI 根据已提供的背景模拟回应，未知的公司情况仍需向真实招聘方核实。评分只供练习参考，不代表真实公司的政策、承诺或录用结果。
         </div>
         <div className="mt-6 flex items-center justify-end gap-3">
           <button
@@ -78,6 +85,7 @@ export function ReverseInterviewModals({
             type="button"
             className={btnPrimary}
             onClick={onStartChoice}
+            disabled={busy}
           >
             进入反问环节
           </button>
@@ -89,11 +97,11 @@ export function ReverseInterviewModals({
         open={showInputModal}
         title="向面试官提问"
         onClose={onCloseInput}
-        closeOnBackdrop={!reverseBusy}
-        escapeDisabled={reverseBusy}
+        closeOnBackdrop={!locked}
+        escapeDisabled={locked}
         loading={reverseBusy}
-        loadingText="面试官正在解答并评估你的反问…"
-        loadingDescription="正在基于考官人设生成解答，并评估反问角度的业务思考与技术含金量，请稍候…"
+        loadingText={reverseReadRecovery ? "正在读取反问结果…" : "面试官正在解答并评估你的反问…"}
+        loadingDescription={reverseReadRecovery ? "正在核对已保存的反问与模拟回应，无需重复提问。" : "正在根据已提供的岗位背景模拟回应，并评价本次提问的信息价值。"}
         initialFocusSelector="textarea"
       >
         <div className="flex items-center justify-between gap-3 border-b border-line pb-3">
@@ -105,23 +113,23 @@ export function ReverseInterviewModals({
             type="button"
             onClick={onCloseInput}
             className="text-faint hover:text-ink text-sm"
-            disabled={reverseBusy}
+            disabled={locked}
             aria-label="关闭反问弹窗"
           >
             ✕
           </button>
         </div>
 
-        <p className="mt-3 text-xs text-muted">
+        {!reverseConflict && <p className="mt-3 text-xs text-muted">
           请根据岗位背景、团队情况或技术体系，向当前的
           <span className="font-medium text-ink">
             「{interviewerLabel}」
           </span>
           面试官提出你的问题：
-        </p>
+        </p>}
 
         {/* 快捷经典预设推荐 */}
-        <div className="mt-3 space-y-1.5">
+        {!reverseConflict && <div className="mt-3 space-y-1.5">
           <p className="text-[11px] font-medium text-faint">推荐参考方向（点击填入）：</p>
           <div className="flex flex-wrap gap-1.5">
             {REVERSE_SAMPLES.map((sample, idx) => (
@@ -129,43 +137,53 @@ export function ReverseInterviewModals({
                 key={idx}
                 type="button"
                 onClick={() => setQuestion(sample)}
+                disabled={locked}
                 className="rounded-md border border-line bg-surface px-2.5 py-1 text-left text-xs text-muted hover:border-primary/40 hover:bg-card hover:text-primary transition-colors"
               >
                 💡 {sample}
               </button>
             ))}
           </div>
-        </div>
+        </div>}
 
         <div className="mt-3">
+          {reverseConflict && <p className="mb-2 text-sm text-muted">保留的反问草稿（可选择并复制）</p>}
           <textarea
+            aria-label="我的反问问题"
             className={`${textareaShortCls} text-sm`}
             value={question}
-            onChange={(e) => setQuestion(e.target.value)}
+            onChange={(e) => { if (!locked && !reverseConflict) setQuestion(e.target.value); }}
             placeholder="输入您想向面试官了解的问题…"
-            disabled={reverseBusy}
+            disabled={locked}
+            readOnly={reverseConflict}
           />
         </div>
 
-        {reverseError && <p className={`mt-2 text-xs ${textErr}`}>{reverseError}</p>}
+        {reverseError && <p role="alert" className={`mt-2 text-xs ${textErr}`}>{reverseError}</p>}
 
-        <div className="mt-5 flex items-center justify-between gap-3 border-t border-line pt-3">
+        <div className="mt-5 flex flex-col items-stretch justify-between gap-3 border-t border-line pt-3 sm:flex-row sm:items-center">
+          {reverseConflict ? <button type="button" className={`${btnPrimary} max-w-full whitespace-normal`} onClick={onCloseInput}>
+            查看已保存结果
+          </button> : <>
           <button
             type="button"
-            className={btnGhost}
+            className={`${btnGhost} max-w-full whitespace-normal`}
             onClick={onGiveUpInput}
-            disabled={reverseBusy}
+            disabled={locked}
           >
             放弃反问，直接生成报告
           </button>
           <button
             type="button"
-            className={btnPrimary}
-            onClick={() => onSubmitReverse(question)}
-            disabled={reverseBusy || !question.trim()}
+            className={`${btnPrimary} max-w-full whitespace-normal`}
+            onClick={() => reverseReadRecovery ? onRetryReverseRead() : onSubmitReverse(question)}
+            disabled={reverseBusy || (!reverseReadRecovery && !question.trim())}
           >
-            {reverseBusy ? "面试官思考与评估中…" : "向面试官提问"}
+            {reverseBusy ? reverseReadRecovery ? "正在读取反问结果…" : "面试官思考与评估中…" : reverseReadRecovery
+              ? reverseReadRecovery.confirmed ? "重新读取已保存反问" : "重新读取反问状态"
+              : "向面试官提问"}
           </button>
+          </>}
         </div>
       </CompactModal>
     </>

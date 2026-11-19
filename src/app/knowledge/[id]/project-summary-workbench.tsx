@@ -1,7 +1,7 @@
 "use client";
 
 import { useAutoScroll } from "@/hooks/use-auto-scroll";
-import { SUMMARY_SECTIONS, type FiveDimensionSummaryKey, type ProjectSummary } from "@/lib/summary";
+import { hasProjectSummaryContent, SUMMARY_SECTIONS, type FiveDimensionSummaryKey, type ProjectSummary } from "@/lib/summary";
 import { btnGhost, btnPrimary, inputCls, labelCls, textareaCls } from "@/lib/ui";
 import { LoadingOverlay } from "@/components/common/loading-overlay";
 import type { SummaryStatus } from "./use-project-detail";
@@ -11,13 +11,19 @@ import { ProjectSummaryReview } from "./project-summary-review";
 
 type ProjectSummaryWorkbenchProps = {
   summaryDraft: ProjectSummary | null;
+  savedSummary?: ProjectSummary | null;
   pendingDraft: boolean;
   proposal?: SummaryProposal | null;
   selectedKeys?: SummaryUnitKey[];
   canConfirmDraft?: boolean;
   summarizing: boolean;
   savingSummary?: boolean;
+  saveRecovery?: { checking: boolean; retry: boolean; message: string } | null;
+  onRetrySaveCheck?: () => void;
   sumStatus: SummaryStatus | null;
+  refreshError?: string;
+  refreshingSummary?: boolean;
+  onRefreshSummary?: () => void;
   typewriter: { displayedText: string; isTyping: boolean };
   materialCount: number;
   onSummarize: (mode?: "full" | "resume-only") => void;
@@ -32,13 +38,19 @@ type ProjectSummaryWorkbenchProps = {
 
 export function ProjectSummaryWorkbench({
   summaryDraft,
+  savedSummary,
   pendingDraft,
   proposal,
   selectedKeys = [],
   canConfirmDraft = true,
   summarizing,
   savingSummary = false,
+  saveRecovery,
+  onRetrySaveCheck,
   sumStatus,
+  refreshError = "",
+  refreshingSummary = false,
+  onRefreshSummary,
   typewriter,
   materialCount,
   onSummarize,
@@ -53,6 +65,9 @@ export function ProjectSummaryWorkbench({
   const { containerRef, handleScroll } = useAutoScroll(typewriter.displayedText);
 
   const achievements = summaryDraft?.achievements ?? [];
+  const saveBlocked = savingSummary || Boolean(saveRecovery?.retry);
+  // 生成接口只读取已保存来源，编辑中或未采纳的草稿不能使按钮可用。
+  const hasSummarySource = materialCount > 0 || hasProjectSummaryContent(savedSummary);
 
   return (
     <div className="space-y-5 lg:col-span-7">
@@ -71,6 +86,22 @@ export function ProjectSummaryWorkbench({
           {sumStatus.text}
         </div>
       )}
+      {saveRecovery && (
+        <div role="alert" aria-label="总结保存状态" className="flex flex-wrap items-center gap-3 rounded-xl border border-accent/40 bg-accent-wash px-3 py-2 text-xs text-accent">
+          <span className="min-w-0 flex-1">{saveRecovery.message}</span>
+          {saveRecovery.retry && onRetrySaveCheck && <button type="button" className={btnGhost} onClick={onRetrySaveCheck} disabled={saveRecovery.checking}>
+            {saveRecovery.checking ? "正在核对保存状态…" : "重新读取保存状态"}
+          </button>}
+        </div>
+      )}
+      {refreshError && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl border border-accent/40 bg-accent-wash px-3 py-2 text-xs text-accent">
+          <span className="min-w-0 flex-1">总结已保存，详情刷新失败：{refreshError}</span>
+          {onRefreshSummary && <button type="button" className={btnGhost} onClick={() => onRefreshSummary()} disabled={refreshingSummary}>
+            {refreshingSummary ? "正在刷新…" : "重试刷新"}
+          </button>}
+        </div>
+      )}
       {pendingDraft && (
         <div className="flex flex-col gap-3 rounded-lg border border-accent/40 bg-accent-wash p-4 text-xs text-accent sm:flex-row sm:items-center sm:justify-between">
           <span>
@@ -80,7 +111,7 @@ export function ProjectSummaryWorkbench({
             <button type="button" className={btnGhost} onClick={onDiscardDraft}>
               放弃草稿
             </button>
-            <button type="button" className={btnPrimary} onClick={onSaveSummary} disabled={!canConfirmDraft || savingSummary}>
+            <button type="button" className={btnPrimary} onClick={onSaveSummary} disabled={!canConfirmDraft || saveBlocked}>
               确认采用入库
             </button>
           </div>
@@ -130,13 +161,20 @@ export function ProjectSummaryWorkbench({
               type="button"
               className="text-xs font-medium text-primary hover:underline disabled:opacity-50"
               onClick={() => onSummarize("resume-only")}
-              disabled={summarizing || savingSummary || materialCount === 0}
+              disabled={summarizing || savingSummary || !hasSummarySource}
             >
               ✨ 单独提炼简历三项
             </button>
           )}
         </div>
 
+        {summaryDraft && materialCount === 0 && (
+          <p className="text-xs text-muted">
+            {hasSummarySource
+              ? "将依据已保存项目档案提炼，当前未保存的修改不作为输入。"
+              : "请先添加原始材料或保存非空项目档案，再提炼简历三项。"}
+          </p>
+        )}
         {summaryDraft ? (
           <div className="space-y-4">
             <div>
@@ -241,7 +279,7 @@ export function ProjectSummaryWorkbench({
             <h2 className="font-serif text-base font-bold text-ink">STAR 结构化亮点提炼面板（深度面试备战）</h2>
           </div>
           {summaryDraft && (
-            <button type="button" className={btnGhost} onClick={onSaveSummary} disabled={savingSummary || (pendingDraft && !canConfirmDraft)}>
+            <button type="button" className={btnGhost} onClick={onSaveSummary} disabled={saveBlocked || (pendingDraft && !canConfirmDraft)}>
               {pendingDraft ? "确认采用草稿" : "保存修改"}
             </button>
           )}
@@ -298,7 +336,7 @@ export function ProjectSummaryWorkbench({
                   放弃本次草稿
                 </button>
               )}
-              <button type="button" className={btnPrimary} onClick={onSaveSummary} disabled={savingSummary || (pendingDraft && !canConfirmDraft)}>
+              <button type="button" className={btnPrimary} onClick={onSaveSummary} disabled={saveBlocked || (pendingDraft && !canConfirmDraft)}>
                 {pendingDraft ? "确认采用并写入档案" : "保存总结修改"}
               </button>
             </div>

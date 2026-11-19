@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { NextResponse } from "next/server";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
@@ -7,7 +8,7 @@ import { getReviewDate } from "@/lib/spaced-repetition";
 import type { ReviewGrade } from "@/lib/spaced-repetition-card-types";
 
 type Context = { params: Promise<{ id: string }> };
-const validId = (value: string) => /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0;
+const validId = (value: string) => Number.isSafeInteger(parseCanonicalPositiveId(value));
 
 async function handleGet(req: Request, { params }: Context) {
   const { id } = await params;
@@ -17,7 +18,7 @@ async function handleGet(req: Request, { params }: Context) {
     const today = getReviewDate(new Date(), search.get("time_zone") ?? undefined);
     const page = parsePaginationParams(search);
     if (!page.ok) return page.response;
-    const detail = getReviewDetail(Number(id), page.limit, page.idCursor, today);
+    const detail = getReviewDetail(parseCanonicalPositiveId(id), page.limit, page.idCursor, today);
     return detail ? NextResponse.json(detail) : NextResponse.json({ error: "复习题目不存在" }, { status: 404 });
   } catch (error) {
     if (error instanceof RangeError) return NextResponse.json({ error: "分页参数或时区无效" }, { status: 400 });
@@ -45,7 +46,7 @@ async function handlePost(req: Request, { params }: Context) {
     return NextResponse.json({ error: "时区无效" }, { status: 400 });
   }
   try {
-    return NextResponse.json(saveReview(Number(id), { answer, grade: grade as ReviewGrade, expected_review_count: body.expected_review_count as number, request_id: body.request_id, time_zone: timeZone }));
+    return NextResponse.json(saveReview(parseCanonicalPositiveId(id), { answer, grade: grade as ReviewGrade, expected_review_count: body.expected_review_count as number, request_id: body.request_id, time_zone: timeZone }));
   } catch (error) {
     if (error instanceof ReviewError) return NextResponse.json({ error: error.message }, { status: error.status });
     throw error;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/common/modal";
 import { btnGhost, btnPrimary, inputCls, textareaShortCls } from "@/lib/ui";
@@ -16,34 +16,81 @@ export function PublishVersionButton({ resumeId, onPublished }: { resumeId: stri
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
+  const pageSessionRef = useRef<AbortController | null>(null);
+  const commandRef = useRef<object | null>(null);
+  const openRef = useRef(false);
+
+  useEffect(() => {
+    const session = new AbortController();
+    pageSessionRef.current = session;
+    return () => {
+      pageSessionRef.current = null;
+      commandRef.current = null;
+      openRef.current = false;
+      session.abort();
+    };
+  }, [resumeId]);
+
+  function openDialog() {
+    if (!pageSessionRef.current || commandRef.current) return;
+    openRef.current = true;
+    setError("");
+    setOpen(true);
+  }
+
+  function closeDialog() {
+    if (commandRef.current) return;
+    openRef.current = false;
+    setOpen(false);
+  }
 
   async function publish(event: React.FormEvent) {
     event.preventDefault();
-    if (busy || !name.trim()) return;
+    const session = pageSessionRef.current;
+    if (!openRef.current || !session || session.signal.aborted || commandRef.current || !name.trim()) return;
+    // 同步占有命令，防止同一事件内重复提交。
+    const command = {};
+    commandRef.current = command;
+    const owns = () => pageSessionRef.current === session && !session.signal.aborted && commandRef.current === command;
+    const submitted = { name: name.trim(), description: description.trim() };
+    let navigating = false;
     setBusy(true);
     setError("");
     try {
       await getResumeSaveQueue(resumeId).drain();
-      const current = await jsonFetch<{ draft_revision: string }>(`/api/resumes/${resumeId}/versions`);
+      if (!owns()) return;
+      const current = await jsonFetch<{ draft_revision: string }>(`/api/resumes/${resumeId}/versions`, { signal: session.signal });
+      if (!owns()) return;
       const version = await jsonFetch<ResumeVersion>(`/api/resumes/${resumeId}/versions`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), description: description.trim(), draft_revision: current.draft_revision }),
+        body: JSON.stringify({ ...submitted, draft_revision: current.draft_revision }), signal: session.signal,
       });
+      if (!owns()) return;
+      openRef.current = false;
       setOpen(false);
       setName("");
       setDescription("");
       if (onPublished) onPublished(version);
-      else router.push(`/resumes/${resumeId}/versions?version=${version.id}`);
-    } catch (reason) { setError(errorMessage(reason)); }
-    finally { setBusy(false); }
+      else {
+        router.push(`/resumes/${resumeId}/versions?version=${version.id}`);
+        navigating = true;
+      }
+    } catch (reason) {
+      if (owns()) setError(errorMessage(reason));
+    } finally {
+      if (owns() && !navigating) {
+        commandRef.current = null;
+        setBusy(false);
+      }
+    }
   }
 
   return <>
-    <button type="button" className={btnPrimary} onClick={() => { setError(""); setOpen(true); }}>发布新版本</button>
+    <button type="button" className={btnPrimary} onClick={openDialog}>发布新版本</button>
     <Modal
       open={open}
       title="发布简历版本"
-      onClose={() => { if (!busy) setOpen(false); }}
+      onClose={closeDialog}
       escapeDisabled={busy}
       closeOnBackdrop={!busy}
       loading={busy}
@@ -55,7 +102,7 @@ export function PublishVersionButton({ resumeId, onPublished }: { resumeId: stri
         <label className="block space-y-2 text-sm"><span>版本名称 <span className="text-muted">（必填）</span></span><input autoFocus required maxLength={80} className={inputCls} value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：前端岗位 · 强化项目成果" disabled={busy} /></label>
         <label className="block space-y-2 text-sm"><span>修改说明 <span className="text-muted">（选填）</span></span><textarea maxLength={2000} className={textareaShortCls} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="记录这次调整的原因与重点；具体内容变化会自动比较。" disabled={busy} /></label>
         {error && <p role="alert" className="text-sm text-danger">{error}</p>}
-        <div className="flex justify-end gap-2"><button type="button" className={btnGhost} disabled={busy} onClick={() => setOpen(false)}>取消</button><button type="submit" className={btnPrimary} disabled={busy || !name.trim()}>{busy ? "正在保存并发布…" : "确认发布"}</button></div>
+        <div className="flex justify-end gap-2"><button type="button" className={btnGhost} disabled={busy} onClick={closeDialog}>取消</button><button type="submit" className={btnPrimary} disabled={busy || !name.trim()}>{busy ? "正在保存并发布…" : "确认发布"}</button></div>
       </form>
     </Modal>
   </>;

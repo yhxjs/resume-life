@@ -10,6 +10,7 @@ import {
 import { getInterviewUrgency, getTaskUrgency } from "@/lib/application-calendar";
 import { buildIcsCalendar, downloadIcsFile } from "@/lib/ics-calendar";
 import { ApplicationVersionsDialog } from "@/components/application/application-versions-dialog";
+import { useCopyFeedback } from "@/hooks/use-copy-feedback";
 
 interface CalendarInterviewCardProps {
   event: CalendarInterviewEvent;
@@ -29,7 +30,7 @@ export function CalendarInterviewCard({
   onQuickStatusChange,
 }: CalendarInterviewCardProps) {
   const [showVersions, setShowVersions] = useState(false);
-  const [copiedUrl, setCopiedUrl] = useState(false);
+  const { copiedText, copyError, copying, copy } = useCopyFeedback();
 
   const dateObj = new Date(event.interview_time);
   const timeFormatted = Number.isNaN(dateObj.getTime())
@@ -49,17 +50,6 @@ export function CalendarInterviewCard({
     bg: "bg-surface",
     border: "border-line",
   };
-
-  async function handleCopyMeetingUrl() {
-    if (!event.meeting_url) return;
-    try {
-      await navigator.clipboard.writeText(event.meeting_url);
-      setCopiedUrl(true);
-      setTimeout(() => setCopiedUrl(false), 2000);
-    } catch {
-      // 容错处理
-    }
-  }
 
   function handleExportSingleIcs() {
     const start = new Date(event.interview_time);
@@ -166,7 +156,7 @@ export function CalendarInterviewCard({
 
         {/* 会议地点 / 会议链接直达 */}
         {(event.location || event.meeting_url) && (
-          <div className="mt-1.5 rounded-lg bg-surface/90 border border-line/50 p-1.5 text-[11px] space-y-1">
+          <div role="group" aria-label="会议地点与链接" className="mt-1.5 rounded-lg bg-surface/90 border border-line/50 p-1.5 text-[11px] space-y-1">
             {event.location && (
               <div className="flex items-center gap-1 text-ink truncate">
                 <span className="text-primary shrink-0">📍</span>
@@ -189,12 +179,19 @@ export function CalendarInterviewCard({
                 </a>
                 <button
                   type="button"
-                  onClick={handleCopyMeetingUrl}
+                  onClick={() => { if (event.meeting_url) void copy(event.meeting_url); }}
+                  disabled={copying}
                   className="rounded px-1.5 py-0.2 text-[10px] text-muted hover:text-ink hover:bg-card border border-line/60 transition-colors shrink-0"
                   title="复制会议链接"
                 >
-                  {copiedUrl ? "已复制 ✓" : "复制链接"}
+                  {copiedText === event.meeting_url ? "已复制 ✓" : "复制链接"}
                 </button>
+              </div>
+            )}
+            {event.meeting_url && copyError?.text === event.meeting_url && (
+              <div role="alert" className="space-y-1 text-danger">
+                <p>{copyError.message}</p>
+                <p className="break-all text-ink select-all">{event.meeting_url}</p>
               </div>
             )}
           </div>

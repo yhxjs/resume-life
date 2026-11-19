@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction } from "@/lib/db";
@@ -8,8 +9,8 @@ async function handleGet(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const numId = Number(id);
-  if (!Number.isFinite(numId)) {
+  const numId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(numId) || numId <= 0) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
 
@@ -50,8 +51,8 @@ async function handleDelete(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const numId = Number(id);
-  if (!Number.isFinite(numId)) {
+  const numId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(numId) || numId <= 0) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { PRESET_RICH_COLORS, plainTextToRichHtml, sanitizeRichText } from "@/lib/rich-text";
 
 export interface RichTextEditorProps {
@@ -10,6 +10,7 @@ export interface RichTextEditorProps {
   minHeightClass?: string;
   className?: string;
   ariaLabel?: string;
+  disabled?: boolean;
 }
 
 export function RichTextEditor({
@@ -19,6 +20,7 @@ export function RichTextEditor({
   minHeightClass = "min-h-[96px]",
   className = "",
   ariaLabel,
+  disabled = false,
 }: RichTextEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const lastHtmlRef = useRef<string | null>(null);
@@ -26,15 +28,15 @@ export function RichTextEditor({
   const [colorMenuOpen, setColorMenuOpen] = useState(false);
   const [isBold, setIsBold] = useState(false);
 
-  // 同步外部 value 变化（支持历史纯文本展示，同时避免用户打字时光标跳动）
-  useEffect(() => {
+  // 绘制前同步外部草稿，避免首次编辑或恢复时仍显示空白/旧正文；同值不重写光标。
+  useLayoutEffect(() => {
     if (editorRef.current && value !== lastHtmlRef.current) {
       const htmlToRender = plainTextToRichHtml(value || "");
       editorRef.current.innerHTML = htmlToRender;
       selectionRef.current = null;
       lastHtmlRef.current = value || "";
     }
-  }, [value]);
+  }, [value, disabled]);
 
   function updateActiveState() {
     if (typeof document === "undefined") return;
@@ -68,7 +70,7 @@ export function RichTextEditor({
   }
 
   function handleInput() {
-    if (!editorRef.current) return;
+    if (disabled || !editorRef.current) return;
     const rawHtml = editorRef.current.innerHTML;
     // 如果只有占位空行，转为空字符
     const clean = rawHtml === "<br>" || rawHtml === "<p><br></p>" ? "" : rawHtml;
@@ -78,6 +80,7 @@ export function RichTextEditor({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (disabled) return;
     // 拦截 Ctrl+B / Cmd+B 进行原生加粗
     if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B")) {
       e.preventDefault();
@@ -86,14 +89,14 @@ export function RichTextEditor({
   }
 
   function toggleBold() {
-    if (!editorRef.current) return;
+    if (disabled || !editorRef.current) return;
     restoreSelection();
     document.execCommand("bold", false);
     handleInput();
   }
 
   function applyColor(color: string) {
-    if (!editorRef.current) return;
+    if (disabled || !editorRef.current) return;
     restoreSelection();
     if (color === "inherit") {
       document.execCommand("removeFormat", false);
@@ -111,6 +114,7 @@ export function RichTextEditor({
 
   function handlePaste(e: React.ClipboardEvent<HTMLDivElement>) {
     e.preventDefault();
+    if (disabled) return;
     const text = e.clipboardData.getData("text/plain");
     if (!text) return;
     // 纯文本粘贴，换行转为 <br> 并进行安全清洗
@@ -136,6 +140,7 @@ export function RichTextEditor({
             title="加粗 (Ctrl+B)"
             aria-label="加粗文本"
             aria-pressed={isBold}
+            disabled={disabled}
             onMouseDown={(e) => {
               e.preventDefault();
               saveSelection();
@@ -156,7 +161,8 @@ export function RichTextEditor({
               type="button"
               title="文字颜色"
               aria-label="设置文字颜色"
-              aria-expanded={colorMenuOpen}
+              aria-expanded={colorMenuOpen && !disabled}
+              disabled={disabled}
               onMouseDown={(e) => {
                 e.preventDefault();
                 saveSelection();
@@ -175,7 +181,7 @@ export function RichTextEditor({
               <span>颜色</span>
             </button>
 
-            {colorMenuOpen && (
+            {colorMenuOpen && !disabled && (
               <div
                 className="absolute left-0 top-full z-20 mt-1 flex flex-wrap gap-1.5 rounded-lg border border-line bg-card p-2 shadow-card-float"
                 style={{ minWidth: "168px" }}
@@ -209,11 +215,13 @@ export function RichTextEditor({
       {/* 可编辑区 */}
       <div
         ref={editorRef}
-        contentEditable
+        contentEditable={!disabled}
         suppressContentEditableWarning
         role="textbox"
         aria-multiline="true"
         aria-label={ariaLabel}
+        aria-disabled={disabled || undefined}
+        tabIndex={disabled ? -1 : undefined}
         data-placeholder={placeholder}
         onInput={handleInput}
         onKeyDown={handleKeyDown}

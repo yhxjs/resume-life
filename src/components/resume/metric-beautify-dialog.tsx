@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Modal } from "@/components/common/modal";
 import type { DescribableItem } from "@/lib/module-descriptions";
-import { normalizeNewlines, stripDraftHeaders, type PolishMode } from "@/lib/polish";
+import { stripDraftHeaders, type PolishMode } from "@/lib/polish";
 import {
   fillSampleValues,
   segmentForPreview,
@@ -26,6 +26,8 @@ type MetricBeautifyDialogProps = {
 
 type ItemResult = {
   status: "ok" | "err";
+  /** 生成时的目标与实际输入；原经历变化后不能沿用旧草稿覆盖。 */
+  source: string;
   /** AI 返回的原始纯文本草稿，改样式时复用它重算，不重新调模型 */
   draft: string;
   segments: StyledSegment[];
@@ -83,6 +85,15 @@ export function MetricBeautifyDialog({
   const abortRef = useRef<AbortController | null>(null);
   /** 样式选项的最新值：发起请求时读它，保证重试与重跑都用当前样式 */
   const styleRef = useRef({ bold: true, color: "inherit", samples: false });
+  /** 每条目的手动选择版本，避免单条回包覆盖等待期间的新选择。 */
+  const selectionVersionsRef = useRef(new Map<string, number>());
+
+  function sourceOf(item: DescribableItem): string {
+    return JSON.stringify([
+      resumeId, moduleType, item.id, stripRichText(item.text),
+      item.context.company ?? "", item.context.title ?? "", item.context.name ?? "", item.context.role ?? "",
+    ]);
+  }
 
   function invalidateRun() {
     runRef.current += 1;
@@ -98,6 +109,7 @@ export function MetricBeautifyDialog({
 
   function handleOpen() {
     invalidateRun();
+    selectionVersionsRef.current.clear();
     styleRef.current = { bold: true, color: "inherit", samples: false };
     setMode("star");
     setTargetRole("");
@@ -165,8 +177,9 @@ export function MetricBeautifyDialog({
    * runAt 是发起时的运行代号：等待期间弹窗被重开或新一批生成启动时，本次结果已无人接收。
    */
   async function generateOne(item: DescribableItem, runAt: number, signal: AbortSignal): Promise<ItemResult> {
+    const source = sourceOf(item);
     if (runRef.current !== runAt || signal.aborted) {
-      return { status: "err", draft: "", segments: [], html: "", sampleCount: 0, error: "已取消" };
+      return { status: "err", source, draft: "", segments: [], html: "", sampleCount: 0, error: "已取消" };
     }
     try {
       const data = await jsonFetch<{ result?: { draft?: string } }>(
@@ -185,14 +198,14 @@ export function MetricBeautifyDialog({
         }
       );
       const rawDraft = data.result?.draft ?? "";
-      const normalizedDraft = normalizeNewlines(rawDraft);
-      const draft = stripDraftHeaders(normalizedDraft, item.context);
+      const draft = stripDraftHeaders(rawDraft, item.context, "plain-text");
       if (!draft.trim()) throw new Error("润色结果为空，请重试");
       const s = styleRef.current;
-      return { status: "ok", draft, ...styleDraft(draft, s.bold, s.color, s.samples) };
+      return { status: "ok", source, draft, ...styleDraft(draft, s.bold, s.color, s.samples) };
     } catch (err) {
       return {
         status: "err",
+        source,
         draft: "",
         segments: [],
         html: "",
@@ -260,12 +273,14 @@ export function MetricBeautifyDialog({
     const controller = new AbortController();
     abortRef.current = controller;
     const myRun = runRef.current;
-    setRetrying((prev) => new Set(prev).add(item.id));
+    const selectionVersion = selectionVersionsRef.current.get(item.id) ?? 0;
+    // 新请求已取消上一条单独生成，只保留当前请求的忙碌标记。
+    setRetrying(new Set([item.id]));
     try {
       const result = await generateOne(item, myRun, controller.signal);
       if (runRef.current !== myRun) return;
       setResults((prev) => ({ ...prev, [item.id]: result }));
-      if (result.status === "ok") {
+      if (result.status === "ok" && selectionVersion === (selectionVersionsRef.current.get(item.id) ?? 0)) {
         setSelected((prev) => new Set(prev).add(item.id));
       }
     } finally {
@@ -280,15 +295,20 @@ export function MetricBeautifyDialog({
     }
   }
 
+  const staleIds = new Set(items
+    .filter((item) => results[item.id]?.status === "ok" && results[item.id]!.source !== sourceOf(item))
+    .map((item) => item.id));
+  const hasStaleSelected = items.some((item) => selected.has(item.id) && staleIds.has(item.id));
   const okItems = items.filter((it) => results[it.id]?.status === "ok");
   // 只数「将写入」的条目：警示条描述的是即将落库的内容，未勾选/生成中的条目一律不计
   const totalSamples = items
-    .filter((it) => selected.has(it.id) && results[it.id]?.status === "ok")
+    .filter((it) => selected.has(it.id) && results[it.id]?.status === "ok" && !staleIds.has(it.id))
     .reduce((sum, it) => sum + (results[it.id]?.sampleCount ?? 0), 0);
   // 只数选中且成功的条目：重新生成后某个原来选中的 id 可能变成失败态
   const appliedCount = okItems.filter((it) => selected.has(it.id)).length;
   const hasResults = okItems.length > 0;
   const selectedCount = items.filter((it) => selected.has(it.id)).length;
+  const isGenerating = running || retrying.size > 0;
 
   function handleClose() {
     invalidateRun();
@@ -300,6 +320,9 @@ export function MetricBeautifyDialog({
   }
 
   function handleSelectAll() {
+    for (const item of items) {
+      selectionVersionsRef.current.set(item.id, (selectionVersionsRef.current.get(item.id) ?? 0) + 1);
+    }
     if (selected.size === items.length) {
       setSelected(new Set());
     } else {
@@ -308,6 +331,7 @@ export function MetricBeautifyDialog({
   }
 
   function toggle(id: string) {
+    selectionVersionsRef.current.set(id, (selectionVersionsRef.current.get(id) ?? 0) + 1);
     setSelected((prev) => {
       const nextSelected = new Set(prev);
       if (nextSelected.has(id)) nextSelected.delete(id);
@@ -317,6 +341,7 @@ export function MetricBeautifyDialog({
   }
 
   function handleWrite() {
+    if (abortRef.current || hasStaleSelected) return;
     // segmentsToHtml 已限制标签并转义文本；写入侧由 splitRichTextToLines 统一清洗。
     const updates = items
       .filter((it) => selected.has(it.id) && results[it.id]?.status === "ok")
@@ -347,6 +372,7 @@ export function MetricBeautifyDialog({
         loading={running}
         loadingText={`AI 经历量化美化中… (${progress.done}/${progress.total})`}
         loadingDescription="正在基于 STAR 原则与度量指标逐条分析扩写，请稍候…"
+        onLoadingCancel={handleClose}
       >
         <div className="space-y-4">
           <div>
@@ -500,11 +526,13 @@ export function MetricBeautifyDialog({
                             disabled={running}
                             onChange={() => toggle(item.id)}
                             title={
-                              r?.status === "ok"
-                                ? "已生成，勾选以写入简历"
-                                : r?.status === "err"
-                                  ? "生成失败，可重试或取消勾选"
-                                  : "勾选以进行 AI 美化"
+                              staleIds.has(item.id)
+                                ? "原经历已变化，请重新美化或取消勾选"
+                                : r?.status === "ok"
+                                  ? "已生成，勾选以写入简历"
+                                  : r?.status === "err"
+                                    ? "生成失败，可重试或取消勾选"
+                                    : "勾选以进行 AI 美化"
                             }
                             aria-label={`写入第 ${index + 1} 条`}
                           />
@@ -561,12 +589,22 @@ export function MetricBeautifyDialog({
 
                       {/* 成功预览（当前非重新生成中） */}
                       {r?.status === "ok" &&
+                        !staleIds.has(item.id) &&
                         !generatingIds.has(item.id) &&
                         currentGeneratingId !== item.id &&
                         !retrying.has(item.id) && (
                           <div className="mt-2 pl-6 whitespace-pre-line text-sm leading-relaxed text-ink">
                             <PreviewSegments segments={r.segments} />
                           </div>
+                        )}
+
+                      {staleIds.has(item.id) &&
+                        !generatingIds.has(item.id) &&
+                        currentGeneratingId !== item.id &&
+                        !retrying.has(item.id) && (
+                          <p role="alert" className={`${textErr} mt-2 pl-6`}>
+                            原经历或职责信息已变化，请重新美化本条后再写入
+                          </p>
                         )}
 
                       {/* 失败提示（当前非重新生成中） */}
@@ -594,15 +632,15 @@ export function MetricBeautifyDialog({
           )}
 
           <div className="flex items-center justify-end gap-2 border-t border-line pt-3">
-            <button type="button" className={btnGhost} onClick={handleClose}>
+            {!running && <button type="button" className={btnGhost} onClick={handleClose}>
               取消
-            </button>
+            </button>}
             <button
               type="button"
               className={btnPrimary}
               onClick={handleWrite}
-              disabled={running || appliedCount === 0}
-              title={running ? "生成中，请等待本批完成后再写入" : undefined}
+              disabled={isGenerating || hasStaleSelected || appliedCount === 0}
+              title={isGenerating ? "生成中，请等待完成后再写入" : hasStaleSelected ? "所选经历已变化，请重新美化或取消勾选" : undefined}
             >
               写入选中 {appliedCount} 条
             </button>

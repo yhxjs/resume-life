@@ -3,13 +3,14 @@ import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction, now } from "@/lib/db";
-import { extractJson, LlmConfigError } from "@/lib/llm";
+import { LlmConfigError } from "@/lib/llm";
 import {
   validateGeneratedRemedyResult,
   type PersonaStyle,
   type ScenarioType,
 } from "@/lib/career-gap-remedy";
 import {
+  buildCareerGapRemedyMessages,
   CAREER_GAP_REMEDY_SYSTEM_PROMPT,
 } from "@/lib/career-gap-remedy-llm";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
@@ -44,12 +45,20 @@ async function handleGet(req: Request) {
 async function handlePost(req: Request) {
   const parsedBody = await parseApiJson<unknown>(req);
   if (!parsedBody.ok) return parsedBody.response;
+  if (!parsedBody.data || typeof parsedBody.data !== "object" || Array.isArray(parsedBody.data)) {
+    return NextResponse.json({ error: "沟通方案请求必须是 JSON 对象" }, { status: 400 });
+  }
   const body = parsedBody.data as {
     scenarioType?: unknown;
     rawStory?: unknown;
     targetRole?: unknown;
     personaStyle?: unknown;
-  } | null;
+  };
+  for (const field of ["scenarioType", "rawStory", "targetRole", "personaStyle"] as const) {
+    if (body[field] !== undefined && typeof body[field] !== "string") {
+      return NextResponse.json({ error: "沟通场景、原始经历、目标岗位和表达风格必须是字符串" }, { status: 400 });
+    }
+  }
 
   const rawStory = typeof body?.rawStory === "string" ? body.rawStory.trim() : "";
   if (!rawStory) {
@@ -67,42 +76,14 @@ async function handlePost(req: Request) {
   const rawStyle = typeof body?.personaStyle === "string" ? body.personaStyle : "pragmatic";
   const personaStyle: PersonaStyle =
     rawStyle === "driven" || rawStyle === "composed" ? rawStyle : "pragmatic";
-  const scenarioLabels: Record<ScenarioType, string> = {
-    resignation: "离职原因重塑",
-    gap: "空窗期（Gap）重塑",
-    both: "离职原因 + 空窗期综合重塑",
-  };
-  const personaLabels: Record<PersonaStyle, string> = {
-    pragmatic: "务实稳健型（真诚诚恳、踏实负责、摆事实讲道理）",
-    driven: "自驱进取型（追求成长、目标感强、打破舒适圈、以结果为导向）",
-    composed: "从容睿智型（高情商化解、大局观强、举重若轻、情绪极其稳定）",
-  };
-
   let raw: string;
   try {
     raw = await safeChat(
       "parse",
       { feature: LLM_FEATURES.gapRemedyGenerate },
       CAREER_GAP_REMEDY_SYSTEM_PROMPT,
-      [
-        {
-          role: "user",
-          parts: [
-            { trust: "trusted", text: `【重塑场景类型】\n${scenarioLabels[scenarioType]}\n\n` },
-            ...(targetRole
-              ? [
-                  { trust: "trusted", text: "【目标应聘岗位/方向】\n" } as const,
-                  { trust: "untrusted", tag: "target_role", text: targetRole } as const,
-                  { trust: "trusted", text: "\n\n" } as const,
-                ]
-              : []),
-            { trust: "trusted", text: `【期望展现的人设风格】\n${personaLabels[personaStyle]}\n\n【求职者真实经历与痛点（大实话）】\n` },
-            { trust: "untrusted", tag: "raw_story", text: rawStory },
-            { trust: "trusted", text: "\n\n请根据以上真实情况，生成一份量身定制的高情商对策方案。" },
-          ],
-        },
-      ],
-      { signal: req.signal, requireJson: true }
+      buildCareerGapRemedyMessages({ scenarioType, targetRole, personaStyle, rawStory }),
+      { signal: req.signal, requireJson: "strict" }
     );
   } catch (err) {
     const message =
@@ -114,7 +95,7 @@ async function handlePost(req: Request) {
 
   let result: ReturnType<typeof validateGeneratedRemedyResult> = null;
   try {
-    const parsed = extractJson<{ scripts?: Record<string, { script?: unknown }> } | null>(raw);
+    const parsed = JSON.parse(raw) as { scripts?: Record<string, { script?: unknown }> } | null;
     const scripts = parsed?.scripts;
     if ([scripts?.concise, scripts?.detailed].some((script) => typeof script?.script === "string" && script.script.trim())) {
       result = validateGeneratedRemedyResult(parsed);
@@ -124,17 +105,19 @@ async function handlePost(req: Request) {
   }
   if (!result) {
     return NextResponse.json(
-      { error: "AI 重塑结果解析失败：返回数据格式不符合规范，请稍后重试" },
+      { error: "沟通方案解析失败：返回数据格式不符合规范，请稍后重试" },
       { status: 502 }
     );
   }
 
   const db = getDb();
-  const res = inTransaction(() => db
-    .prepare(
+  const res = inTransaction(() => {
+    req.signal.throwIfAborted();
+    return db.prepare(
       "INSERT INTO resignation_gap_remedies (scenario_type, raw_story, target_role, persona_style, result, created_at) VALUES (?, ?, ?, ?, ?, ?)"
     )
-    .run(scenarioType, rawStory, targetRole, personaStyle, JSON.stringify(result), now()));
+    .run(scenarioType, rawStory, targetRole, personaStyle, JSON.stringify(result), now());
+  });
 
   return NextResponse.json({ id: Number(res.lastInsertRowid) }, { status: 201 });
 }

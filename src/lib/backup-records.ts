@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { readBackupSequences, TABLES_CLEAR_ORDER, type BackupSequences } from "@/lib/backup";
-import { invalidDomainColumn, validateResumeVersionRelations } from "@/lib/backup-domain";
+import { invalidDomainColumn, validateResumeVersionRelations, validateProjectMaterialTableProvenance } from "@/lib/backup-domain";
 import { CURRENT_DB_VERSION, validateDatabaseSchema } from "@/lib/db";
 import {
   BACKUP_BATCH_SIZE,
@@ -236,6 +236,7 @@ export function createBackupRecordStream(
       transactionOpen = true;
       database.prepare("SELECT 1 FROM sqlite_master LIMIT 1").get();
       validateResumeVersionRelations(database);
+      validateProjectMaterialTableProvenance(database);
       const files = readUploadManifest(database);
       const fileNames = new Set(files.map((file) => file.name));
 

@@ -99,3 +99,32 @@ describe.each(histories)("$name 历史分页", ({ url, route, seed }) => {
     }
   });
 });
+
+it("自我介绍列表完整回读发布快照及无绑定旧记录，读取不改写业务数据", async () => {
+  const { readIntroListPage } = await import("../intro-history");
+  const { publishResumeVersion } = await import("../resume-versions");
+  const resumeId = Number(db.prepare("INSERT INTO resumes (title, created_at, updated_at) VALUES ('发布标题', '', '')").run().lastInsertRowid);
+  const version = publishResumeVersion(resumeId, { name: "旧发布版 <T> &amp;" });
+  db.prepare("UPDATE resumes SET title = '后来的草稿标题' WHERE id = ?").run(resumeId);
+  const original = "  长历史 JD <T> &amp;\n内部  空格  ".repeat(4000);
+  const insert = db.prepare("INSERT INTO intros (resume_id, resume_version_id, jd, created_at) VALUES (?, ?, ?, ?)");
+  for (let index = 0; index < 52; index++) insert.run(resumeId, index % 2 ? version.id : null, original, "旧日期字面量");
+  const snapshot = () => ({
+    intros: db.prepare("SELECT * FROM intros ORDER BY id").all(),
+    versions: db.prepare("SELECT * FROM resume_versions ORDER BY id").all(),
+    resumes: db.prepare("SELECT * FROM resumes ORDER BY id").all(),
+    changes: db.prepare("SELECT total_changes() AS total").get(),
+  });
+  const before = snapshot();
+  const { GET } = await import("@/app/api/intros/route");
+  const response = await GET(new Request("http://localhost/api/intros"));
+  expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
+  const first = readIntroListPage(await response.json());
+  expect(first.items).toHaveLength(50); expect(first.total).toBe(52);
+  expect(first.items[0]).toMatchObject({ resume_title: "发布标题", resume_version_id: version.id, resume_version: 1, resume_version_name: version.name, jd: original, created_at: "旧日期字面量" });
+  expect(first.items[1]).toMatchObject({ resume_title: "后来的草稿标题", resume_version_id: null, resume_version: null, resume_version_name: null });
+  const last = await GET(new Request(`http://localhost/api/intros?cursor=${first.nextCursor}`));
+  const second = readIntroListPage(await last.json(), { cursor: first.nextCursor! });
+  expect(second.items.map(item => item.id)).toEqual([2, 1]); expect(second.nextCursor).toBeNull(); expect(second.total).toBe(52);
+  expect(snapshot()).toEqual(before);
+});

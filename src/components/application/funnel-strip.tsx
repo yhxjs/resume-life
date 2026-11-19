@@ -3,7 +3,7 @@
 import { FUNNEL_STAGES, STAGE_CONFIG, type ApplicationStats } from "@/lib/applications-types";
 
 interface FunnelStripProps {
-  stats: ApplicationStats;
+  stats: Pick<ApplicationStats, "counts" | "totalActive" | "rates" | "funnel">;
   selectedStage?: string;
   onSelectStage?: (stage: string) => void;
 }
@@ -21,7 +21,7 @@ export function FunnelStrip({ stats, selectedStage = "all", onSelectStage }: Fun
         <div className="flex items-center gap-2">
           <span className="font-serif text-sm font-bold text-ink">求职漏斗转化概览</span>
           <span className="text-xs text-muted">
-            进行中投递: <strong className="font-mono text-ink">{stats.totalActive}</strong> 家
+            进行中投递: <strong className="font-mono text-ink">{stats.totalActive}</strong> 条记录
           </span>
         </div>
 

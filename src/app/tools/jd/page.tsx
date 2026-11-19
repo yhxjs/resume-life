@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { confirmDialog, alertDialog } from "@/components/common/confirm-dialog";
+import { ToolHistoryDeletionFeedback } from "@/components/common/tool-history-deletion-feedback";
+import { useToolHistoryDeletion } from "@/hooks/use-tool-history-deletion";
 import { jsonFetch } from "@/lib/fetcher";
 import { Loading, LoadError } from "@/components/common/ui-bits";
 import { LoadingOverlay } from "@/components/common/loading-overlay";
@@ -74,39 +75,47 @@ export default function JdPortraitPage() {
     delay: 0,
   });
   const [jd, setJd] = useState("");
+  const deletion = useToolHistoryDeletion("jd-portraits", reload);
+  const visibleItems = items?.filter((item) => !deletion.deletedIds.has(item.id)) ?? null;
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
+  const mounted = useRef(false);
+  const generation = useRef<AbortController | null>(null);
+
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; generation.current?.abort(); generation.current = null; };
+  }, []);
 
   async function generate() {
-    if (!jd.trim()) return;
+    if (!mounted.current || generation.current || !jd.trim()) return;
+    const controller = new AbortController();
+    generation.current = controller;
+    const isCurrent = () => mounted.current && generation.current === controller && !controller.signal.aborted;
     setGenerating(true);
     setError("");
     try {
-      const data = await jsonFetch<{ id: number }>("/api/tools/jd-portraits", {
+      const data = await jsonFetch<unknown>("/api/tools/jd-portraits", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jd: jd.trim() }),
+        signal: controller.signal,
       });
-      router.push(`/tools/jd/${data.id}`);
+      if (!isCurrent()) return;
+      const id = data && typeof data === "object" ? (data as { id?: unknown }).id : undefined;
+      if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) throw new Error("生成响应不完整，请先核对历史记录是否已保存");
+      router.push(`/tools/jd/${id}`);
     } catch (err) {
+      if (!isCurrent()) return;
+      generation.current = null;
       setError(errorMessage(err));
       setGenerating(false);
+      reload();
     }
-  }
-
-  async function remove(id: number) {
-    if (!(await confirmDialog({ title: "删除记录", message: "确定删除这份考点画像？", danger: true }))) return;
-    try {
-      await jsonFetch(`/api/tools/jd-portraits/${id}`, { method: "DELETE" });
-    } catch (err) {
-      await alertDialog({ title: "删除失败", message: errorMessage(err) });
-      return;
-    }
-    reload();
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="mx-auto max-w-6xl space-y-8 wrap-anywhere">
       {/* 顶部标题栏 */}
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-line pb-5">
         <div>
@@ -114,12 +123,12 @@ export default function JdPortraitPage() {
             JD 考点画像
           </h1>
           <p className="mt-1 max-w-prose text-sm text-muted leading-relaxed">
-            粘贴一段岗位要求，AI 解析出这场面试的考点雷达：必考技能、可能追问方向与公司风格猜测，考前面一遍心里有底。
+            依据岗位要求整理技能准备优先级、练习方向与有原文依据的团队风格推测。仅分析 JD，不代表真实面试必考内容或公司实际情况。
           </p>
         </div>
         {items !== null && (
           <div className="flex items-center gap-2 text-xs text-muted">
-            <span>已载入画像存档：<strong className="font-mono text-ink font-bold text-sm">{items.length}</strong> 份{total !== null && ` / 共 ${total} 份`}</span>
+            <span>已载入画像存档：<strong className="font-mono text-ink font-bold text-sm">{visibleItems?.length}</strong> 份{total !== null && ` / 共 ${total} 份`}</span>
           </div>
         )}
       </div>
@@ -128,15 +137,15 @@ export default function JdPortraitPage() {
       <div className="relative rounded-2xl border border-line bg-card p-6 shadow-card-subtle space-y-4">
         <LoadingOverlay
           show={generating}
-          message="AI 正在深度解析 JD 考点雷达…"
-          description="正在拆解核心必考技术栈、高频追问方向与企业技术文化，约需 15-20 秒，请稍候…"
+          message="AI 正在整理 JD 准备建议…"
+          description="仅依据本次 JD 整理准备优先级与练习方向；公司风格属于待核实推测，请稍候…"
         />
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/70 pb-3">
           <div className="flex items-center gap-2">
             <span aria-hidden className="h-[9px] w-[9px] rounded-[1px] bg-primary" />
             <h2 className="text-sm font-serif font-bold text-ink">输入岗位招聘要求 (JD)</h2>
           </div>
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-muted">填入范例：</span>
             {SAMPLE_JDS.map((sample, idx) => (
               <span key={sample.label} className="flex items-center gap-1">
@@ -144,6 +153,7 @@ export default function JdPortraitPage() {
                 <button
                   type="button"
                   onClick={() => setJd(sample.text)}
+                  disabled={generating}
                   className="text-primary hover:underline font-medium"
                 >
                   {sample.label}
@@ -154,50 +164,54 @@ export default function JdPortraitPage() {
         </div>
 
         <label className="block">
+          <span className="sr-only">岗位要求（JD）</span>
           <textarea
             className={`${textareaTallCls} font-sans text-xs sm:text-sm`}
             value={jd}
             onChange={(e) => setJd(e.target.value)}
-            placeholder="粘贴目标岗位的职责与任职要求，AI 将据此解析必考技能权重、深度追问方向与公司技术文化推测…"
+            placeholder="粘贴目标岗位的职责与任职要求，保留硬性要求、加分项、任选条件和未知信息…"
+            disabled={generating}
           />
         </label>
 
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
           <span className="text-xs text-muted">
-            {jd.trim().length > 0 ? `已输入 ${jd.trim().length} 字，点击即可全景拆解` : "支持直接粘贴各大招聘平台完整 JD 文本"}
+            {jd.trim().length > 0 ? `已输入 ${jd.trim().length} 字，按本次 JD 整理准备建议` : "支持直接粘贴各大招聘平台完整 JD 文本"}
           </span>
           <button
             className={btnPrimary}
             onClick={generate}
             disabled={generating || !jd.trim()}
           >
-            {generating ? "AI 深度解析考点中（约需 15-20 秒）…" : "生成考点画像雷达 →"}
+            {generating ? "AI 正在整理准备建议…" : "生成准备画像 →"}
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="rounded-xl border border-danger/30 bg-danger-wash p-4 text-xs text-danger">
-          {error}
+        <div role="alert" className="space-y-1 rounded-xl border border-danger/30 bg-danger-wash p-4 text-xs text-danger">
+          <p>{error}</p>
+          <p>响应异常时仍可能已保存，请先核对历史再重新生成；历史读取失败时可单独重试。</p>
         </div>
       )}
       {/* 历史画像卡片网格 */}
       <div className="space-y-4 pt-2">
+        <ToolHistoryDeletionFeedback deletion={deletion} />
         <div className="flex items-center gap-2">
           <span aria-hidden className="h-[9px] w-[9px] rounded-[1px] bg-primary" />
           <h2 className="font-serif text-base font-bold text-ink">历史考点画像记录</h2>
         </div>
 
         {loadError && <LoadError message={`画像历史加载失败：${loadError}`} onRetry={failedCursor === null ? reload : loadMore} />}
-        {items === null ? (
+        {visibleItems === null ? (
           !loadError && <Loading label="正在加载画像历史…" />
-        ) : items.length === 0 ? (
+        ) : visibleItems.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-line p-8 text-center text-xs text-muted bg-surface/30">
-            还没有画像记录：贴上一段岗位 JD，生成你的第一份考点雷达吧
+            还没有画像记录：贴上一段岗位 JD，整理准备建议；依据充分时会展示考点雷达。
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {items.map((it) => {
+            {visibleItems.map((it) => {
               const parsed = parseJdPortraitResult(it.result);
               return (
                 <div
@@ -213,7 +227,7 @@ export default function JdPortraitPage() {
                         {itemTitle(it)}
                       </Link>
                       <span className="shrink-0 rounded-full border border-primary/20 bg-primary-soft px-2.5 py-0.5 text-[10px] font-medium text-primary">
-                        考点雷达
+                        岗位准备画像
                       </span>
                     </div>
 
@@ -222,9 +236,9 @@ export default function JdPortraitPage() {
                         {parsed.mustSkills.slice(0, 4).map((s) => (
                           <span
                             key={s.name}
-                            className="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-muted"
+                            className="max-w-full rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-muted"
                           >
-                            {s.name} · {s.weight}分
+                            {s.name} · 准备优先级 {s.weight}/10
                           </span>
                         ))}
                       </div>
@@ -242,13 +256,14 @@ export default function JdPortraitPage() {
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => remove(it.id)}
+                        onClick={() => void deletion.remove(it.id, itemTitle(it))}
+                        disabled={deletion.busy}
                         className={btnDanger}
                       >
                         删除
                       </button>
                       <Link href={`/tools/jd/${it.id}`} className={btnPrimary}>
-                        查看雷达
+                        查看画像
                       </Link>
                     </div>
                   </div>

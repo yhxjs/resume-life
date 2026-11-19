@@ -23,6 +23,33 @@ export type Feedback = {
   snapshotCreated?: string;
 };
 
+const record = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value));
+const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+/** 校验面板必须完整来自同一次服务端读取，不将缺失计数补成零。 */
+export function readBackupValidation(value: unknown): BackupValidation {
+  const invalid = () => new Error("备份校验响应不完整，请重新验证文件");
+  if (!record(value) || value.ok !== true || !record(value.manifest) || !record(value.stats) || !count(value.totalRecords)) throw invalid();
+  const manifest = value.manifest;
+  if (manifest.kind !== "manifest" || manifest.appName !== "resume-life" || manifest.backupVersion !== "1.0.0" ||
+      !Number.isSafeInteger(manifest.dbVersion) || (manifest.dbVersion as number) < 1 || typeof manifest.createdAt !== "string" || !Number.isFinite(Date.parse(manifest.createdAt)) ||
+      !Array.isArray(manifest.tables) || !manifest.tables.every(table => typeof table === "string" && table.length > 0) || new Set(manifest.tables).size !== manifest.tables.length) throw invalid();
+  const stats = value.stats;
+  if (Object.keys(stats).length !== manifest.tables.length || !manifest.tables.every(table => Object.hasOwn(stats, table) && count(stats[table])) ||
+      Object.values(stats).reduce<number>((sum, item) => sum + (item as number), 0) !== value.totalRecords) throw invalid();
+  return { manifest: manifest as BackupManifest, stats: stats as Record<string, number>, totalRecords: value.totalRecords };
+}
+
+/** 完成确认包含原包逐表计数及恢复前灾备位置；并非可跨页查询的请求回执。 */
+export function readBackupRestoreConfirmation(value: unknown, expected: BackupValidation): string {
+  if (!record(value) || value.ok !== true || !record(value.stats) || typeof value.snapshotCreated !== "string" || !value.snapshotCreated.trim() ||
+      Object.keys(value.stats).length !== Object.keys(expected.stats).length ||
+      !Object.entries(expected.stats).every(([table, total]) => (value.stats as Record<string, unknown>)[table] === total)) {
+    throw new Error("恢复响应不完整或与已验证的备份不符");
+  }
+  return value.snapshotCreated;
+}
+
 export function passwordError(password: string): string | null {
   let codePoints = 0;
   for (let index = 0; index < password.length; index += 1) {

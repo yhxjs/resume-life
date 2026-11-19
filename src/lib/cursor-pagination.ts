@@ -42,6 +42,10 @@ function isValidUpdatedAt(value: string): boolean {
   );
 }
 
+export function isCalendarDate(value: unknown): value is string {
+  return typeof value === "string" && DATE_ONLY_PATTERN.test(value) && isValidUpdatedAt(value);
+}
+
 export function parsePageLimit(searchParams: URLSearchParams): number {
   const raw = searchParams.get("limit");
   if (raw === null) return DEFAULT_PAGE_LIMIT;
@@ -73,16 +77,21 @@ export function encodeUpdatedAtCursor(cursor: UpdatedAtCursor): string {
 export function parseUpdatedAtCursor(searchParams: URLSearchParams): UpdatedAtCursor | null {
   const raw = searchParams.get("cursor");
   if (raw === null) return null;
+  return decodeUpdatedAtCursor(raw);
+}
+
+/** 同一游标协议可在服务端与浏览器中校验，不依赖 Node Buffer。 */
+export function decodeUpdatedAtCursor(raw: string): UpdatedAtCursor {
   if (!/^[A-Za-z0-9_-]+$/.test(raw)) {
     throw new InvalidPaginationParameterError("cursor 参数无效");
   }
 
   try {
-    const bytes = Buffer.from(raw, "base64url");
-    if (bytes.toString("base64url") !== raw) {
+    const binary = atob(raw.replace(/-/g, "+").replace(/_/g, "/"));
+    if (btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "") !== raw) {
       throw new InvalidPaginationParameterError("cursor 参数无效");
     }
-    const value = JSON.parse(UTF8_DECODER.decode(bytes)) as Partial<UpdatedAtCursor> | null;
+    const value = JSON.parse(UTF8_DECODER.decode(Uint8Array.from(binary, char => char.charCodeAt(0)))) as Partial<UpdatedAtCursor> | null;
     if (
       !value ||
       typeof value.updatedAt !== "string" ||

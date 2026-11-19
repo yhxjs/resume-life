@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { useModalFocus } from "@/hooks/use-modal-focus";
 import { jsonFetch } from "@/lib/fetcher";
@@ -24,6 +24,8 @@ type NavItem =
       label: string;
       children: { href: string; label: string; desc?: string }[];
     };
+
+type Dropdown = { label: string; pinned: boolean } | null;
 
 const NAV_ITEMS: NavItem[] = [
   { type: "link", href: "/", label: "首页" },
@@ -62,7 +64,8 @@ const NAV_ITEMS: NavItem[] = [
 export function SiteNav() {
   const pathname = usePathname();
   const [searchOpen, setSearchOpen] = useState(false);
-  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const [dropdown, setDropdown] = useState<Dropdown>(null);
+  const openDropdown = dropdown?.label ?? null;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -75,33 +78,51 @@ export function SiteNav() {
   // 路由变化自动收起下拉菜单与移动端抽屉
   if (lastPath !== pathname) {
     setLastPath(pathname);
-    setOpenDropdown(null);
+    setDropdown(null);
     if (drawerOpen) setDrawerOpen(false);
   }
 
-  const clearCloseTimeout = () => {
+  const clearCloseTimeout = useCallback(() => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
-  };
+  }, []);
+
+  const closeDropdown = useCallback(() => {
+    clearCloseTimeout();
+    setDropdown(null);
+  }, [clearCloseTimeout]);
 
   const handleMouseEnter = (label: string) => {
     clearCloseTimeout();
-    setOpenDropdown(label);
+    // 鼠标偶然划过其他组时，不隐藏正在用键盘操作的链接。
+    const focused = document.activeElement;
+    const focusedGroup = focused?.closest<HTMLElement>("[data-nav-dropdown]");
+    if (focused?.matches("a[href]") && focusedGroup && focusedGroup.dataset.navDropdown !== label) return;
+    setDropdown(current => current?.label === label ? current : { label, pinned: false });
   };
 
-  const handleMouseLeave = () => {
+  const activateDropdown = (label: string) => {
     clearCloseTimeout();
+    // 悬停打开后的首次点击转为主动展开，第二次激活才关闭。
+    setDropdown(current => current?.label === label && current.pinned ? null : { label, pinned: true });
+  };
+
+  const handleMouseLeave = (group: HTMLElement, label: string) => {
+    clearCloseTimeout();
+    if (group.contains(document.activeElement)) return;
     timeoutRef.current = setTimeout(() => {
-      setOpenDropdown(null);
+      timeoutRef.current = null;
+      if (group.contains(document.activeElement)) return;
+      setDropdown(current => current?.label === label && !current.pinned ? null : current);
     }, 150);
   };
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (navRef.current && !navRef.current.contains(e.target as Node)) {
-        setOpenDropdown(null);
+        closeDropdown();
       }
     }
     function handleKeyDown(e: KeyboardEvent) {
@@ -110,7 +131,7 @@ export function SiteNav() {
         const dropdown = focused instanceof HTMLElement ? focused.closest("[data-nav-dropdown]") : null;
         const trigger = dropdown?.querySelector<HTMLButtonElement>("button[aria-expanded='true']");
         trigger?.focus();
-        setOpenDropdown(null);
+        closeDropdown();
         setDrawerOpen(false);
       }
     }
@@ -121,7 +142,19 @@ export function SiteNav() {
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [clearCloseTimeout, closeDropdown]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const reset = () => {
+      closeDropdown();
+      setDrawerOpen(false);
+    };
+    // CSS 隐藏抽屉不会卸载焦点围栏或释放 body 滚动锁。
+    desktop.addEventListener("change", reset);
+    return () => desktop.removeEventListener("change", reset);
+  }, [closeDropdown]);
 
   // Ctrl+K（Mac 为 Cmd+K）全局唤起/收起搜索面板
   useEffect(() => {
@@ -196,8 +229,8 @@ export function SiteNav() {
             <span aria-hidden className="h-2 w-2 self-center rounded-full bg-chrome-dot" />
           </Link>
 
-          {/* 桌面端导航（md 及以上显示） */}
-          <div className="hidden md:flex items-center gap-1">
+          {/* 完整导航需要足够宽度；平板继续使用抽屉，避免操作区重叠。 */}
+          <div className="hidden lg:flex items-center gap-1">
             {NAV_ITEMS.map((item) => {
               if (item.type === "link") {
                 const active =
@@ -226,16 +259,21 @@ export function SiteNav() {
               return (
                 <div
                   key={item.label}
-                  data-nav-dropdown
+                  data-nav-dropdown={item.label}
                   className="relative shrink-0"
                   onMouseEnter={() => handleMouseEnter(item.label)}
-                  onMouseLeave={handleMouseLeave}
+                  onMouseLeave={event => handleMouseLeave(event.currentTarget, item.label)}
+                  onFocus={clearCloseTimeout}
+                  onBlur={event => {
+                    if (!event.currentTarget.contains(event.relatedTarget)) {
+                      clearCloseTimeout();
+                      setDropdown(current => current?.label === item.label ? null : current);
+                    }
+                  }}
                 >
                   <button
                     type="button"
-                    onClick={() =>
-                      setOpenDropdown((cur) => (cur === item.label ? null : item.label))
-                    }
+                    onClick={() => activateDropdown(item.label)}
                     aria-expanded={isOpen}
                     aria-controls={`nav-dropdown-${item.label}`}
                     className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm transition-colors ${
@@ -278,7 +316,7 @@ export function SiteNav() {
                             key={child.href}
                             href={child.href}
                             tabIndex={isOpen ? undefined : -1}
-                            onClick={() => setOpenDropdown(null)}
+                            onClick={closeDropdown}
                             className={`group/item flex flex-col rounded-lg px-3 py-2 text-left transition-all duration-150 ${
                               active
                                 ? "bg-chrome-active text-on-chrome-active font-medium"
@@ -389,7 +427,7 @@ export function SiteNav() {
             onClick={() => setDrawerOpen((v) => !v)}
             aria-label={drawerOpen ? "关闭导航菜单" : "打开导航菜单"}
             aria-expanded={drawerOpen}
-            className="flex md:hidden h-10 w-10 min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-chrome-line/60 text-chrome-ink transition-colors hover:bg-chrome-line/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-chrome-dot"
+            className="flex lg:hidden h-10 w-10 min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-chrome-line/60 text-chrome-ink transition-colors hover:bg-chrome-line/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-chrome-dot"
           >
             {drawerOpen ? (
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5" aria-hidden>
@@ -414,7 +452,7 @@ export function SiteNav() {
 
       {/* 移动端抽屉 (Drawer) */}
       {drawerOpen && (
-        <div className="fixed inset-0 z-40 md:hidden">
+        <div className="fixed inset-0 z-40 lg:hidden">
           {/* 遮罩背景 */}
           <div
             className="overlay-in fixed inset-0 bg-overlay/80 backdrop-blur-xs"

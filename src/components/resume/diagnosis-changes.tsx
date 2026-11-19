@@ -31,8 +31,10 @@ function ContentChanges({ rows, beforeLabel, afterLabel }: { rows: DiagnosisCont
 
 export function DiagnosisChanges({ current, previous, modules }: { current: DiagnosisRecord; previous: DiagnosisRecord | null; modules: ModuleData[] }) {
   const scores = compareDiagnosisScores(previous, current);
-  const changes = compareDiagnosisSnapshots(previous?.resume_snapshot ?? null, current.resume_snapshot);
-  const live = compareDiagnosisSnapshots(current.resume_snapshot, { title: current.resume_snapshot.title, modules });
+  const previousSnapshot = previous?.corruptedFields?.includes("resume_snapshot") ? null : previous?.resume_snapshot ?? null;
+  const currentSnapshot = current.corruptedFields?.includes("resume_snapshot") ? null : current.resume_snapshot;
+  const changes = compareDiagnosisSnapshots(previousSnapshot, currentSnapshot);
+  const live = compareDiagnosisSnapshots(currentSnapshot, currentSnapshot ? { title: currentSnapshot.title, modules } : null);
   return (
     <section aria-label="诊断前后变化" className={`${cardCls} p-4`}>
       <h3 className="text-sm font-semibold">与同岗位上次诊断对比</h3>
@@ -53,6 +55,7 @@ export function DiagnosisChanges({ current, previous, modules }: { current: Diag
           )}
           {previous.jd !== current.jd && <details className="mt-3 text-xs"><summary className="cursor-pointer text-accent">岗位 JD 已变化，评分需结合新要求判断</summary><div className="mt-2 grid gap-3 sm:grid-cols-2"><pre className="whitespace-pre-wrap break-words font-sans">上次 JD：{previous.jd}</pre><pre className="whitespace-pre-wrap break-words font-sans">本次 JD：{current.jd}</pre></div></details>}
           {changes && <details className="mt-3"><summary className="cursor-pointer text-sm text-muted">两次诊断间的内容变化（{changes.filter((row) => row.status !== "unchanged").length} 处）</summary><ContentChanges rows={changes} beforeLabel="上次诊断时" afterLabel="本次诊断时" /></details>}
+          {!previousSnapshot && <p className="mt-3 text-xs text-muted">上次诊断快照无法读取，暂不能比较两次诊断间的内容。</p>}
           {previous.report && <p className="mt-3 text-xs text-muted">上次建议已采纳 {previous.adoptions.length} / {previous.report.modules.reduce((sum, module) => sum + module.suggestions.length, 0)} 条；采纳记录表示曾写入，当前保留情况可在该历史报告查看。</p>}
         </>
       ) : <p className="mt-2 text-sm text-muted">这是该岗位的首次诊断，再次诊断后可查看评分和内容变化。</p>}

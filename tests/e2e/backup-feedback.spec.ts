@@ -85,9 +85,9 @@ test("忽略 signal 的乱序校验响应只保留最新结果", async ({ page }
           backupVersion: "1.0.0",
           dbVersion: 1,
           createdAt: "2026-09-16T00:00:00.000Z",
-          tables: [],
+          tables: ["resumes"],
         },
-        stats: {},
+        stats: { resumes: totalRecords },
         totalRecords,
       }), {
         status: 200,
@@ -318,7 +318,7 @@ test("加密备份 UI 遵循导出、验证、恢复与手动刷新合同", asyn
       restoreBodies.push(request.postDataBuffer() ?? Buffer.alloc(0));
       restorePasswordHeaders.push(request.headers()["x-resume-life-backup-password"] ?? "");
       preserveHeaders.push(request.headers()["x-resume-life-preserve-ai-config"] ?? "");
-      await route.fulfill({ json: { ok: true, snapshotCreated: snapshotPath, stats: {} } });
+      await route.fulfill({ json: { ok: true, snapshotCreated: snapshotPath, stats: { resumes: 1, projects: 2, interviews: 3 } } });
       return;
     }
     await route.fallback();

@@ -1,4 +1,13 @@
 import { apiFetch } from "./api-fetch";
+import { HttpError } from "./fetcher";
+
+/** 已收到格式完整的服务端失败事件；不把断流或完成回调失败冒充服务端拒绝。 */
+export class SseServerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SseServerError";
+  }
+}
 
 export type SseOptions<TDone = unknown> = {
   method?: "GET" | "POST" | "PATCH";
@@ -32,18 +41,24 @@ export async function fetchSse<TDone = unknown>(
     if (!(res.headers.get("content-type") || "").includes("text/event-stream")) {
       // 先判状态码再解析正文：SSE 期间后端重启会返回 HTML 错误页，直接 res.json() 会抛出
       // 「Unexpected token '<'」这类与真实原因无关的报错
-      const json = (await res.json().catch(() => null)) as { error?: unknown } | null;
+      let json: unknown;
+      try {
+        json = await res.json();
+      } catch {
+        if (res.ok) throw new Error("响应内容不是有效 JSON，未确认操作完成，请先核对已有结果");
+      }
       if (!res.ok) {
-        const message = typeof json?.error === "string" && json.error.trim()
-          ? json.error
+        const data = json && typeof json === "object" ? json as { error?: unknown } : null;
+        const message = typeof data?.error === "string" && data.error.trim()
+          ? data.error
           : `请求错误 HTTP ${res.status}`;
-        throw new Error(message);
+        throw new HttpError(message, res.status);
       }
       if (signal?.aborted) return;
       await onDone?.(json as TDone);
       return;
     }
-    if (!res.ok) throw new Error(`请求错误 HTTP ${res.status}`);
+    if (!res.ok) throw new HttpError(`请求错误 HTTP ${res.status}`, res.status);
     reader = res.body?.getReader();
     if (!reader) throw new Error("当前运行环境不支持读取流响应");
     signal?.addEventListener("abort", onAbort, { once: true });
@@ -77,7 +92,8 @@ export async function fetchSse<TDone = unknown>(
         return true;
       } else if (event === "error") {
         const data = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
-        throw new Error(typeof data.error === "string" ? data.error : "服务端处理失败");
+        if (typeof data.error !== "string" || !data.error.trim()) throw new Error("流式响应错误事件格式无效");
+        throw new SseServerError(data.error);
       }
       return false;
     };

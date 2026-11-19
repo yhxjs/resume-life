@@ -11,9 +11,7 @@ import {
   type ApplicationInterview,
   type ApplicationStage,
 } from "@/lib/applications-types";
-import { confirmDialog } from "@/components/common/confirm-dialog";
 import { Modal } from "@/components/common/modal";
-import { ApplicationInterviewRoundDialog } from "@/components/application/application-interview-round-dialog";
 import { ApplicationVersionsDialog } from "@/components/application/application-versions-dialog";
 import { formatFriendlyDateTime } from "@/lib/application-datetime";
 import { ResumeVersionBadge } from "@/components/resume/resume-version-badge";
@@ -24,7 +22,9 @@ interface ApplicationCardProps {
   onDelete: (id: number) => void;
   onStageChange: (id: number, stage: ApplicationStage) => void;
   onDragStart?: (e: React.DragEvent, id: number) => void;
-  onRefresh?: () => void;
+  onOpenRound: (app: Application, round: ApplicationInterview | null) => void;
+  mutationsDisabled?: boolean;
+  deleteDisabled?: boolean;
 }
 
 function formatInterviewNotice(nextInterviewAt: string, currentTimestamp: number): { text: string; isUrgent: boolean } | null {
@@ -71,13 +71,13 @@ export function ApplicationCard({
   onDelete,
   onStageChange,
   onDragStart,
-  onRefresh,
+  onOpenRound,
+  mutationsDisabled = false,
+  deleteDisabled = false,
 }: ApplicationCardProps) {
   const [showJdModal, setShowJdModal] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
-  const [roundDialogOpen, setRoundDialogOpen] = useState(false);
-  const [editingRound, setEditingRound] = useState<ApplicationInterview | null>(null);
 
   useEffect(() => {
     // 挂载后记录当前时间戳，避免 SSR/Pure Render 阶段调用 Date.now()
@@ -93,32 +93,18 @@ export function ApplicationCard({
   const prevStage = curIdx > 0 ? stageOrder[curIdx - 1] : null;
   const nextStage = curIdx >= 0 && curIdx < FUNNEL_STAGES.length - 1 ? stageOrder[curIdx + 1] : null;
 
-  async function handleDelete() {
-    const ok = await confirmDialog({
-      title: "确认删除投递记录？",
-      message: `确定要删除【${app.company} · ${app.role}】的投递卡片吗？此操作不可恢复。`,
-      confirmText: "确认删除",
-      danger: true,
-    });
-    if (ok) {
-      onDelete(app.id);
-    }
-  }
-
   function handleOpenAddRound() {
-    setEditingRound(null);
-    setRoundDialogOpen(true);
+    if (!mutationsDisabled) onOpenRound(app, null);
   }
 
   function handleOpenEditRound(round: ApplicationInterview) {
-    setEditingRound(round);
-    setRoundDialogOpen(true);
+    if (!mutationsDisabled) onOpenRound(app, round);
   }
 
   return (
     <>
       <div
-        draggable
+        draggable={!mutationsDisabled}
         onDragStart={(e) => onDragStart?.(e, app.id)}
         className="group relative flex flex-col rounded-xl border border-line bg-card p-3.5 shadow-xs transition-all duration-150 hover:border-line-strong hover:shadow-card-subtle cursor-grab active:cursor-grabbing"
       >
@@ -132,10 +118,11 @@ export function ApplicationCard({
           </div>
 
           {/* 右上角操作按键 */}
-          <div className="flex items-center gap-1 opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 opacity-80 sm:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
             <button
               type="button"
               onClick={() => onEdit(app)}
+              disabled={mutationsDisabled}
               title="编辑卡片"
               className="rounded p-1 text-muted hover:bg-surface hover:text-ink transition-colors"
             >
@@ -146,7 +133,8 @@ export function ApplicationCard({
             </button>
             <button
               type="button"
-              onClick={handleDelete}
+              onClick={() => onDelete(app.id)}
+              disabled={deleteDisabled}
               title="删除卡片"
               className="rounded p-1 text-muted hover:bg-danger-wash hover:text-danger transition-colors"
             >
@@ -207,6 +195,7 @@ export function ApplicationCard({
             <button
               type="button"
               onClick={handleOpenAddRound}
+              disabled={mutationsDisabled}
               className="text-primary hover:underline text-[11px] font-medium flex items-center gap-0.5"
               title="添加新面试轮次"
             >
@@ -223,6 +212,7 @@ export function ApplicationCard({
                     key={round.id}
                     type="button"
                     onClick={() => handleOpenEditRound(round)}
+                    disabled={mutationsDisabled}
                     title={`点击修改：${round.round_name} · ${statusCfg.label}${round.interview_time ? ` · ${formatFriendlyDateTime(round.interview_time)}` : ""}${round.interviewer ? ` (${round.interviewer})` : ""}`}
                     className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors hover:shadow-xs ${statusCfg.bg} ${statusCfg.color} ${statusCfg.border}`}
                   >
@@ -238,6 +228,7 @@ export function ApplicationCard({
               <button
                 type="button"
                 onClick={handleOpenAddRound}
+                disabled={mutationsDisabled}
                 className="text-muted hover:text-primary transition-colors text-[10px]"
               >
                 登记一面
@@ -335,6 +326,7 @@ export function ApplicationCard({
               <button
                 type="button"
                 onClick={() => onStageChange(app.id, prevStage)}
+                disabled={mutationsDisabled}
                 title={`回退至：${STAGE_CONFIG[prevStage].label}`}
                 className="rounded px-1.5 py-0.5 text-muted hover:bg-surface hover:text-ink transition-colors"
               >
@@ -347,6 +339,7 @@ export function ApplicationCard({
               aria-label="流转阶段"
               value={app.stage}
               onChange={(e) => onStageChange(app.id, e.target.value as ApplicationStage)}
+              disabled={mutationsDisabled}
               className="rounded border border-line bg-card px-1.5 py-0.5 text-xs text-ink font-medium hover:border-line-strong transition-colors cursor-pointer"
             >
               {(Object.keys(STAGE_CONFIG) as ApplicationStage[]).map((st) => (
@@ -360,6 +353,7 @@ export function ApplicationCard({
               <button
                 type="button"
                 onClick={() => onStageChange(app.id, nextStage)}
+                disabled={mutationsDisabled}
                 title={`推进至：${STAGE_CONFIG[nextStage].label}`}
                 className="rounded px-1.5 py-0.5 text-primary font-bold hover:bg-primary-soft transition-colors"
               >
@@ -419,21 +413,6 @@ export function ApplicationCard({
         </div>
       </Modal>
 
-      {/* 面试轮次新增/编辑弹窗 */}
-      {roundDialogOpen && (
-        <ApplicationInterviewRoundDialog
-          application={app}
-          initialInterview={editingRound}
-          open={roundDialogOpen}
-          onClose={() => {
-            setRoundDialogOpen(false);
-            setEditingRound(null);
-          }}
-          onSuccess={() => {
-            onRefresh?.();
-          }}
-        />
-      )}
     </>
   );
 }

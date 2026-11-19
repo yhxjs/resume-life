@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId, parseCanonicalStoredId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
@@ -17,7 +18,7 @@ import { loadCustomTemplate } from "@/lib/custom-templates";
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalStoredId(id);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   }
@@ -28,7 +29,7 @@ async function handleGet(_req: Request, { params }: { params: Promise<{ id: stri
 
 async function handlePatch(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   }
@@ -273,7 +274,7 @@ function collectAvatarUrls(resumeId: number): Set<string> {
 
 async function handleDelete(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   }

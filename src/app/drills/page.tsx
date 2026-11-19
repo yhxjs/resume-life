@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DrillStartForm,
@@ -33,15 +33,19 @@ export default function DrillsPage() {
     setKeyword,
     loadDrills,
     remove,
+    deletion,
   } = useDrillsPage();
   const [mode, setMode] = useState<DrillMode>("project");
   const [bankDirection, setBankDirection] = useState("");
   const [bankJd, setBankJd] = useState("");
   const [count, setCount] = useState(5);
   const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false);
   const [error, setError] = useState("");
 
   async function start() {
+    if (startingRef.current || !deletion.canStart()) return;
+    startingRef.current = true;
     setStarting(true);
     setError("");
     try {
@@ -56,6 +60,7 @@ export default function DrillsPage() {
       router.push(`/drills/${data.id}`);
     } catch (reason) {
       setError(errorMessage(reason));
+      startingRef.current = false;
       setStarting(false);
     }
   }
@@ -76,32 +81,34 @@ export default function DrillsPage() {
         </div>
         {drills !== null && (
           <div className="text-xs text-muted">
-            已完成精练：<strong className="font-mono text-ink font-bold text-sm">{drills.length}</strong> 场
+            当前筛选已显示：<strong className="font-mono text-ink font-bold text-sm">{drills.length}</strong> 场
           </div>
         )}
       </div>
 
-      <DrillStartForm
-        mode={mode}
-        projects={projects}
-        projectsError={projectsError}
-        onRetryProjects={reloadProjects}
-        directions={directions}
-        directionsError={directionsError}
-        projectId={projectId}
-        bankDirection={bankDirection}
-        bankJd={bankJd}
-        count={count}
-        starting={starting}
-        error={error}
-        onModeChange={changeMode}
-        onProjectIdChange={setProjectId}
-        onBankDirectionChange={setBankDirection}
-        onBankJdChange={setBankJd}
-        onCountChange={setCount}
-        onStart={start}
-        onRetryDirections={reloadDirections}
-      />
+      <fieldset disabled={deletion.busy} className="min-w-0">
+        <DrillStartForm
+          mode={mode}
+          projects={projects}
+          projectsError={projectsError}
+          onRetryProjects={reloadProjects}
+          directions={directions}
+          directionsError={directionsError}
+          projectId={projectId}
+          bankDirection={bankDirection}
+          bankJd={bankJd}
+          count={count}
+          starting={starting}
+          error={error}
+          onModeChange={changeMode}
+          onProjectIdChange={setProjectId}
+          onBankDirectionChange={setBankDirection}
+          onBankJdChange={setBankJd}
+          onCountChange={setCount}
+          onStart={start}
+          onRetryDirections={reloadDirections}
+        />
+      </fieldset>
 
       <DrillHistory
         projects={projects}
@@ -115,7 +122,9 @@ export default function DrillsPage() {
         onFilterProjectChange={setFilterProject}
         onKeywordChange={setKeyword}
         onLoad={loadDrills}
-        onRemove={remove}
+        onRemove={(drill) => { if (!startingRef.current) void remove(drill); }}
+        deletion={deletion}
+        starting={starting}
       />
     </div>
   );

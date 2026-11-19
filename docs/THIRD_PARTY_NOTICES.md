@@ -4,7 +4,7 @@
 
 ## 运行时依赖
 
-以下条目于 2026-09-30 按锁文件、Windows 安装包元数据和包内许可文件核对，其中 Sharp、Windows 原生包与 Mammoth 已于 2026-10-11 按当前版本重新核对；不是全部传递依赖的许可清单：
+以下条目于 2026-11-18 按当前锁文件、Windows 安装包元数据和包内许可文件重新核对；不是全部传递依赖的许可清单：
 
 | 依赖 | 已核对版本 | 包内声明 | 许可文件 |
 | --- | --- | --- | --- |
@@ -35,6 +35,14 @@ Next.js、React、TypeScript、Vitest、Playwright 及其余依赖的最终版�
 两个 `@tesseract.js-data` npm 包的 `package.json` 将包级许可标为 MIT，但包内未提供独立的 `LICENSE` 文件。数据上游 [naptha/tessdata 的许可文件](https://github.com/naptha/tessdata/blob/gh-pages/LICENSE) 和 [Tesseract 数据仓库的许可文件](https://github.com/tesseract-ocr/tessdata/blob/main/LICENSE) 均提供 Apache License 2.0 文本。应区分 npm 包元数据和模型数据的上游声明，不能仅依据 npm 的 MIT 标签将下载的模型视为主项目 MIT 代码。
 
 语言包属于独立的数据资产。若另行分发 OCR 模型、字体或原生二进制，应一并核对并保留对应版权、许可和通知文件；本仓库不提交下载的模型。脚本只在用户或 CI 显式执行时联网，运行时 OCR 不会自动下载模型。
+
+## picomatch 开发依赖补丁
+
+当前 picomatch 为 `4.0.7`，包内声明 MIT，原 `LICENSE` 保留。原始源文件及许可来自同名上游包；本项目的安装期改动只涉及 `lib/parse.js` 的无界 wildcard 风险检测，脚本为 `scripts/patch-picomatch.mjs`。这不是上游正式发布的修复版。
+
+- 原始 parser SHA-256：`4e1e05447668aa1e94366c5516a2bcd8f5fff800cc92b1d0cd7d77703b8618c4`。
+- 已修补 parser SHA-256：`56ccaed8ecb6614dd22648a01c81f23ee77529cba7a55d1f32c1dbd6fa25c5bb`。
+- 公告、行为差异、限时审计政策与替换条件见 [SECURITY.md](../SECURITY.md)。SBOM 继续标识上游 4.0.7；应结合 CI 留存的补丁脚本、政策、哈希与行为证据理解原始审计条目。
 
 ## 仓库内的第三方测试样本
 
@@ -70,7 +78,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```bash
 npm ci
 npm run setup:ocr
-npm audit --omit=dev --audit-level=moderate
+npm run audit:dependencies
 npm ls --all
 ```
 

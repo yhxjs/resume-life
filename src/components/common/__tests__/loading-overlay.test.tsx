@@ -70,6 +70,20 @@ describe("LoadingOverlay 通用加载遮罩组件", () => {
 });
 
 describe("Modal 加载遮罩与防误触拦截", () => {
+  it("加载遮罩提供显式取消入口，调用取消回调而不关闭弹窗", () => {
+    const onClose = vi.fn();
+    const onLoadingCancel = vi.fn();
+    render(<Modal open title="可取消任务" loading onClose={onClose} onLoadingCancel={onLoadingCancel}><div>任务内容</div></Modal>);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(onLoadingCancel).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(screen.getByRole("dialog").parentElement!);
+    expect(onLoadingCancel).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("loading 为 true 时在弹窗内展示遮罩，并禁止 ESC 和背景点击关闭", () => {
     const onClose = vi.fn();
     render(

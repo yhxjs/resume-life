@@ -46,7 +46,7 @@ export function FunnelDistributionBar({
               key={stage}
               style={{ width: `${percent}%` }}
               className={`h-full transition-all duration-300 ${cfg.dot}`}
-              title={`${cfg.label}: ${count} 家 (${percent.toFixed(1)}%)`}
+              title={`${cfg.label}: ${count} 条记录 (${percent.toFixed(1)}%)`}
             />
           );
         })}

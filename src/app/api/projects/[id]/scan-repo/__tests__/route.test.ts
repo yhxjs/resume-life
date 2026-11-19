@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls = vi.hoisted(() => ({ scan: vi.fn(), relation: vi.fn(), detect: vi.fn() }));
 vi.mock("@/lib/db", () => ({ requestDataGeneration: () => null }));
-vi.mock("@/lib/projects", () => ({ loadProjectRow: () => ({ id: 1, name: "合成项目" }) }));
-vi.mock("@/lib/project-summary-history", () => ({
-  captureProjectMaterialSnapshot: () => [],
-  projectSummaryRevision: () => null,
+vi.mock("@/lib/projects", () => ({ loadProjectRow: () => ({ id: 1, name: "合成项目", summary: "{}" }) }));
+vi.mock("@/lib/project-summary-history", async original => ({
+  ...await original<typeof import("@/lib/project-summary-history")>(),
+  captureProjectSummarySource: () => ({ project: { id: 1, name: "合成项目", summary: "{}" }, materials: [], revisionId: 0 }),
   prepareProjectSummaryProposal: () => ({ proposal: "合成草稿" }),
 }));
 vi.mock("@/lib/repo-scanner/cli-runner", () => ({
@@ -17,7 +17,7 @@ vi.mock("@/lib/repo-scanner/cli-runner", () => ({
 }));
 vi.mock("@/lib/repo-scanner/relation-checker", () => ({ checkPathsRelation: calls.relation }));
 
-import { POST } from "../route";
+import { GET, POST } from "../route";
 
 let directory: string;
 beforeEach(() => {
@@ -43,6 +43,40 @@ function post(body: unknown, query = "") {
     body: JSON.stringify(body),
   }), { params: Promise.resolve({ id: "1" }) });
 }
+
+describe("CLI 环境检测请求取消", () => {
+  it("开始前取消不启动探测，也不记录 500", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("PRIVATE_DETECTION_ABORT"));
+    const response = await GET(new Request("http://localhost/api/projects/1/scan-repo", { signal: controller.signal }), { params: Promise.resolve({ id: "1" }) });
+    expect(response.status).toBe(499);
+    expect(await response.json()).toEqual({ error: "CLI 环境检测已取消" });
+    expect(calls.detect).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("传递请求信号，中途取消返回 499 且不暴露取消原因", async () => {
+    const controller = new AbortController();
+    const req = new Request("http://localhost/api/projects/1/scan-repo", { signal: controller.signal });
+    calls.detect.mockImplementation(async () => {
+      controller.abort(new Error("PRIVATE_DETECTION_ABORT"));
+      req.signal.throwIfAborted();
+    });
+    const response = await GET(req, { params: Promise.resolve({ id: "1" }) });
+    expect(calls.detect).toHaveBeenCalledWith(req.signal);
+    expect(response.status).toBe(499);
+    expect(await response.json()).toEqual({ error: "CLI 环境检测已取消" });
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("普通探测异常仍经过统一 500 脱敏", async () => {
+    calls.detect.mockRejectedValue(new Error("PRIVATE_DETECTION_FAILURE"));
+    const response = await GET(new Request("http://localhost/api/projects/1/scan-repo"), { params: Promise.resolve({ id: "1" }) });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ error: "服务器内部错误，请稍后重试" });
+    expect(console.error).toHaveBeenCalled();
+  });
+});
 
 async function expectRejected(body: unknown, query = "") {
   const response = await post(body, query);

@@ -1,3 +1,4 @@
+import { RESUME_IMPORT_SESSION_KEY, SALARY_CREATION_STORAGE_KEY } from "./browser-draft-keys";
 import { clearResumeDrafts, hasPendingResumeDrafts } from "./resume-save-queue-registry";
 import { clearStoredRepoPaths } from "./project-repo-paths-storage";
 
@@ -8,7 +9,9 @@ function draftKeys(): string[] {
   const keys: string[] = [];
   for (let index = 0; index < sessionStorage.length; index++) {
     const key = sessionStorage.key(index);
-    if (key?.startsWith(DRAFT_PREFIX)) keys.push(key);
+    if (key?.startsWith(DRAFT_PREFIX) || key === RESUME_IMPORT_SESSION_KEY || key === SALARY_CREATION_STORAGE_KEY) {
+      keys.push(key);
+    }
   }
   return keys;
 }

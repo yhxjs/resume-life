@@ -86,3 +86,16 @@ describe("自我介绍用户保存边界", () => {
     expect(normalizeSentences(Array.from({ length: 61 }, () => ({ text: "句子" })))).toHaveLength(60);
   });
 });
+
+
+it.each(["{broken", "[]", "null", JSON.stringify([...original, null]), JSON.stringify([...original, { text: "", comment: "保留" }]),
+  JSON.stringify([{ text: "正文", comment: { value: "异常" } }]),
+])("即使持有当前修订，普通保存也不能覆盖异常原稿（%#）", async (raw) => {
+  db.prepare("UPDATE intro_versions SET sentences=? WHERE intro_id=1 AND kind='30s'").run(raw);
+  revision = (await import("@/lib/intro-versions")).introVersionRevision(stored());
+  const before = stored();
+  const response = await save(original);
+  expect(response.status).toBe(422);
+  expect((await response.json()).error).toContain("已保留全部原始数据");
+  expect(stored()).toEqual(before);
+});

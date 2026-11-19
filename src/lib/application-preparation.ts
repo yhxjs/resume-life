@@ -2,7 +2,8 @@ import { getDb, inTransaction, now } from "@/lib/db";
 import { linkApplicationNotebooks } from "@/lib/application-notebook";
 import { getApplicationById, updateApplication } from "@/lib/applications";
 import { createCursorPage } from "@/lib/cursor-pagination";
-import { PREPARATION_KINDS, type PreparationKind, type PreparationResource, type PreparationTask } from "@/lib/application-preparation-types";
+import { readStoredIntroSentences } from "@/lib/intro";
+import { PREPARATION_KINDS, type ApplicationPreparation, type PreparationKind, type PreparationResource, type PreparationTask } from "@/lib/application-preparation-types";
 
 export class PreparationInputError extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -10,7 +11,7 @@ export class PreparationInputError extends Error {
 
 const SOURCES = {
   diagnosis: { table: "resume_diagnoses", column: "diagnosis_id", title: "job_title", summary: "CASE WHEN json_valid(report) THEN json_extract(report, '$.summary') ELSE '报告无法读取' END", resume: "resume_id" },
-  intro: { table: "intros", column: "intro_id", title: "jd", summary: "COALESCE((SELECT group_concat(json_extract(s.value, '$.text'), '') FROM intro_versions v, json_each(CASE WHEN json_valid(v.sentences) THEN v.sentences ELSE '[]' END) s WHERE v.intro_id = r.id AND v.kind = '30s'), '30 秒 / 2 分钟双版')", resume: "resume_id" },
+  intro: { table: "intros", column: "intro_id", title: "jd", summary: "(SELECT v.sentences FROM intro_versions v WHERE v.intro_id = r.id AND v.kind = '30s')", resume: "resume_id" },
   portrait: { table: "jd_portraits", column: "portrait_id", title: "jd", summary: "CASE WHEN json_valid(result) THEN json_extract(result, '$.role') ELSE '画像无法读取' END", resume: "NULL" },
   interview: { table: "interviews", column: "interview_id", title: "jd", summary: "CASE WHEN status = 'finished' THEN '已完成 · ' ELSE '进行中 · ' END || CASE WHEN json_valid(report) THEN COALESCE(json_extract(report, '$.weaknesses'), '') ELSE '' END", resume: "resume_id" },
   series: { table: "interview_series", column: "series_id", title: "jd", summary: "CASE WHEN status = 'finished' THEN '三轮已完成' ELSE '进阶面试进行中' END", resume: "resume_id" },
@@ -67,12 +68,21 @@ export function listPreparationResources(applicationId: number, kind: Preparatio
   const where = `${options.candidates ? "NOT" : ""} ${association}${kind === "interview" ? " AND r.series_id IS NULL" : ""}`;
   const args = associationArgs(kind, applicationId);
   const { total } = db.prepare(`SELECT COUNT(*) AS total FROM ${source.table} r WHERE ${where}`).get(...args) as { total: number };
+  const linkedExpression = kind === "notebook"
+    ? options.candidates ? "0" : `NOT ${NOTEBOOK_SOURCE_ASSOCIATION}`
+    : `EXISTS (SELECT 1 FROM application_preparation_resources p WHERE p.application_id = ? AND p.${source.column} = r.id)`;
+  const linkedArgs = kind === "notebook"
+    ? options.candidates ? [] : [applicationId, applicationId]
+    : [applicationId];
+  // 原稿须整版解析后才生成摘要；SQL 逐项提取会漏掉异常项，字符串项甚至会使整页读取失败。
+  const summaryExpression = kind === "intro" ? source.summary : `substr(COALESCE(${source.summary}, ''), 1, 400)`;
   const rows = db.prepare(`SELECT r.id, substr(${source.title}, 1, 120) AS title,
-    substr(COALESCE(${source.summary}, ''), 1, 400) AS summary, r.created_at, ${source.resume} AS resume_id,
-    ${kind === "notebook" ? `NOT ${NOTEBOOK_SOURCE_ASSOCIATION}` : `EXISTS (SELECT 1 FROM application_preparation_resources p WHERE p.application_id = ? AND p.${source.column} = r.id)`} AS linked
+    ${summaryExpression} AS summary, r.created_at, ${source.resume} AS resume_id,
+    ${linkedExpression} AS linked
     FROM ${source.table} r WHERE ${where} ${options.cursor ? "AND r.id < ?" : ""}
-    ORDER BY r.id DESC LIMIT ?`).all(...(kind === "notebook" ? [applicationId, applicationId] : [applicationId]), ...args, ...(options.cursor ? [options.cursor] : []), limit + 1) as (Omit<PreparationResource, "href" | "linked"> & { linked: number })[];
+    ORDER BY r.id DESC LIMIT ?`).all(...linkedArgs, ...args, ...(options.cursor ? [options.cursor] : []), limit + 1) as (Omit<PreparationResource, "href" | "linked" | "summary"> & { linked: number; summary: string | null })[];
   const page = createCursorPage(rows.map((row) => ({ ...row, linked: Boolean(row.linked),
+    summary: kind === "intro" ? introPreparationSummary(row.summary) : row.summary ?? "",
     title: row.title || `记录 #${row.id}`,
     href: kind === "intro" ? `/intros/${row.id}` : kind === "portrait" ? `/tools/jd/${row.id}` :
       kind === "interview" ? `/interviews/${row.id}` : kind === "series" ? `/interviews/series/${row.id}` : null,
@@ -80,23 +90,60 @@ export function listPreparationResources(applicationId: number, kind: Preparatio
   return { ...page, total };
 }
 
+function introPreparationSummary(raw: string | null): string {
+  if (raw === null) return "30 秒 / 2 分钟双版";
+  const stored = readStoredIntroSentences(raw);
+  return stored.error ? "30 秒版原稿数据异常，请打开原稿查看" : stored.sentences.map((sentence) => sentence.text).join("").slice(0, 400);
+}
+
+export function getApplicationPreparation(applicationId: number): ApplicationPreparation {
+  const application = preparationApplication(applicationId);
+  return {
+    application,
+    resources: Object.fromEntries(PREPARATION_KINDS.map((kind) => [kind, listPreparationResources(applicationId, kind)])) as ApplicationPreparation["resources"],
+    tasks: listPreparationTasks(applicationId),
+  };
+}
+
+function linkPreparationResourceInTransaction(applicationId: number, kind: PreparationKind, resourceId: number): void {
+  preparationApplication(applicationId);
+  if (!Number.isSafeInteger(resourceId) || resourceId <= 0) throw new PreparationInputError("无效的资料 ID");
+  const parsedKind = parsePreparationKind(kind);
+  const source = SOURCES[parsedKind];
+  if (!getDb().prepare(`SELECT id FROM ${source.table} WHERE id = ?`).get(resourceId)) throw new PreparationInputError("资料不存在或已删除", 404);
+  getDb().prepare(`INSERT OR IGNORE INTO application_preparation_resources (application_id, ${source.column}) VALUES (?, ?)`).run(applicationId, resourceId);
+  if (parsedKind === "interview" || parsedKind === "series") linkApplicationNotebooks(getDb(), applicationId);
+}
+
+function unlinkPreparationResourceInTransaction(applicationId: number, kind: PreparationKind, resourceId: number): void {
+  const application = preparationApplication(applicationId);
+  const parsedKind = parsePreparationKind(kind);
+  getDb().prepare(`DELETE FROM application_preparation_resources WHERE application_id = ? AND ${SOURCES[parsedKind].column} = ?`).run(applicationId, resourceId);
+  if (parsedKind === "interview" && application.interview_id === resourceId) updateApplication(applicationId, { interview_id: null });
+  if (parsedKind === "series" && application.interview_series_id === resourceId) updateApplication(applicationId, { interview_series_id: null });
+}
+
 export function linkPreparationResource(applicationId: number, kind: PreparationKind, resourceId: number): void {
-  return inTransaction(() => {
-    preparationApplication(applicationId);
-    if (!Number.isSafeInteger(resourceId) || resourceId <= 0) throw new PreparationInputError("无效的资料 ID");
-    const source = SOURCES[parsePreparationKind(kind)];
-    if (!getDb().prepare(`SELECT id FROM ${source.table} WHERE id = ?`).get(resourceId)) throw new PreparationInputError("资料不存在或已删除", 404);
-    getDb().prepare(`INSERT OR IGNORE INTO application_preparation_resources (application_id, ${source.column}) VALUES (?, ?)`).run(applicationId, resourceId);
-    if (kind === "interview" || kind === "series") linkApplicationNotebooks(getDb(), applicationId);
-  });
+  return inTransaction(() => linkPreparationResourceInTransaction(applicationId, kind, resourceId));
 }
 
 export function unlinkPreparationResource(applicationId: number, kind: PreparationKind, resourceId: number): void {
-  const application = preparationApplication(applicationId);
-  inTransaction(() => {
-    getDb().prepare(`DELETE FROM application_preparation_resources WHERE application_id = ? AND ${SOURCES[parsePreparationKind(kind)].column} = ?`).run(applicationId, resourceId);
-    if (kind === "interview" && application.interview_id === resourceId) updateApplication(applicationId, { interview_id: null });
-    if (kind === "series" && application.interview_series_id === resourceId) updateApplication(applicationId, { interview_series_id: null });
+  return inTransaction(() => unlinkPreparationResourceInTransaction(applicationId, kind, resourceId));
+}
+
+/** 关联写入与返回的完整准备快照共用一笔事务，避免第二次读取失败后留在旧列表。 */
+export function linkPreparationResourceWithSnapshot(applicationId: number, kind: PreparationKind, resourceId: number): ApplicationPreparation {
+  return inTransaction(() => {
+    linkPreparationResourceInTransaction(applicationId, kind, resourceId);
+    return getApplicationPreparation(applicationId);
+  });
+}
+
+/** 取消关联也返回完整快照；面试与错题之间有持久归属关系，不能按 ID 猜测删除。 */
+export function unlinkPreparationResourceWithSnapshot(applicationId: number, kind: PreparationKind, resourceId: number): ApplicationPreparation {
+  return inTransaction(() => {
+    unlinkPreparationResourceInTransaction(applicationId, kind, resourceId);
+    return getApplicationPreparation(applicationId);
   });
 }
 

@@ -2,7 +2,7 @@ import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { escapeLike, getDb, inTransaction, now } from "@/lib/db";
-import { bankKindOf, MAX_BANK_IMPORT } from "@/lib/bank";
+import { bankImportQuestions, bankKindOf, MAX_BANK_IMPORT } from "@/lib/bank";
 import { createCursorPage, parsePaginationParams } from "@/lib/cursor-pagination";
 
 async function handleGet(req: Request) {
@@ -13,6 +13,9 @@ async function handleGet(req: Request) {
   const direction = (url.searchParams.get("direction") ?? "").trim();
   const kind = (url.searchParams.get("kind") ?? "").trim();
   const q = (url.searchParams.get("q") ?? "").trim();
+  if (kind && kind !== "tech" && kind !== "behavior") {
+    return NextResponse.json({ error: "题型筛选必须为 tech 或 behavior" }, { status: 400 });
+  }
 
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -56,23 +59,24 @@ async function handleGet(req: Request) {
 async function handlePost(req: Request) {
   const parsedBody = await parseApiJson<unknown>(req);
   if (!parsedBody.ok) return parsedBody.response;
+  if (!parsedBody.data || typeof parsedBody.data !== "object" || Array.isArray(parsedBody.data)) {
+    return NextResponse.json({ error: "题库导入请求必须是 JSON 对象" }, { status: 400 });
+  }
   const body = parsedBody.data as {
     direction?: unknown;
     kind?: unknown;
     text?: unknown;
-  } | null;
+  };
+  for (const field of ["direction", "kind", "text"] as const) {
+    if (body[field] !== undefined && typeof body[field] !== "string") {
+      return NextResponse.json({ error: "导入方向、题型和题目原文必须是字符串" }, { status: 400 });
+    }
+  }
   const direction = typeof body?.direction === "string" ? body.direction.trim() : "";
   const kind = bankKindOf(body?.kind);
   const text = typeof body?.text === "string" ? body.text : "";
 
-  const questions = [
-    ...new Set(
-      text
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-    ),
-  ];
+  const questions = bankImportQuestions(text);
   if (questions.length > MAX_BANK_IMPORT) {
     return NextResponse.json({ error: `每次最多导入 ${MAX_BANK_IMPORT} 道题，请分批导入` }, { status: 400 });
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApplicationPreparation } from "@/hooks/use-application-preparation";
 import { useTaskReferenceTime } from "@/hooks/use-task-reference-time";
 import { Loading, PageHeader, SectionTitle } from "@/components/common/ui-bits";
@@ -20,7 +20,9 @@ import { btnGhost, btnPrimary, inputCls } from "@/lib/ui";
 
 export function ApplicationPreparationPage({ id }: { id: string }) {
   const taskReferenceTime = useTaskReferenceTime();
-  const { data, error, busy, notice, reload, mutate, toggleTask, generate, loadMore } = useApplicationPreparation(id);
+  const { data, error, busy, notice, writesBlocked, reload, mutate, toggleTask, generate, loadMore } = useApplicationPreparation(id);
+  const mutationDisabled = Boolean(busy) || writesBlocked;
+  const errorRef = useRef<HTMLDivElement | null>(null);
   const [editing, setEditing] = useState(false);
   const [versions, setVersions] = useState(false);
   const [round, setRound] = useState<ApplicationInterview | null | undefined>();
@@ -29,7 +31,10 @@ export function ApplicationPreparationPage({ id }: { id: string }) {
   const [record, setRecord] = useState<{ kind: "diagnosis" | "notebook"; item: PreparationResource } | null>(null);
   const [task, setTask] = useState("");
   const [taskDue, setTaskDue] = useState("");
-  if (!data) return <div className="mx-auto max-w-7xl"><Link href="/applications" className={btnGhost}>← 求职看板</Link>{error ? <div role="alert" className="mt-6 space-y-3"><p className="text-danger">{error}</p><button className={btnGhost} onClick={() => void reload()}>重新加载</button></div> : <Loading label="加载投递准备资料…" />}</div>;
+  const modalOpen = editing || versions || round !== undefined || Boolean(reviewRound || picker || record);
+  // 弹窗负责自己的错误焦点；页面错误留到关闭弹窗后再呈现，避免焦点围栏将其重定向到关闭按钮。
+  useEffect(() => { if (error && !modalOpen) errorRef.current?.focus(); }, [error, modalOpen]);
+  if (!data) return <div className="mx-auto max-w-7xl"><Link href="/applications" className={btnGhost}>← 求职看板</Link>{error ? <div ref={errorRef} role="alert" tabIndex={-1} className="mt-6 space-y-3 outline-none focus-visible:ring-2 focus-visible:ring-danger/40"><p className="text-danger">{error}</p><button className={btnGhost} onClick={() => void reload()}>重新加载</button></div> : <Loading label="加载投递准备资料…" />}</div>;
   const app = data.application;
   const canGenerate = Boolean(app.jd.trim() && app.resume_id && app.resume_version_id);
   const mockHref = `/interviews?applicationId=${app.id}`;
@@ -39,18 +44,18 @@ export function ApplicationPreparationPage({ id }: { id: string }) {
     <div className="flex flex-wrap items-center gap-3 text-sm">
       <span className={`rounded-full px-3 py-1 ${STAGE_CONFIG[app.stage].bg} ${STAGE_CONFIG[app.stage].color}`}>{STAGE_CONFIG[app.stage].label}</span>
       {app.resume_id ? <Link className="rounded text-primary underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-primary" href={app.resume_version_id ? `/resumes/${app.resume_id}/versions?version=${app.resume_version_id}` : `/resumes/${app.resume_id}?applicationId=${app.id}`}>{app.resume_title || "关联简历"}</Link> : <span className="text-muted">尚未关联简历</span>}
-      <button className={btnGhost} onClick={() => setEditing(true)} disabled={Boolean(busy)}>编辑投递</button>
+      <button className={btnGhost} onClick={() => setEditing(true)} disabled={mutationDisabled}>编辑投递</button>
       <ResumeVersionBadge {...app} />
       <button className={btnGhost} onClick={() => setVersions(true)}>查看投递版本</button>
       {canGenerate && <Link href={mockHref} className={btnPrimary}>发起模拟面试 →</Link>}
     </div>
-    {!canGenerate && <p className="rounded-lg bg-accent-wash p-3 text-sm text-accent">{!app.jd.trim() ? "请先补充岗位 JD" : "请先关联已发布的简历版本"}，即可使用本次投递资料生成准备内容。<button className="ml-2 rounded underline focus-visible:outline-2 focus-visible:outline-primary" onClick={() => setEditing(true)}>去补充</button></p>}
+    {!canGenerate && <p className="rounded-lg bg-accent-wash p-3 text-sm text-accent">{!app.jd.trim() ? "请先补充岗位 JD" : "请先关联已发布的简历版本"}，即可使用本次投递资料生成准备内容。<button className="ml-2 rounded underline focus-visible:outline-2 focus-visible:outline-primary" disabled={mutationDisabled} onClick={() => setEditing(true)}>去补充</button></p>}
     <details className="rounded-xl border border-line bg-card p-4">
       <summary className="cursor-pointer text-sm font-semibold">岗位要求（JD）<span className="ml-3 font-normal text-muted">{app.jd.trim() ? "已保存 · 生成时自动带入" : "待补充"}</span></summary>
       <p className="mt-4 max-w-prose whitespace-pre-wrap break-words text-sm leading-relaxed">{app.jd || "暂未填写岗位要求。"}</p>
     </details>
     {(busy || notice) && <p role="status" className="text-sm text-primary">{busy ? `${busy}中，请稍候…` : notice}</p>}
-    {error && <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg bg-danger-wash p-3 text-sm text-danger"><p>{error}</p><button className={btnGhost} onClick={() => void reload()} disabled={Boolean(busy)}>刷新资料</button></div>}
+    {error && <div ref={errorRef} role="alert" tabIndex={-1} className="flex flex-wrap items-center gap-3 rounded-lg bg-danger-wash p-3 text-sm text-danger outline-none focus-visible:ring-2 focus-visible:ring-danger/40"><p>{error}</p><button className={btnGhost} onClick={() => void reload()} disabled={Boolean(busy)}>刷新资料</button></div>}
     <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div className="min-w-0 space-y-8">
         {PREPARATION_KINDS.filter((kind) => kind !== "series").map((kind) => {
@@ -61,9 +66,9 @@ export function ApplicationPreparationPage({ id }: { id: string }) {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <SectionTitle count={count}>{PREPARATION_LABELS[kind]}</SectionTitle>
               <div className="flex flex-wrap gap-2">
-                <button className={btnGhost} disabled={Boolean(busy)} onClick={() => setPicker(kind)}>关联已有{PREPARATION_LABELS[kind]}</button>
-                {(kind === "diagnosis" || kind === "intro" || kind === "portrait") && <button className={btnGhost} disabled={Boolean(busy) || (kind === "portrait" ? !app.jd.trim() : !canGenerate)} onClick={() => void generate(kind)}>生成{PREPARATION_LABELS[kind]}</button>}
-                {kind === "interview" && <button className={btnGhost} disabled={Boolean(busy)} onClick={() => setPicker("series")}>关联进阶面试</button>}
+                <button className={btnGhost} disabled={mutationDisabled} onClick={() => setPicker(kind)}>关联已有{PREPARATION_LABELS[kind]}</button>
+                {(kind === "diagnosis" || kind === "intro" || kind === "portrait") && <button className={btnGhost} disabled={mutationDisabled || (kind === "portrait" ? !app.jd.trim() : !canGenerate)} onClick={() => void generate(kind)}>生成{PREPARATION_LABELS[kind]}</button>}
+                {kind === "interview" && <button className={btnGhost} disabled={mutationDisabled} onClick={() => setPicker("series")}>关联进阶面试</button>}
               </div>
             </div>
             {count === 0 && <p className="py-6 text-sm text-muted">{kind === "notebook" ? "暂无错题。从本次投递的真实面试复盘或模拟面试收录后，会出现在这里，也可关联已有错题。" : `暂无${PREPARATION_LABELS[kind]}，可以关联已有记录${kind === "interview" ? "或发起一场模拟面试。" : "或使用当前投递资料生成。"}`}</p>}
@@ -74,12 +79,12 @@ export function ApplicationPreparationPage({ id }: { id: string }) {
                   <p className="mt-2 max-w-prose whitespace-pre-wrap break-words text-sm leading-relaxed text-muted">{item.summary || "已关联，查看完整记录继续准备。"}</p>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     {item.href ? <Link className={btnGhost} href={`${item.href}?applicationId=${app.id}`}>查看记录 →</Link> : <button className={btnGhost} onClick={() => setRecord({ kind: resourceKind as "diagnosis" | "notebook", item })}>查看{PREPARATION_LABELS[resourceKind]}</button>}
-                    {(item.linked || resourceKind === "interview" || resourceKind === "series") && <button className={btnGhost} disabled={Boolean(busy)} onClick={() => void mutate("resources", "DELETE", { kind: resourceKind, id: item.id }, "取消关联")}>取消关联</button>}
+                    {(item.linked || resourceKind === "interview" || resourceKind === "series") && <button className={btnGhost} disabled={mutationDisabled} onClick={() => void mutate("resources", "DELETE", { kind: resourceKind, id: item.id }, "取消关联")}>取消关联</button>}
                     {resourceKind === "notebook" && !item.linked && <span className="text-xs text-muted">来自关联的模拟面试</span>}
                   </div>
                 </li>)}
               </ul>
-              {data.resources[resourceKind].nextCursor && <button className={btnGhost} disabled={Boolean(busy)} onClick={() => void loadMore(resourceKind)}>更多{PREPARATION_LABELS[resourceKind]}</button>}
+              {data.resources[resourceKind].nextCursor && <button className={btnGhost} disabled={mutationDisabled} onClick={() => void loadMore(resourceKind)}>更多{PREPARATION_LABELS[resourceKind]}</button>}
             </div>)}
           </section>;
         })}
@@ -97,7 +102,7 @@ export function ApplicationPreparationPage({ id }: { id: string }) {
           }}>
             <div className="flex gap-2">
               <input aria-label="新待办" className={`${inputCls} min-w-0 flex-1`} placeholder="下一步要准备什么？" maxLength={200} value={task} onChange={(event) => setTask(event.target.value)} disabled={Boolean(busy)} />
-              <button type="submit" className={btnPrimary} disabled={Boolean(busy) || !task.trim()}>添加</button>
+              <button type="submit" className={btnPrimary} disabled={mutationDisabled || !task.trim()}>添加</button>
             </div>
             <div className="flex items-center gap-2 text-xs text-muted">
               <span>截止时间:</span>
@@ -113,6 +118,7 @@ export function ApplicationPreparationPage({ id }: { id: string }) {
                 <button
                   type="button"
                   onClick={() => setTaskDue("")}
+                  disabled={Boolean(busy)}
                   className="text-muted hover:text-ink text-[11px]"
                 >
                   清除
@@ -125,7 +131,7 @@ export function ApplicationPreparationPage({ id }: { id: string }) {
             return (
               <li key={item.id} className="flex items-start gap-3 py-3">
                 <label className="flex min-w-0 flex-1 items-start gap-3 text-sm leading-relaxed">
-                  <input type="checkbox" className="mt-1 accent-primary" checked={item.done} disabled={Boolean(busy)} onChange={(event) => void toggleTask(item.id, event.target.checked)} />
+                  <input type="checkbox" className="mt-1 accent-primary" checked={item.done} disabled={mutationDisabled} onChange={(event) => void toggleTask(item.id, event.target.checked)} />
                   <div className="min-w-0 flex-1">
                     <span className={`break-words ${item.done ? "text-muted line-through" : ""}`}>{item.title}</span>
                     {item.due_time && (
@@ -148,7 +154,7 @@ export function ApplicationPreparationPage({ id }: { id: string }) {
                     )}
                   </div>
                 </label>
-                <button className="rounded px-1 text-sm text-muted hover:text-danger focus-visible:outline-2 focus-visible:outline-primary" aria-label={`删除待办：${item.title}`} disabled={Boolean(busy)} onClick={() => void mutate("tasks", "DELETE", { id: item.id }, "删除待办")}>×</button>
+                <button className="rounded px-1 text-sm text-muted hover:text-danger focus-visible:outline-2 focus-visible:outline-primary" aria-label={`删除待办：${item.title}`} disabled={mutationDisabled} onClick={() => void mutate("tasks", "DELETE", { id: item.id }, "删除待办")}>×</button>
               </li>
             );
           })}</ul>
@@ -171,7 +177,7 @@ export function ApplicationPreparationPage({ id }: { id: string }) {
     {versions && <ApplicationVersionsDialog application={app} onClose={() => setVersions(false)} />}
     {round !== undefined && <ApplicationInterviewRoundDialog application={app} initialInterview={round} open onClose={() => setRound(undefined)} onSuccess={() => void reload()} />}
     {reviewRound && <ApplicationInterviewReviewDialog application={app} interview={reviewRound} onClose={() => { setReviewRound(null); void reload(); }} />}
-    {picker && <PreparationResourcePicker applicationId={app.id} kind={picker} onClose={() => setPicker(null)} onSelect={(resourceId) => mutate("resources", "POST", { kind: picker, id: resourceId }, "关联资料")} />}
+    {picker && <PreparationResourcePicker applicationId={app.id} kind={picker} writesBlocked={writesBlocked} onClose={() => setPicker(null)} onSelect={(resourceId) => mutate("resources", "POST", { kind: picker, id: resourceId }, "关联资料")} />}
     {record && <PreparationRecordDialog kind={record.kind} record={record.item} applicationId={app.id} onClose={() => setRecord(null)} />}
   </div>;
 }

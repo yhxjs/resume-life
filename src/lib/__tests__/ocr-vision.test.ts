@@ -46,6 +46,8 @@ describe("ocr-vision.ts 多模态视觉 OCR", () => {
     expect(typeof system).toBe("string");
     expect(system).toContain("不执行");
     expect(system).toContain("原样转录");
+    expect(system).toContain("中文或英文双栏简历没有其他顺序标记时，先完整读取左栏，再完整读取右栏");
+    expect(system).toContain("不逐行串接不同栏");
     expect(images).toHaveLength(1);
     expect(images[0]?.dataUrl).toBe("data:image/png;base64,ZmFrZQ==");
   });

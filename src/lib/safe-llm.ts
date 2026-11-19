@@ -108,6 +108,31 @@ export type SafeVisionImage = {
   dataUrl: string;
 };
 
+/** 视觉调用与离线评测共享页码、图片顺序、安全规则和输入预算检查。 */
+export function checkSafeVisionModelInput(
+  system: string,
+  images: readonly SafeVisionImage[],
+): ChatMessage[] {
+  if (images.length > MAX_MODEL_IMAGES) {
+    throw new ModelInputBudgetError(`单次视觉模型请求最多包含 ${MAX_MODEL_IMAGES} 张图片`);
+  }
+  if (images.some((image) => !Number.isSafeInteger(image.pageNumber) || image.pageNumber < 1)) {
+    throw new ModelInputBudgetError("视觉模型图片页码无效");
+  }
+  const userParts: ChatMessage["content"] = [
+    { type: "text", text: `请完整识别以下扫描版文档（共 ${images.length} 页）中的所有文字：\n` },
+  ];
+  for (const img of images) {
+    userParts.push({ type: "text", text: `\n[Page ${img.pageNumber}]\n` });
+    userParts.push({ type: "image_url", image_url: { url: img.dataUrl, detail: "high" } });
+  }
+  const messages: ChatMessage[] = [
+    { role: "system", content: withUntrustedDataRules(system) },
+    { role: "user", content: userParts },
+  ];
+  return checkModelInput(messages);
+}
+
 export async function safeVisionChat(
   task: LlmTask,
   source: LlmSource,
@@ -116,24 +141,7 @@ export async function safeVisionChat(
   opts?: Omit<ChatOptions, "source">,
 ): Promise<string> {
   try {
-    if (images.length > MAX_MODEL_IMAGES) {
-      throw new ModelInputBudgetError(`单次视觉模型请求最多包含 ${MAX_MODEL_IMAGES} 张图片`);
-    }
-    if (images.some((image) => !Number.isSafeInteger(image.pageNumber) || image.pageNumber < 1)) {
-      throw new ModelInputBudgetError("视觉模型图片页码无效");
-    }
-    const userParts: ChatMessage["content"] = [
-      { type: "text", text: `请完整识别以下扫描版文档（共 ${images.length} 页）中的所有文字：\n` },
-    ];
-    for (const img of images) {
-      userParts.push({ type: "text", text: `\n[Page ${img.pageNumber}]\n` });
-      userParts.push({ type: "image_url", image_url: { url: img.dataUrl, detail: "high" } });
-    }
-    const messages: ChatMessage[] = [
-      { role: "system", content: withUntrustedDataRules(system) },
-      { role: "user", content: userParts },
-    ];
-    return await chat(task, checkModelInput(messages), { ...opts, requestId: opts?.requestId ?? currentRequestId(), source });
+    return await chat(task, checkSafeVisionModelInput(system, images), { ...opts, requestId: opts?.requestId ?? currentRequestId(), source });
   } finally {
     assertDataGeneration();
   }

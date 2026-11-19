@@ -1,14 +1,12 @@
 "use client";
 
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal } from "@/components/common/modal";
 import { confirmDialog } from "@/components/common/confirm-dialog";
 import { btnPrimary, btnGhost, inputCls, labelCls } from "@/lib/ui";
 import { jsonFetch } from "@/lib/fetcher";
 import { fetchSse } from "@/lib/fetch-sse";
-import type { ProjectSummary } from "@/lib/summary";
-import type { SummaryChange } from "@/lib/project-summary-diff";
-import type { MaterialChange } from "@/lib/project-summary-history";
+import { readProjectSummaryProposal, type ProjectSummaryProposal } from "@/lib/project-summary-proposal";
 import { errorMessage } from "@/lib/error-message";
 import { DirectoryPickerDialog } from "./directory-picker-dialog";
 
@@ -30,10 +28,15 @@ interface ScanRepoModalProps {
   repoPaths?: string[];
   onPathsChange?: (paths: string[]) => void;
   onClose: () => void;
-  onSuccess: (proposal: { summary: ProjectSummary; comparison?: SummaryChange[]; materialChanges?: MaterialChange[]; materialFingerprint?: string; revisionId?: number }, repoPath: string) => void;
+  onSuccess: (proposal: ProjectSummaryProposal, repoPath: string) => void;
 }
 
-export function ScanRepoModal({
+export function ScanRepoModal(props: ScanRepoModalProps) {
+  // 外部保存已添加路径；关闭／切换项目后，工具检测与未提交状态均属于新会话。
+  return props.open ? <ScanRepoSession key={props.projectId} {...props} /> : null;
+}
+
+function ScanRepoSession({
   open,
   projectId,
   projectName,
@@ -47,7 +50,7 @@ export function ScanRepoModal({
   const [cliType, setCliType] = useState<"auto" | "claude" | "codex">("auto");
   const [scanning, setScanning] = useState(false);
   const [checkingRelation, setCheckingRelation] = useState(false);
-  const [detecting, setDetecting] = useState(false);
+  const [detecting, setDetecting] = useState(true);
   const [cliInfo, setCliInfo] = useState<DetectedClisResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
@@ -56,45 +59,27 @@ export function ScanRepoModal({
 
   const abortRef = useRef<AbortController | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
-  const restoreRepoPaths = useEffectEvent(() => {
-    if (propRepoPaths) setRepoPaths(propRepoPaths);
-  });
-
-  // 弹窗打开时同步外部记录的路径并检测环境中的 CLI
+  // 检测只提供环境信息，不能改写用户已选的工具；Auto 由服务端推荐。
   useEffect(() => {
-    if (!open) return;
-
-    let active = true;
-    Promise.resolve().then(() => {
-      if (active) {
-        restoreRepoPaths();
-        setScanning(false);
-        setCheckingRelation(false);
-        setDetecting(true);
-      }
-    });
-
-    jsonFetch<DetectedClisResponse>(`/api/projects/${projectId}/scan-repo`)
+    const controller = new AbortController();
+    jsonFetch<DetectedClisResponse>(`/api/projects/${projectId}/scan-repo`, { signal: controller.signal })
       .then((res) => {
-        if (!active) return;
+        if (controller.signal.aborted) return;
         setCliInfo(res);
-        if (res.recommended) {
-          setCliType(res.recommended);
-        }
       })
       .catch((err) => {
-        if (!active) return;
+        if (controller.signal.aborted) return;
         setErrorMsg(`探测 CLI 环境失败: ${errorMessage(err)}`);
       })
       .finally(() => {
-        if (active) setDetecting(false);
+        if (!controller.signal.aborted) setDetecting(false);
       });
 
     return () => {
-      active = false;
+      controller.abort();
       abortRef.current?.abort();
     };
-  }, [open, projectId]);
+  }, [projectId]);
 
   // 日志自动滚动到底部
   useEffect(() => {
@@ -191,6 +176,7 @@ export function ScanRepoModal({
             message: `${relationRes.reason}\n\n是否仍要将它们合并为一个项目提炼简历 STAR 档案？`,
             confirmText: "仍然合并扫描",
             cancelText: "取消并调整路径",
+            signal: controller.signal,
           });
           if (!isCurrent()) return;
           if (!shouldContinue) {
@@ -209,7 +195,7 @@ export function ScanRepoModal({
           : "正在初始化扫描进程..."
       );
 
-      await fetchSse<{ summary?: ProjectSummary; comparison?: SummaryChange[]; materialChanges?: MaterialChange[]; materialFingerprint?: string; revisionId?: number; repoPath?: string; repoPaths?: string[] }>(
+      await fetchSse<unknown>(
         `/api/projects/${projectId}/scan-repo`,
         {
           method: "POST",
@@ -228,16 +214,13 @@ export function ScanRepoModal({
           },
           onDone: (data) => {
             if (!isCurrent()) return;
-            if (data.summary) {
-              setStatusText("扫描提炼完成！正在载入工作台草稿...");
-              setTimeout(() => {
-                if (!isCurrent()) return;
-                onSuccess({ summary: data.summary!, comparison: data.comparison, materialChanges: data.materialChanges, materialFingerprint: data.materialFingerprint, revisionId: data.revisionId }, finalPaths.join(" ; "));
-                onClose();
-              }, 400);
-            } else {
-              setErrorMsg("扫描已完成但未返回有效的总结数据");
-            }
+            const received = readProjectSummaryProposal(data);
+            setStatusText("扫描提炼完成！正在载入工作台草稿...");
+            setTimeout(() => {
+              if (!isCurrent()) return;
+              onSuccess(received, finalPaths.join(" ; "));
+              onClose();
+            }, 400);
           },
           onError: (err) => {
             if (!isCurrent()) return;
@@ -277,6 +260,7 @@ export function ScanRepoModal({
       loading={checkingRelation}
       loadingText="AI 正在研判多个代码库关联性…"
       loadingDescription="正在深度分析多模块工程架构与代码库依赖关系，请稍候…"
+      onLoadingCancel={handleCancel}
     >
       <div className="space-y-4 pt-2">
         {/* 本地路径输入与多路径清单 */}
@@ -452,6 +436,10 @@ export function ScanRepoModal({
           </div>
         )}
 
+        {!scanning && !checkingRelation && logs.length === 0 && statusText && (
+          <p role="status" className="text-xs text-muted">{statusText}</p>
+        )}
+
         {/* 终端日志与执行状态窗口 */}
         {(scanning || checkingRelation || logs.length > 0) && (
           <div className="space-y-1.5">
@@ -498,13 +486,13 @@ export function ScanRepoModal({
 
         {/* 底部按钮 */}
         <div className="flex items-center justify-end gap-3 pt-3 border-t border-line">
-          <button
+          {!checkingRelation && <button
             type="button"
             className={btnGhost}
             onClick={handleCancel}
           >
-            {scanning || checkingRelation ? "取消" : "取消"}
-          </button>
+            取消
+          </button>}
           <button
             type="button"
             className={btnPrimary}

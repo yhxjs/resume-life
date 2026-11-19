@@ -1,6 +1,7 @@
 import { resolveStyle } from "@/lib/templates";
 import { describe, expect, it } from "vitest";
 import { compareResumeVersions, changedText } from "@/lib/resume-version-diff";
+import type { ResumeSnapshot } from "@/lib/resume-version-types";
 
 const snapshot = () => ({ resolved_style: resolveStyle("classic", []), title: "工程师简历", template: "classic", style_overrides: {}, modules: [
   { key: "work", type: "work" as const, label: "工作经历", sort: 0, content: [
@@ -10,6 +11,29 @@ const snapshot = () => ({ resolved_style: resolveStyle("classic", []), title: "�
 ] });
 
 describe("发布版本差异", () => {
+  it("记录每侧字段的存储类型，正文使用富文本，名称、副项、技能和样式保持纯文本", () => {
+    const version: ResumeSnapshot = snapshot();
+    Object.assign((version.modules[0]!.content as Record<string, unknown>[])[0]!, {
+      descriptionItems: ["<strong>封装 Array&lt;T&gt;</strong>"],
+      subItems: [{ id: "tech", label: "技术栈", value: "Array<T> &amp; 字面量" }],
+    });
+    version.modules.push(
+      { key: "summary", type: "summary", label: "自我评价", sort: 1, content: { text: "<strong>稳定交付</strong>" } },
+      { key: "skills", type: "skills", label: "技能", sort: 2, content: { items: ["Map<K, V>"] } },
+    );
+    const added = compareResumeVersions(null, version);
+    const richKeys = ["module/work/content/a/descriptionItems", "module/work/content/b/description", "module/summary/content/text"];
+    expect(added.filter((row) => row.afterRichText).map((row) => row.key)).toEqual(richKeys);
+    expect(added.every((row) => !row.beforeRichText)).toBe(true);
+    for (const key of ["title", "style/text", "module/work/content/a/company", "module/work/content/a/subItems/tech/value", "module/skills/content/items"]) {
+      expect(added.find((row) => row.key === key)).toBeDefined();
+      expect(added.find((row) => row.key === key)?.afterRichText).toBeUndefined();
+    }
+    const empty = { ...version, modules: [] };
+    expect(compareResumeVersions(version, empty).filter((row) => row.beforeRichText).map((row) => row.key)).toEqual(richKeys);
+    expect(compareResumeVersions(version, empty).every((row) => !row.afterRichText)).toBe(true);
+  });
+
   it("按稳定条目 ID 识别新增、删除、修改，不把前面插入当成后面修改", () => {
     const before = snapshot();
     const after = snapshot();

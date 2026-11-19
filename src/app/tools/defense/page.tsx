@@ -1,12 +1,13 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { SectionTitle, Loading, Empty } from "@/components/common/ui-bits";
 import { LoadingOverlay } from "@/components/common/loading-overlay";
 import { InlineError } from "@/components/common/inline-error";
-import { alertDialog, confirmDialog } from "@/components/common/confirm-dialog";
+import { ToolHistoryDeletionFeedback } from "@/components/common/tool-history-deletion-feedback";
+import { useToolHistoryDeletion } from "@/hooks/use-tool-history-deletion";
 import { jsonFetch } from "@/lib/fetcher";
 import {
   btnDanger,
@@ -17,11 +18,8 @@ import {
   textareaTallCls,
   labelCls,
   textErr,
-  badgeDanger,
-  badgeAccent,
-  badgePrimary,
 } from "@/lib/ui";
-import type { RiskLevel } from "@/lib/resume-defense";
+import { DefenseRiskLevelTag } from "@/components/defense/defense-badges";
 import { useResumeOptions } from "@/hooks/use-resume-options";
 import { useResumeVersionSelection } from "@/hooks/use-resume-version-selection";
 import { ResumeVersionSelect } from "@/components/resume/resume-version-select";
@@ -29,13 +27,30 @@ import { errorMessage } from "@/lib/error-message";
 
 type DefenseHistoryItem = {
   id: number;
-  resumeId: number | null;
+  resumeId?: number | null;
   title: string;
   targetRole: string;
-  riskLevel: RiskLevel;
+  riskLevel?: string | null;
   itemCount: number;
   createdAt: string;
 };
+
+function readHistory(value: unknown): DefenseHistoryItem[] {
+  const items = value && typeof value === "object" ? (value as { items?: unknown }).items : null;
+  if (!Array.isArray(items)) throw new Error("排雷历史响应不完整，请重新读取");
+  const ids = new Set<number>();
+  for (const item of items) {
+    if (!item || typeof item !== "object" || !Number.isSafeInteger(item.id) || item.id <= 0 || ids.has(item.id) ||
+      (item.resumeId !== undefined && item.resumeId !== null && (!Number.isSafeInteger(item.resumeId) || item.resumeId <= 0)) ||
+      typeof item.title !== "string" || typeof item.targetRole !== "string" || typeof item.createdAt !== "string" ||
+      (item.riskLevel !== undefined && item.riskLevel !== null && typeof item.riskLevel !== "string") ||
+      !Number.isSafeInteger(item.itemCount) || item.itemCount < 0) {
+      throw new Error("排雷历史响应不完整或存在重复记录，请重新读取");
+    }
+    ids.add(item.id);
+  }
+  return items as DefenseHistoryItem[];
+}
 
 const SAMPLE_RESUME_TEXT = `# 个人简历 - 张工 (资深全栈工程师)
 
@@ -55,94 +70,119 @@ const SAMPLE_RESUME_TEXT = `# 个人简历 - 张工 (资深全栈工程师)
 - 作为项目核心骨干，攻克了动态表单渲染与流程编排中的诸多技术难题，代码健壮性显著提高。
 - 深度参与系统解耦与数据库慢查询调优，系统崩溃率降低 85%，获得部门季度技术创新奖。`;
 
-function RiskLevelTag({ level }: { level: RiskLevel }) {
-  if (level === "critical") {
-    return <span className={badgeDanger}>⚠️ 极度高危 / 破绽百出</span>;
-  }
-  if (level === "high") {
-    return <span className={badgeDanger}>🔥 疑点密集 / 重点追问</span>;
-  }
-  if (level === "medium") {
-    return <span className={badgeAccent}>⚡ 局部软肋 / 需做预案</span>;
-  }
-  return <span className={badgePrimary}>✓ 相对严密 / 风险可控</span>;
-}
-
 export default function ResumeDefensePage() {
   return (
     <Suspense fallback={<Loading />}>
-      <ResumeDefenseContent />
+      <ResumeDefenseEntry />
     </Suspense>
   );
 }
 
-function ResumeDefenseContent() {
-  const router = useRouter();
+function ResumeDefenseEntry() {
   const searchParams = useSearchParams();
   const queryResumeId = searchParams.get("resumeId");
   const queryResumeVersionId = searchParams.get("resumeVersionId");
+  return <ResumeDefenseContent key={JSON.stringify([queryResumeId, queryResumeVersionId])}
+    queryResumeId={queryResumeId} queryResumeVersionId={queryResumeVersionId} />;
+}
+
+function ResumeDefenseContent({ queryResumeId, queryResumeVersionId }: {
+  queryResumeId: string | null;
+  queryResumeVersionId: string | null;
+}) {
+  const router = useRouter();
+  const pasteInputId = useId();
+  const targetRoleId = useId();
+  const mounted = useRef(false);
+  const generation = useRef<AbortController | null>(null);
+  const historyRequest = useRef<AbortController | null>(null);
+
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      generation.current?.abort(); generation.current = null;
+      historyRequest.current?.abort(); historyRequest.current = null;
+    };
+  }, []);
 
   const [history, setHistory] = useState<DefenseHistoryItem[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
 
   const [mode, setMode] = useState<"resume" | "paste">("resume");
-  const [selectedResumeId, setSelectedResumeId] = useState<string>("");
+  const [selection, setSelection] = useState<{ id: number | "" } | null>(null);
   const [pasteText, setPasteText] = useState("");
   const [targetRole, setTargetRole] = useState("");
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
   const [historyError, setHistoryError] = useState("");
-  const [reloadVersion, setReloadVersion] = useState(0);
+  const [historyAttempt, setHistoryAttempt] = useState(0);
 
-  const { resumes, resumesError } = useResumeOptions(reloadVersion);
-  const selectedResume = resumes?.find((resume) => String(resume.id) === selectedResumeId);
+  const { resumes, resumesError, reloadResumes } = useResumeOptions();
+  const candidate = selection ? selection.id
+    : queryResumeId !== null ? Number(queryResumeId)
+      : queryResumeVersionId !== null ? "" : resumes?.[0]?.id ?? "";
+  const selectedResume = typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0
+    ? resumes?.find((resume) => resume.id === candidate) : undefined;
+  const selectedResumeId = selectedResume ? String(selectedResume.id) : "";
   const { resumeVersionId, setResumeVersionId } = useResumeVersionSelection(
     selectedResume,
-    selectedResumeId === queryResumeId && queryResumeVersionId ? Number(queryResumeVersionId) : null,
+    queryResumeId !== null && selectedResume?.id === Number(queryResumeId) && queryResumeVersionId !== null
+      ? Number(queryResumeVersionId) : null,
   );
+  const validMaterials = Boolean(selectedResume?.versions.some((version) => version.id === resumeVersionId));
+  const missingMaterials = resumes !== null && (candidate !== "" && !selectedResume
+    ? "指定或已选的简历不在当前列表中，请重新读取或手动选择。"
+    : selectedResume && !validMaterials
+      ? "指定或已选的发布版不可用，请重新读取或选择已发布版本。"
+      : queryResumeVersionId !== null && !selectedResume ? "请先选择该发布版本所属的简历。" : "");
 
-  // 简历列表就绪后确定选中项：URL 指定且存在则用之，否则落到第一份；一份都没有则切到粘贴模式。
-  // 与拉取分离，避免 queryResumeId 变化时重取列表。
-  // 这是「外部数据就绪 → 本地默认值」的一次性同步；规则针对的是渲染期级联重渲染，
-  // 而此处只在 resumes 或 queryResumeId 变化时触发一次，故显式豁免该规则。
+  // 固定首次候选；刷新不替换手选材料，指定简历暂时消失后仍可原位恢复。
   useEffect(() => {
-    if (!resumes) return;
-    if (queryResumeId && resumes.some((r) => String(r.id) === queryResumeId)) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSelectedResumeId(queryResumeId);
-      setMode("resume");
-    } else if (resumes.length > 0) {
-      setSelectedResumeId(String(resumes[0]!.id));
-    } else {
-      setMode("paste");
-    }
-  }, [resumes, queryResumeId]);
+    if (resumes === null || selection !== null || (candidate === "" && queryResumeId === null && queryResumeVersionId === null)) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelection({ id: candidate });
+  }, [resumes, selection, candidate, queryResumeId, queryResumeVersionId]);
+
+  const reloadHistory = useCallback(() => {
+    if (!mounted.current) return;
+    historyRequest.current?.abort(); historyRequest.current = null;
+    setLoadingHistory(true); setHistoryError("");
+    setHistoryAttempt((attempt) => attempt + 1);
+  }, []);
+  const deletion = useToolHistoryDeletion("resume-defenses", reloadHistory);
+  const visibleHistory = history.filter((item) => !deletion.deletedIds.has(item.id));
 
   useEffect(() => {
-    let cancelled = false;
-    // 加载历史排雷记录
-    jsonFetch<{ items: DefenseHistoryItem[] }>("/api/tools/resume-defenses")
+    const controller = new AbortController();
+    historyRequest.current = controller;
+    const isCurrent = () => mounted.current && historyRequest.current === controller && !controller.signal.aborted;
+    jsonFetch<unknown>("/api/tools/resume-defenses", { signal: controller.signal, cache: "no-store" })
       .then((res) => {
-        if (cancelled) return;
-        setHistory(res.items || []);
+        if (!isCurrent()) return;
+        setHistory(readHistory(res));
         setHistoryError("");
       })
       .catch((reason) => {
-        if (!cancelled) setHistoryError(errorMessage(reason));
+        if (isCurrent()) setHistoryError(errorMessage(reason));
       })
       .finally(() => {
-        if (!cancelled) setLoadingHistory(false);
+        if (isCurrent()) { setLoadingHistory(false); historyRequest.current = null; }
       });
-    return () => { cancelled = true; };
-  }, [queryResumeId, reloadVersion]);
+    return () => {
+      controller.abort();
+      if (historyRequest.current === controller) historyRequest.current = null;
+    };
+  }, [historyAttempt]);
 
   const resumeList = resumes ?? [];
 
   async function handleStartScan(e: React.FormEvent) {
     e.preventDefault();
+    if (!mounted.current || generation.current) return;
     setError("");
 
-    if (mode === "resume" && (!selectedResumeId || !resumeVersionId)) {
+    if (mode === "resume" && !validMaterials) {
       setError("请选择已发布的简历版本");
       return;
     }
@@ -151,6 +191,9 @@ function ResumeDefenseContent() {
       return;
     }
 
+    const controller = new AbortController();
+    generation.current = controller;
+    const isCurrent = () => mounted.current && generation.current === controller && !controller.signal.aborted;
     setScanning(true);
 
     try {
@@ -158,54 +201,40 @@ function ResumeDefenseContent() {
         targetRole: targetRole.trim(),
       };
       if (mode === "resume") {
-        payload.resumeId = Number(selectedResumeId);
+        payload.resumeId = selectedResume!.id;
         payload.resume_version_id = resumeVersionId;
       } else {
         payload.resumeContent = pasteText.trim();
       }
 
-      const res = await jsonFetch<{ id: number }>("/api/tools/resume-defenses", {
+      const res = await jsonFetch<unknown>("/api/tools/resume-defenses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
-
-      router.push(`/tools/defense/${res.id}`);
+      if (!isCurrent()) return;
+      const id = res && typeof res === "object" ? (res as { id?: unknown }).id : undefined;
+      if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) throw new Error("生成响应不完整，请先核对历史记录是否已保存");
+      router.push(`/tools/defense/${id}`);
     } catch (err) {
+      if (!isCurrent()) return;
+      generation.current = null;
       setError(errorMessage(err));
       setScanning(false);
+      reloadHistory();
     }
   }
 
   function fillSample() {
+    if (!mounted.current || generation.current) return;
     setMode("paste");
     setPasteText(SAMPLE_RESUME_TEXT);
     setTargetRole("大厂资深后端 / 全栈架构师 (P7/T8)");
   }
 
-  async function handleDeleteHistory(id: number) {
-    if (
-      !(await confirmDialog({
-        title: "删除排雷报告",
-        message: "确定删除这份简历排雷报告吗？删除后相关防御演练记录将一并清除。",
-        danger: true,
-      }))
-    ) {
-      return;
-    }
-    try {
-      await jsonFetch(`/api/tools/resume-defenses/${id}`, { method: "DELETE" });
-      setHistory((prev) => prev.filter((item) => item.id !== id));
-    } catch (err) {
-      await alertDialog({
-        title: "删除失败",
-        message: errorMessage(err),
-      });
-    }
-  }
-
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="mx-auto min-w-0 max-w-6xl space-y-8 [overflow-wrap:anywhere]">
       {/* 顶部标题栏 */}
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-line pb-5">
         <div>
@@ -213,7 +242,7 @@ function ResumeDefenseContent() {
             简历排雷与防御演练
           </h1>
           <p className="mt-1 max-w-prose text-sm text-muted leading-relaxed">
-            让 AI 扮演毒舌大厂技术面试官，逐字逐行深挖简历软肋，揪出假大空、无基数数据疑点与术语堆砌，并量身定制攻防自辩预案。
+            结合简历全文核对表述依据、数据口径与个人分工，整理需要澄清的问题，并基于真实经历练习回答。
           </p>
         </div>
 
@@ -221,9 +250,10 @@ function ResumeDefenseContent() {
           <button
             type="button"
             onClick={fillSample}
+            disabled={scanning}
             className={`${btnGhost} text-xs cursor-pointer border border-line`}
           >
-            填入典型高危样例
+            填入练习样例
           </button>
         </div>
       </div>
@@ -232,18 +262,18 @@ function ResumeDefenseContent() {
       <div className="rounded-2xl border border-line bg-card p-5 shadow-card-subtle grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
         <div className="space-y-1.5 p-3 rounded-xl bg-danger-wash/40 border border-danger/15">
           <div className="font-bold text-danger flex items-center gap-1.5">
-            <span>🤬 毒舌挑剔扫描</span>
+            <span>🔎 有依据的表述审阅</span>
           </div>
           <p className="text-muted leading-relaxed">
-            告别温和客套！模拟大厂最严格的高工视角，专门戳破“提升300%”、“主导重构”等水词泡沫。
+            结合上下文判断职责和数据是否说明清楚；缺少指标属于待核实，不据此认定造假。
           </p>
         </div>
         <div className="space-y-1.5 p-3 rounded-xl bg-accent-wash/40 border border-accent/15">
           <div className="font-bold text-accent flex items-center gap-1.5">
-            <span>🎯 致命连环追问</span>
+            <span>🎯 具体追问练习</span>
           </div>
           <p className="text-muted leading-relaxed">
-            预测面试官现场大概率深挖死穴的 2-3 个连环问题，提前准备好技术选型权衡与基线指标。
+            针对具体待澄清信息提供追问供练习，不预测真实面试官心理，也不把所有问题都套成架构选型或量化题。
           </p>
         </div>
         <div className="space-y-1.5 p-3 rounded-xl bg-primary-soft/40 border border-primary/15">
@@ -251,7 +281,7 @@ function ResumeDefenseContent() {
             <span>🛡️ 抽屉即问即评</span>
           </div>
           <p className="text-muted leading-relaxed">
-            点击任意高危坑点直接滑出抽屉进行文字自辩对练，面试官现场打分批改，传授满分防御口径。
+            选择条目即可练习回答并获得反馈；参考方案不是经历证据，应按实际分工调整，不保证满分。
           </p>
         </div>
       </div>
@@ -260,14 +290,15 @@ function ResumeDefenseContent() {
       <div className={`relative ${cardCls} p-6 sm:p-7 space-y-6`}>
         <LoadingOverlay
           show={scanning}
-          message="AI 毒舌面试官正在深度排雷中…"
-          description="正在深挖假大空话术、无基数数据疑点与技术软肋，生成攻防自辩预案，请稍候…"
+          message="正在审阅简历表述…"
+          description="正在结合全文核对表述依据，并整理待核实问题与练习参考，请稍候…"
         />
-        <div className="flex items-center justify-between border-b border-line pb-4">
+        <div className="flex flex-col items-start gap-3 border-b border-line pb-4 sm:flex-row sm:items-center sm:justify-between">
           <SectionTitle>发起简历排雷体检</SectionTitle>
           <div className="flex items-center rounded-lg border border-line p-0.5 bg-surface text-xs">
             <button
               type="button"
+              disabled={scanning}
               onClick={() => setMode("resume")}
               className={`rounded-md px-3 py-1 font-medium transition-colors cursor-pointer ${
                 mode === "resume"
@@ -279,6 +310,7 @@ function ResumeDefenseContent() {
             </button>
             <button
               type="button"
+              disabled={scanning}
               onClick={() => setMode("paste")}
               className={`rounded-md px-3 py-1 font-medium transition-colors cursor-pointer ${
                 mode === "paste"
@@ -300,20 +332,24 @@ function ResumeDefenseContent() {
                   value={selectedResumeId}
                   aria-label="选择要体检排雷的简历"
                   disabled={scanning}
-                  onChange={(e) => setSelectedResumeId(e.target.value)}
+                  onChange={(e) => setSelection({ id: e.target.value ? Number(e.target.value) : "" })}
                   className={inputCls}
                 >
+                  {!selectedResumeId && <option value="" disabled>请选择可用简历</option>}
                   {resumeList.map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.title}
                     </option>
                   ))}
                 </select>
+              ) : resumes === null ? (
+                !resumesError && <Loading label="读取已保存简历…" />
               ) : (
                 <div className="p-4 rounded-xl border border-dashed border-line text-xs text-muted text-center space-y-2">
                   <p>暂无已保存的简历，你可以切换到“自由粘贴文本”模式直接排雷</p>
                   <button
                     type="button"
+                    disabled={scanning}
                     onClick={() => setMode("paste")}
                     className={`${btnGhost} text-xs py-1 px-3 cursor-pointer`}
                   >
@@ -325,18 +361,24 @@ function ResumeDefenseContent() {
               {resumesError && (
                 <InlineError
                   message={`简历列表加载失败：${resumesError}`}
-                  onRetry={() => setReloadVersion((version) => version + 1)}
+                  onRetry={reloadResumes}
                 />
               )}
+              {missingMaterials && <div role="alert" className={`space-y-2 text-xs ${textErr}`}>
+                <p>{missingMaterials}</p>
+                <button type="button" className={btnGhost} disabled={scanning} onClick={reloadResumes}>重新读取简历列表</button>
+              </div>}
             </div>
           ) : (
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className={labelCls}>粘贴简历内容或项目片段：</label>
-                <span className="text-[11px] text-faint">支持整份简历或单个高风险项目段落</span>
+              <div className="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <label htmlFor={pasteInputId} className={labelCls}>粘贴简历内容或项目片段：</label>
+                <span className="text-[11px] text-faint">支持整份简历或需要核对的项目段落</span>
               </div>
               <textarea
+                id={pasteInputId}
                 value={pasteText}
+                disabled={scanning}
                 onChange={(e) => setPasteText(e.target.value)}
                 placeholder="粘贴简历文本（包括个人介绍、工作经历、项目经历、技术栈等）..."
                 className={`${textareaTallCls} font-mono text-xs`}
@@ -346,25 +388,28 @@ function ResumeDefenseContent() {
 
           {/* 目标岗位 */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className={labelCls}>目标应聘岗位 / 级别定位（选填）：</label>
-              <span className="text-[11px] text-faint">填写大厂级别，面试官毒舌挑刺更具针对性</span>
+            <div className="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <label htmlFor={targetRoleId} className={labelCls}>目标应聘岗位 / 级别定位（选填）：</label>
+              <span className="text-[11px] text-faint">用于安排准备优先级，不作为经历证据</span>
             </div>
             <input
+              id={targetRoleId}
               type="text"
               value={targetRole}
+              disabled={scanning}
               onChange={(e) => setTargetRole(e.target.value)}
               placeholder="例如：字节跳动电商资深前端工程师 (2-2) / 腾讯微信后端技术专家"
               className={inputCls}
             />
           </div>
 
-          {error && <p className={textErr}>{error}</p>}
+          {error && <p role="alert" className={textErr}>{error}</p>}
+          {error && <p role="status" className="text-xs leading-relaxed text-muted">响应异常时仍可能已保存，请先核对下方历史再决定是否重新扫描；历史读取失败时可单独重试。</p>}
 
           <div className="flex items-center justify-end pt-2">
             <button
               type="submit"
-              disabled={scanning || (mode === "resume" ? !selectedResumeId || !resumeVersionId : !pasteText.trim())}
+              disabled={scanning || (mode === "resume" ? !validMaterials : !pasteText.trim())}
               className={`${btnPrimary} min-w-[150px] cursor-pointer`}
             >
               {scanning ? (
@@ -373,10 +418,10 @@ function ResumeDefenseContent() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                   </svg>
-                  <span>毒舌排雷扫描中…</span>
+                  <span>正在审阅简历…</span>
                 </>
               ) : (
-                "开始毒舌排雷扫描 💣"
+                "开始简历排雷扫描"
               )}
             </button>
           </div>
@@ -385,46 +430,49 @@ function ResumeDefenseContent() {
 
       {/* 历史排雷记录 */}
       <div className="space-y-4">
-        <SectionTitle count={history.length}>排雷体检历史档案</SectionTitle>
+        <SectionTitle count={visibleHistory.length}>排雷体检历史档案</SectionTitle>
+        <ToolHistoryDeletionFeedback deletion={deletion} />
 
-        {loadingHistory ? (
-          <Loading label="加载排雷历史…" />
-        ) : historyError ? (
+        {loadingHistory && <Loading label="加载排雷历史…" />}
+        {historyError && (
           <InlineError
             message={`排雷历史加载失败：${historyError}`}
-            onRetry={() => setReloadVersion((version) => version + 1)}
+            onRetry={reloadHistory}
           />
-        ) : history.length === 0 ? (
-          <Empty>暂无简历排雷记录，快发起第一次毒舌体检吧</Empty>
-        ) : (
+        )}
+        {!loadingHistory && !historyError && visibleHistory.length === 0 && (
+          <Empty>暂无简历排雷记录，可以先选择简历或粘贴原文</Empty>
+        )}
+        {visibleHistory.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {history.map((h) => (
+            {visibleHistory.map((h) => (
               <div
                 key={h.id}
                 className={`${cardCls} p-4.5 hover:border-primary/60 transition-all hover:shadow-card-float flex flex-col justify-between group`}
               >
                 <Link href={`/tools/defense/${h.id}`} className="space-y-2 block">
                   <div className="flex items-start justify-between gap-2">
-                    <span className="font-serif text-base font-bold text-ink group-hover:text-primary transition-colors line-clamp-1">
+                    <span className="min-w-0 flex-1 font-serif text-base font-bold text-ink group-hover:text-primary transition-colors line-clamp-1">
                       {h.title}
                     </span>
-                    <RiskLevelTag level={h.riskLevel} />
+                    <span className="shrink-0 whitespace-nowrap"><DefenseRiskLevelTag level={h.riskLevel} /></span>
                   </div>
                   {h.targetRole && (
-                    <p className="text-xs text-muted flex items-center gap-1.5">
-                      <span className="text-faint">目标定位:</span>
-                      <span className="font-medium text-ink">{h.targetRole}</span>
+                    <p className="text-xs text-muted flex items-start gap-1.5">
+                      <span className="shrink-0 text-faint">目标定位:</span>
+                      <span className="min-w-0 flex-1 font-medium text-ink">{h.targetRole}</span>
                     </p>
                   )}
                 </Link>
 
                 <div className="mt-4 pt-3 border-t border-line/60 flex items-center justify-between text-xs text-faint">
-                  <span>抓出 <b className="text-ink font-mono">{h.itemCount}</b> 处高危软肋</span>
+                  <span><b className="text-ink font-mono">{h.itemCount}</b> 条待核实表述</span>
                   <div className="flex items-center gap-3">
                     <span>{new Date(h.createdAt).toLocaleDateString()}</span>
                     <button
                       type="button"
-                      onClick={() => handleDeleteHistory(h.id)}
+                      onClick={() => void deletion.remove(h.id, h.title)}
+                      disabled={deletion.busy}
                       className={`${btnDanger} text-xs py-1 px-2.5 cursor-pointer`}
                     >
                       删除

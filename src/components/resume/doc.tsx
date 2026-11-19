@@ -1,5 +1,7 @@
 import type { CSSProperties } from "react";
 import type { ResumeStyle } from "@/lib/templates";
+import { SKILL_PILL_ALPHA_HEX } from "@/lib/template-styles";
+import { splitResumeColumns } from "@/lib/resume-column-layout";
 import { RichText } from "@/components/resume/rich-text";
 import { DocHeader } from "./doc-header";
 import type { Prepared, PreparedEntry, PreparedSection } from "./doc-data";
@@ -219,7 +221,7 @@ function SkillsBlock({ items, s }: { items: string[]; s: ResumeStyle }) {
               data-resume-entry={idx}
               style={{
                 fontSize: s.baseSize - 0.5,
-                backgroundColor: `${s.accent}1f`,
+                backgroundColor: `${s.accent}${SKILL_PILL_ALPHA_HEX}`,
                 color: s.accent,
                 padding: "2px 8px",
                 borderRadius: 4,
@@ -243,7 +245,7 @@ function SkillsBlock({ items, s }: { items: string[]; s: ResumeStyle }) {
             data-resume-entry={idx}
             style={{
               fontSize: s.baseSize - 0.5,
-              backgroundColor: `${s.accent}1f`,
+              backgroundColor: `${s.accent}${SKILL_PILL_ALPHA_HEX}`,
               color: s.accent,
               padding: "2px 8px",
               borderRadius: 4,
@@ -447,19 +449,6 @@ function SingleBody({
   );
 }
 
-function splitTwoColSections(sections: PreparedSection[], asideModules?: string[]) {
-  if (asideModules && asideModules.length > 0) {
-    const asideSet = new Set(asideModules);
-    const aside = sections.filter((sec) => asideSet.has(sec.moduleKey) || asideSet.has(sec.kind));
-    const main = sections.filter((sec) => !asideSet.has(sec.moduleKey) && !asideSet.has(sec.kind));
-    return { main, aside };
-  }
-  return {
-    main: sections.filter((sec) => sec.kind === "entries"),
-    aside: sections.filter((sec) => sec.kind !== "entries"),
-  };
-}
-
 function TwoColBody({
   d,
   s,
@@ -469,7 +458,7 @@ function TwoColBody({
   s: ResumeStyle;
   onAvatarPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
 }) {
-  const { main, aside } = splitTwoColSections(d.sections, s.asideModules);
+  const { main, aside } = splitResumeColumns(d.sections, s.asideModules);
   const isLeftAside = s.asidePosition === "left";
   const columns = isLeftAside
     ? `${s.asideWidth}mm 1fr`

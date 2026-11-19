@@ -1,23 +1,30 @@
+import { listenForFetch } from "../support/http-server";
 import { expect, test } from "@playwright/test";
 import { createServer } from "node:http";
 import { exportEncryptedBackup, postEncryptedBackup } from "./backup-helpers";
 import { publishResume } from "./resume-version-helpers";
 
-test("岗位诊断历史保留快照、采纳和前后变化，刷新后仍可浏览", async ({ page, request }, testInfo) => {
+test("岗位诊断拒绝残缺报告后可重试，历史保留快照、采纳和前后变化", async ({ page, request }, testInfo) => {
   test.setTimeout(90_000);
   const baseline = await exportEncryptedBackup(request);
   expect(baseline.response.ok()).toBe(true);
   let match = 6;
+  let omitModules = true;
+  let assessmentModules: { key: string; type: string }[] = [];
   const provider = createServer(async (incoming, outgoing) => {
     for await (const chunk of incoming) void chunk;
-    const reply = { match, summary: "突出岗位相关成果", modules: [{ module_key: "summary",
-      scores: { depth: match, structure: 7, authenticity: 8, completeness: 7 }, gaps: "突出成果",
-      suggestions: [{ item_id: "", field: "text", reason: "对齐岗位", draft: "建议的自我评价" }],
-    }] };
+    const modules = assessmentModules.map(({ key }) => ({ module_key: key,
+      scores: { depth: match, structure: 7, authenticity: 8, completeness: 7 },
+      gaps: key === "summary" ? "突出成果" : "",
+      suggestions: key === "summary"
+        ? [{ item_id: "", field: "text", reason: "对齐岗位", draft: "建议的自我评价" }] : [],
+    }));
+    const reply = { match, summary: "突出岗位相关成果",
+      modules: omitModules ? modules.filter(({ module_key }) => module_key === "summary") : modules };
     outgoing.writeHead(200, { "Content-Type": "text/event-stream" });
     outgoing.end(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(reply) } }] })}\n\ndata: [DONE]\n\n`);
   });
-  await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  await listenForFetch(provider);
   const address = provider.address();
   if (!address || typeof address === "string") throw new Error("Missing provider address");
   try {
@@ -28,6 +35,8 @@ test("岗位诊断历史保留快照、采纳和前后变化，刷新后仍可�
     expect(created.status()).toBe(201);
     const id = (await created.json()).id;
     const firstVersion = await publishResume(request, id, "诊断前发布版");
+    assessmentModules = firstVersion.snapshot.modules.filter((module) => module.type !== "basic");
+    expect(assessmentModules.length).toBeGreaterThan(1);
     const diagnosisUrl = `/api/resumes/${id}/diagnose`;
     const dialog = page.getByRole("dialog", { name: "对 JD 体检诊断简历" });
     await page.goto(`/resumes/${id}`);
@@ -35,6 +44,13 @@ test("岗位诊断历史保留快照、采纳和前后变化，刷新后仍可�
     await expect(dialog.getByRole("combobox", { name: "已发布版本", exact: true })).toHaveValue(String(firstVersion.id));
     await dialog.getByLabel("岗位名称", { exact: false }).fill("公司 A · 前端工程师");
     await dialog.getByLabel("岗位要求（JD）", { exact: true }).fill("前端开发，需要 TypeScript");
+    const rejected = page.waitForResponse((response) => response.url().endsWith(diagnosisUrl)
+      && response.request().method() === "POST");
+    await dialog.getByRole("button", { name: "开始诊断", exact: true }).click();
+    expect((await rejected).status()).toBe(502);
+    await expect(dialog.getByRole("alert")).toContainText("AI 诊断结果异常");
+    expect((await (await request.get(diagnosisUrl)).json()).history).toHaveLength(0);
+    omitModules = false;
     await dialog.getByRole("button", { name: "开始诊断", exact: true }).click();
     await expect(dialog.getByText("这是该岗位的首次诊断", { exact: false })).toBeVisible();
     const first = (await (await request.get(diagnosisUrl)).json()).current;
@@ -101,6 +117,12 @@ test("岗位诊断历史保留快照、采纳和前后变化，刷新后仍可�
     expect(restored.current.resume_version_id).toBe(firstVersion.id);
     expect(restored.current.adoptions[0].value).toBe("人工调整后采纳的评价");
     expect(restored.current.resume_snapshot.modules.find((entry: { key: string }) => entry.key === "summary").content.text).toBe("诊断前的原评价");
+    for (const alias of [`${first.id}e0`, `0x${first.id.toString(16)}`, `+${first.id}`, `0${first.id}`, ` ${first.id}`]) {
+      const response = await request.get(`${diagnosisUrl}?diagnosis_id=${encodeURIComponent(alias)}`);
+      expect(response.status(), alias).toBe(400);
+      expect(await response.json()).toEqual({ error: "无效的诊断 ID" });
+    }
+    expect(await (await request.get(`${diagnosisUrl}?diagnosis_id=${first.id}`)).json()).toEqual(restored);
     const restoredVersion = await (await request.get(`/api/resumes/${id}/versions/${firstVersion.id}`)).json();
     expect(restoredVersion.snapshot.modules.find((entry: { key: string }) => entry.key === "summary").content.text).toBe("诊断前的原评价");
   } finally {

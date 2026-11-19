@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   InvalidPaginationParameterError,
   createCursorPage,
+  decodeUpdatedAtCursor,
   encodeUpdatedAtCursor,
   parseIdCursor,
   parsePageLimit,
@@ -51,8 +52,22 @@ describe("parseUpdatedAtCursor", () => {
       id: 1,
     });
   });
+  it("共享解码器在没有 Buffer 的浏览器环境仍使用同一协议", () => {
+    const cursor = { updatedAt: "2026-10-29", id: 42 };
+    const raw = encodeUpdatedAtCursor(cursor);
+    const original = globalThis.Buffer;
+    try {
+      Object.defineProperty(globalThis, "Buffer", { value: undefined, configurable: true, writable: true });
+      expect(decodeUpdatedAtCursor(raw)).toEqual(cursor);
+    } finally {
+      Object.defineProperty(globalThis, "Buffer", { value: original, configurable: true, writable: true });
+    }
+  });
   it.each([
     "not-base64url!!",
+    "_w", // 非 UTF-8
+    "Zh", // 非规范尾位，不能默默按 Zg 接受
+    `${encodeUpdatedAtCursor({ updatedAt: "2026-10-29", id: 1 })}=`,
     Buffer.from("{}", "utf8").toString("base64url"),
     Buffer.from(JSON.stringify({ updatedAt: "2026-02-30", id: 1 }), "utf8").toString("base64url"),
     Buffer.from(JSON.stringify({ updatedAt: "2026-09-20T03:04:05.678Z", id: 0 }), "utf8").toString("base64url"),

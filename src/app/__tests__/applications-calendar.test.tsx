@@ -5,8 +5,11 @@ import ApplicationsPage from "../applications/page";
 import { jsonFetch } from "@/lib/fetcher";
 import type { Application } from "@/lib/applications-types";
 import { getWeekDays, toDayKey } from "@/lib/application-calendar";
+import { mockSearchParamNavigation } from "../../../tests/support/next-search-params";
+import { applicationStatsFixture } from "../../../tests/support/application-stats";
 
 vi.mock("@/lib/fetcher", () => ({ jsonFetch: vi.fn() }));
+vi.mock("next/navigation", async () => ({ useSearchParams: (await import("../../../tests/support/next-search-params")).useTestSearchParams }));
 
 function application(id: number, scheduled = false): Application {
   return {
@@ -19,9 +22,10 @@ function application(id: number, scheduled = false): Application {
 }
 
 beforeEach(() => {
+  mockSearchParamNavigation();
   window.history.replaceState(null, "", "/applications?view=calendar");
   vi.mocked(jsonFetch).mockImplementation(async (url) => {
-    if (url === "/api/applications/stats") return { counts: {}, rates: {}, totalActive: 0, upcomingInterviews: [] } as never;
+    if (url === "/api/applications/stats") return applicationStatsFixture() as never;
     if (url === "/api/resumes") return [] as never;
     return { items: [], nextCursor: null } as never;
   });
@@ -30,6 +34,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
   window.history.replaceState(null, "", "/");
 });
 

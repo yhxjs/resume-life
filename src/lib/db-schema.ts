@@ -1,7 +1,63 @@
 import { DatabaseSync } from "node:sqlite";
 import { createSearchIndexes, SEARCH_INDEX_OBJECT_NAMES } from "./search-index";
 
-export const CURRENT_DB_VERSION = 1;
+export const CURRENT_DB_VERSION = 6;
+
+const RESUME_IMPORT_SOURCE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS resume_import_source_receipts (
+  id_hash TEXT PRIMARY KEY NOT NULL,
+  owner_token_hash TEXT NOT NULL REFERENCES auth_sessions(token_hash) ON DELETE CASCADE,
+  data_generation TEXT NOT NULL,
+  text_sha256 TEXT NOT NULL,
+  provenance TEXT NOT NULL,
+  metadata_bytes INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resume_import_source_expires ON resume_import_source_receipts(expires_at);
+CREATE INDEX IF NOT EXISTS idx_resume_import_source_owner ON resume_import_source_receipts(owner_token_hash);
+`;
+
+/** DOCX 生成表格标识的来源；无行表示来源未知，旧正文不推断或回填。 */
+const PROJECT_MATERIAL_TABLE_PROVENANCE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS project_material_table_provenance (
+  material_id INTEGER PRIMARY KEY NOT NULL REFERENCES project_materials(id) ON DELETE CASCADE,
+  provenance TEXT NOT NULL
+);
+`;
+
+/** 复盘生成时的来源快照；旧复盘缺少此行即为未知，迁移时不从现值回填。 */
+const INTERVIEW_RECAP_CONTEXT_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS application_interview_recap_contexts (
+  recap_id INTEGER PRIMARY KEY NOT NULL REFERENCES application_interview_recaps(id) ON DELETE CASCADE,
+  company TEXT NOT NULL,
+  role TEXT NOT NULL,
+  round_name TEXT NOT NULL,
+  jd TEXT NOT NULL
+);
+`;
+
+/** 与简历及模块同事务提交；删除简历保留编号墓碑，不进入业务备份。 */
+const RESUME_REQUEST_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS resume_creation_requests (
+  request_id TEXT PRIMARY KEY NOT NULL,
+  input_hash TEXT NOT NULL,
+  resume_id INTEGER REFERENCES resumes(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+);
+`;
+
+/** 本机创建命令的回执，不含输入原文，不进入用户备份；删除演练仍保留防重墓碑。 */
+const SALARY_REQUEST_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS salary_creation_requests (
+  request_id TEXT PRIMARY KEY NOT NULL,
+  input_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed')),
+  negotiation_id INTEGER REFERENCES salary_negotiations(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  CHECK (status = 'succeeded' OR negotiation_id IS NULL)
+);
+`;
 
 /**
  * 登录凭证与会话表：属于机器本地的运行时状态（同 runtime_state），不参与用户备份，
@@ -104,6 +160,8 @@ CREATE TABLE IF NOT EXISTS project_materials (
   content TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+${PROJECT_MATERIAL_TABLE_PROVENANCE_SCHEMA_SQL}
 
 CREATE TABLE IF NOT EXISTS project_summary_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -262,7 +320,7 @@ CREATE TABLE IF NOT EXISTS notebook_entries (
   UNIQUE (source, source_id)
 );
 
--- JD 考点画像：解析一段 JD 生成的考点雷达（必考技能/追问方向/公司风格），result 为画像 JSON
+-- JD 考点画像：基于 JD 的技能准备优先级、练习追问方向与公司风格推测；有至少 3 项可靠考点时页面显示考点雷达，result 为画像 JSON
 CREATE TABLE IF NOT EXISTS jd_portraits (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   jd TEXT NOT NULL,
@@ -383,6 +441,8 @@ CREATE TABLE IF NOT EXISTS application_interview_recaps (
   result TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+${INTERVIEW_RECAP_CONTEXT_SCHEMA_SQL}
 
 CREATE TABLE IF NOT EXISTS application_interview_recap_exports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -546,6 +606,9 @@ CREATE INDEX IF NOT EXISTS idx_llm_call_logs_created_at ON llm_call_logs(created
 CREATE INDEX IF NOT EXISTS idx_llm_call_logs_feature_created_at ON llm_call_logs(feature, created_at);
 
 ${AUTH_SCHEMA_SQL}
+${RESUME_IMPORT_SOURCE_SCHEMA_SQL}
+${SALARY_REQUEST_SCHEMA_SQL}
+${RESUME_REQUEST_SCHEMA_SQL}
 `;
 
 const INDEX_STATEMENT = /CREATE (?:UNIQUE )?INDEX IF NOT EXISTS[\s\S]*?;\s*/g;
@@ -607,7 +670,7 @@ const EXPECTED_OBJECTS = (() => {
   try {
     database.exec(SCHEMA_SQL);
     createSearchIndexes(database);
-    return database.prepare("SELECT name, sql FROM sqlite_master WHERE type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY name").all() as { name: string; sql: string }[];
+    return database.prepare("SELECT name, tbl_name, sql FROM sqlite_master WHERE type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY name").all() as { name: string; tbl_name: string; sql: string }[];
   } finally {
     database.close();
   }
@@ -617,8 +680,13 @@ function normalizedSql(sql: string): string {
   return sql.replace(/\s*,\s*/g, ", ").replace(/\s*\)\s*$/, ")").replace(/\s+/g, " ").trim();
 }
 
-export function validateDatabaseSchema(database: DatabaseSync): void {
-  const expectedTables = [...EXPECTED_SCHEMA.keys()];
+export function validateDatabaseSchema(database: DatabaseSync, version = CURRENT_DB_VERSION): void {
+  const included = (table: string) => !(version < 2 && table === "salary_creation_requests") &&
+    !(version < 3 && table === "resume_creation_requests") &&
+    !(version < 4 && table === "application_interview_recap_contexts") &&
+    !(version < 5 && table === "project_material_table_provenance") &&
+    !(version < 6 && table === "resume_import_source_receipts");
+  const expectedTables = [...EXPECTED_SCHEMA.keys()].filter(included);
   const actualTables = (database
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
     .all() as { name: string }[]).map(({ name }) => name).filter((name) => !SEARCH_INDEX_OBJECT_NAMES.has(name));
@@ -628,6 +696,7 @@ export function validateDatabaseSchema(database: DatabaseSync): void {
   }
 
   for (const [table, { columns: expectedColumns, foreignKeys: expectedForeignKeys }] of EXPECTED_SCHEMA) {
+    if (!included(table)) continue;
     const actualSql = database.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table) as { sql: string };
     if (normalizedSql(actualSql.sql) !== normalizedSql(EXPECTED_SCHEMA.get(table)!.sql)) {
       throw new Error(`数据库结构校验失败：${table} 建表约束不匹配`);
@@ -651,6 +720,7 @@ export function validateDatabaseSchema(database: DatabaseSync): void {
     }
   }
   for (const expected of EXPECTED_OBJECTS) {
+    if (!included(expected.tbl_name)) continue;
     const actual = database.prepare("SELECT sql FROM sqlite_master WHERE name=?").get(expected.name) as { sql: string } | undefined;
     if (!actual || normalizedSql(actual.sql) !== normalizedSql(expected.sql)) {
       throw new Error(`数据库结构校验失败：${expected.name} 索引或触发器不匹配`);
@@ -678,13 +748,32 @@ export function rollbackIgnoringAutoRollback(
 
 export function initializeDatabase(database: DatabaseSync): void {
   const version = database.prepare("PRAGMA user_version").get() as { user_version: number };
-  if (version.user_version !== 0 && version.user_version !== CURRENT_DB_VERSION) {
+  if (![0, 1, 2, 3, 4, 5, CURRENT_DB_VERSION].includes(version.user_version)) {
     throw new Error(`不支持数据库版本 ${version.user_version}：仅支持数据库版本 ${CURRENT_DB_VERSION}`);
   }
-  if (version.user_version === CURRENT_DB_VERSION) {
-    validateDatabaseSchema(database);
+  if (version.user_version !== 0) {
+    if (version.user_version === CURRENT_DB_VERSION) validateDatabaseSchema(database);
     if (database.prepare("PRAGMA foreign_key_check").get() !== undefined) {
       throw new Error("数据库结构校验失败：外键完整性校验失败");
+    }
+    if (version.user_version === CURRENT_DB_VERSION) return;
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      // 取得写锁后重验，支持多个进程同时打开同一份旧版本库。
+      const locked = database.prepare("PRAGMA user_version").get() as { user_version: number };
+      if (![1, 2, 3, 4, 5, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
+      validateDatabaseSchema(database, locked.user_version);
+      database.exec(SALARY_REQUEST_SCHEMA_SQL);
+      database.exec(RESUME_REQUEST_SCHEMA_SQL);
+      database.exec(INTERVIEW_RECAP_CONTEXT_SCHEMA_SQL);
+      database.exec(PROJECT_MATERIAL_TABLE_PROVENANCE_SCHEMA_SQL);
+      database.exec(RESUME_IMPORT_SOURCE_SCHEMA_SQL);
+      validateDatabaseSchema(database);
+      database.exec(`PRAGMA user_version = ${CURRENT_DB_VERSION}`);
+      database.exec("COMMIT");
+    } catch (error) {
+      rollbackIgnoringAutoRollback(database, error);
+      throw error;
     }
     return;
   }

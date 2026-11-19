@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
 import { loadResume } from "@/lib/resumes";
@@ -20,7 +21,7 @@ async function exportPdfCore(
   confirmedIssueIds?: unknown,
   skipExportCheck?: unknown,
 ) {
-  const numericId = Number(idParam);
+  const numericId = parseCanonicalPositiveId(idParam);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   }

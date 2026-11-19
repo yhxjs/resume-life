@@ -68,6 +68,7 @@ describe("notebook snapshot completion", () => {
   it("syncNotebookSnapshot 在题目未被收藏时不报错且返回 false", async () => {
     const { syncNotebookSnapshot } = await import("@/lib/notebook");
     const updated = syncNotebookSnapshot(db, "drill", 999, {
+      answer: "",
       reference: "参考答案",
     });
     expect(updated).toBe(false);
@@ -106,12 +107,37 @@ describe("notebook snapshot completion", () => {
       INSERT INTO notebook_entries (source, source_id, question, answer, comment, reference, scores, created_at, updated_at)
       VALUES ('drill', 501, '什么是闭包？', '原回答', '', '', '', '2026-01-01', '2026-01-01')
     `).run();
-    expect(syncNotebookSnapshot(db, "drill", 501, { comment: " \n ", reference: "" })).toBe(false);
-    expect(syncNotebookSnapshot(db, "drill", 501, { answer: "新回答", reference: "首次参考", scores: '{"depth":8}' })).toBe(true);
+    expect(syncNotebookSnapshot(db, "drill", 501, { answer: "原回答", comment: " \n ", reference: "" })).toBe(false);
+    expect(syncNotebookSnapshot(db, "drill", 501, { answer: "原回答", reference: "首次参考", scores: '{"depth":8}' })).toBe(true);
     const entry = db.prepare("SELECT answer, comment, reference, scores, updated_at FROM notebook_entries WHERE source_id = 501").get();
     expect(entry).toMatchObject({ answer: "原回答", comment: "", reference: "首次参考", scores: '{"depth":8}' });
-    expect(syncNotebookSnapshot(db, "drill", 501, { reference: "再次生成", scores: '{"depth":9}' })).toBe(false);
+    expect(syncNotebookSnapshot(db, "drill", 501, { answer: "原回答", reference: "再次生成", scores: '{"depth":9}' })).toBe(false);
     expect(db.prepare("SELECT answer, comment, reference, scores, updated_at FROM notebook_entries WHERE source_id = 501").get()).toEqual(entry);
+  });
+
+  it.each(["drill", "interview"] as const)("%s 的旧原答不能补入其他回答的点评、参考或评分", async (source) => {
+    const { syncNotebookSnapshot } = await import("@/lib/notebook");
+    db.prepare(`INSERT INTO notebook_entries (source, source_id, question, answer, created_at, updated_at)
+      VALUES (?, 502, '你的实际分工？', '原回答', '2026-01-01', '2026-01-01')`).run(source);
+    const before = db.prepare("SELECT * FROM notebook_entries WHERE source_id = 502").get();
+    for (const answer of ["新回答", " 原回答", "原回答\n", ""]) {
+      expect(syncNotebookSnapshot(db, source, 502, {
+        answer, comment: "本次点评", reference: "本次参考", scores: '{"depth":9}',
+      })).toBe(false);
+      expect(db.prepare("SELECT * FROM notebook_entries WHERE source_id = 502").get()).toEqual(before);
+    }
+  });
+
+  it("未作答时生成的参考可以补空，但不被当作已提交原答", async () => {
+    const { syncNotebookSnapshot } = await import("@/lib/notebook");
+    db.prepare(`INSERT INTO notebook_entries (source, source_id, question, created_at, updated_at)
+      VALUES ('interview', 503, '题目', '2026-01-01', '2026-01-01')`).run();
+    expect(syncNotebookSnapshot(db, "interview", 503, { answer: "", reference: "题目参考" })).toBe(true);
+    expect(db.prepare("SELECT answer, reference FROM notebook_entries WHERE source_id = 503").get())
+      .toEqual({ answer: "", reference: "题目参考" });
+    expect(syncNotebookSnapshot(db, "interview", 503, { answer: "首次原答", comment: "首次点评" })).toBe(true);
+    expect(db.prepare("SELECT answer, comment, reference FROM notebook_entries WHERE source_id = 503").get())
+      .toEqual({ answer: "首次原答", comment: "首次点评", reference: "题目参考" });
   });
 
   it("补齐与源记录写入在外层事务失败时一起回滚", async () => {
@@ -121,7 +147,7 @@ describe("notebook snapshot completion", () => {
     db.prepare("INSERT INTO notebook_entries (source, source_id, question, created_at, updated_at) VALUES ('drill', 501, '题目', '2026-01-01', '2026-01-01')").run();
     expect(() => inTransaction(() => {
       db.prepare("UPDATE drills SET focus = '已修改' WHERE id = 1").run();
-      syncNotebookSnapshot(db, "drill", 501, { reference: "新参考" });
+      syncNotebookSnapshot(db, "drill", 501, { answer: "", reference: "新参考" });
       throw new Error("模拟后续写入失败");
     })).toThrow("模拟后续写入失败");
     expect(db.prepare("SELECT focus FROM drills WHERE id = 1").get()).toEqual({ focus: "" });

@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { CURRENT_DB_VERSION, getDb, inTransaction } from "../db";
-import { invalidDomainColumn, validateResumeVersionRelations } from "../backup-domain";
-import { AUTOINCREMENT_TABLES, TABLES_CLEAR_ORDER, TABLES_INSERT_ORDER, readBackupSequences, validateBackupSequences, type BackupSequences } from "../backup";
+import { invalidDomainColumn, validateResumeVersionRelations, validateProjectMaterialTableProvenance } from "../backup-domain";
+import { AUTOINCREMENT_TABLES, TABLES_CLEAR_ORDER, TABLES_INSERT_ORDER, backupTablesForDbVersion, readBackupSequences, validateBackupSequences, type BackupSequences } from "../backup";
 export * from "../backup";
 
 export const BACKUP_APP_NAME = "resume-life";
@@ -28,6 +28,7 @@ export type BackupPayload = {
 export function exportAllData(): BackupPayload {
   return inTransaction(() => {
     const db = getDb();
+    validateProjectMaterialTableProvenance(db);
     const data: Record<string, Record<string, unknown>[]> = {};
     const stats: Record<string, number> = {};
 
@@ -85,12 +86,13 @@ export function validateBackupPayload(input: unknown): { valid: true; payload: B
   if (!isRecord(input.data)) {
     return { valid: false, error: "备份数据损坏：缺少 data 数据主体" };
   }
-  if (meta.version !== BACKUP_VERSION || meta.dbVersion !== CURRENT_DB_VERSION) {
+  if (meta.version !== BACKUP_VERSION || ![1, 2, 3, 4, 5, CURRENT_DB_VERSION].includes(meta.dbVersion as number)) {
     return { valid: false, error: `不支持此备份版本：仅接受格式 ${BACKUP_VERSION}、数据库版本 ${CURRENT_DB_VERSION} 的完整备份` };
   }
+  const tables = backupTablesForDbVersion(meta.dbVersion as number);
   const metadataKeysValid = hasExactKeys(meta, ["appName", "version", "dbVersion", "createdAt", "stats", "sequences"]);
   if (!metadataKeysValid || typeof meta.createdAt !== "string" || !Number.isFinite(Date.parse(meta.createdAt)) ||
-      !isRecord(meta.stats) || !hasExactKeys(meta.stats, TABLES_CLEAR_ORDER) || !hasExactKeys(input.data, TABLES_CLEAR_ORDER)) {
+      !isRecord(meta.stats) || !hasExactKeys(meta.stats, tables) || !hasExactKeys(input.data, tables)) {
     return { valid: false, error: "备份数据损坏：导出时间、完整表清单或统计信息无效" };
   }
   let sequences: BackupSequences;
@@ -100,7 +102,7 @@ export function validateBackupPayload(input: unknown): { valid: true; payload: B
     return { valid: false, error: error instanceof Error ? error.message : "备份序列无效" };
   }
   const database = getDb();
-  for (const table of TABLES_CLEAR_ORDER) {
+  for (const table of tables) {
     const rows = input.data[table];
     const columns = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string; type: string; notnull: number; pk: number }[];
     if (!columns.length || !Array.isArray(rows) || meta.stats[table] !== rows.length) {
@@ -142,6 +144,7 @@ export function validateBackupPayload(input: unknown): { valid: true; payload: B
     insertRows(validationDb, payload);
     if (validationDb.prepare("PRAGMA foreign_key_check").all().length) throw new Error("外键引用无效");
     validateResumeVersionRelations(validationDb);
+    validateProjectMaterialTableProvenance(validationDb);
   } catch {
     return { valid: false, error: "备份数据损坏：记录违反数据库约束或外键完整性" };
   } finally {

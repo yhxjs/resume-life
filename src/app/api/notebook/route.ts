@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { linkNotebookToApplications } from "@/lib/application-preparation";
 import { parseApiJson } from "@/lib/api-request";
@@ -9,6 +10,7 @@ import { logServerError, requestIdFrom } from "@/lib/server-errors";
 import { errorMessage } from "@/lib/error-message";
 import { enrollNotebookReview } from "@/lib/spaced-repetition-enrollment";
 import { getReviewMastery } from "@/lib/spaced-repetition";
+import { getNotebookReviewLink } from "@/lib/spaced-repetition-cards";
 
 type Snapshot = {
   question: string;
@@ -40,20 +42,24 @@ async function handleGet(req: Request) {
   if (!pagination.ok) return pagination.response;
   const { limit, idCursor: cursor } = pagination;
   const categoryParam = url.searchParams.get("category_id");
+  const categoryId = categoryParam === null ? null : categoryParam === "0" ? 0 : parseCanonicalPositiveId(categoryParam);
   const source = url.searchParams.get("source") ?? "";
   const q = (url.searchParams.get("q") ?? "").trim();
+  if (categoryId !== null && categoryParam !== "0" && (!Number.isSafeInteger(categoryId) || categoryId <= 0)) {
+    return NextResponse.json({ error: "无效的分类筛选" }, { status: 400 });
+  }
+  if (source !== "" && source !== "drill" && source !== "interview" && source !== "application_interview") {
+    return NextResponse.json({ error: "无效的来源筛选" }, { status: 400 });
+  }
 
   const conditions: string[] = [];
   const params: (string | number)[] = [];
   if (categoryParam === "0") {
     // 约定 0 表示「未分类」
     conditions.push("e.category_id IS NULL");
-  } else if (categoryParam !== null) {
-    const categoryId = Number(categoryParam);
-    if (Number.isInteger(categoryId) && categoryId > 0) {
-      conditions.push("e.category_id = ?");
-      params.push(categoryId);
-    }
+  } else if (categoryId !== null) {
+    conditions.push("e.category_id = ?");
+    params.push(categoryId);
   }
   if (source === "drill" || source === "interview" || source === "application_interview") {
     conditions.push("e.source = ?");
@@ -104,17 +110,17 @@ async function handlePost(req: Request) {
     category_id?: unknown;
   } | null;
   const source = body?.source;
-  const sourceId = Number(body?.source_id);
-  if ((source !== "drill" && source !== "interview") || !Number.isInteger(sourceId)) {
+  const sourceId = body?.source_id;
+  if ((source !== "drill" && source !== "interview") || typeof sourceId !== "number" || !Number.isSafeInteger(sourceId) || sourceId <= 0) {
     return NextResponse.json({ error: "无效的收藏请求" }, { status: 400 });
   }
 
   let categoryId: number | null = null;
   if (body?.category_id !== null && body?.category_id !== undefined) {
-    categoryId = Number(body.category_id);
-    if (!Number.isInteger(categoryId) || categoryId <= 0) {
+    if (typeof body.category_id !== "number" || !Number.isSafeInteger(body.category_id) || body.category_id <= 0) {
       return NextResponse.json({ error: "无效的分类" }, { status: 400 });
     }
+    categoryId = body.category_id;
   }
 
   const db = getDb();
@@ -176,7 +182,9 @@ async function handlePost(req: Request) {
       const id = Number(result.lastInsertRowid);
       enrollNotebookReview(db, id, ts);
       if (source === "interview") linkNotebookToApplications(id, sourceId);
-      return NextResponse.json({ id }, { status: 201 });
+      const review = getNotebookReviewLink(id);
+      if (!review) throw new Error("收藏复习卡创建失败");
+      return NextResponse.json({ id, review }, { status: 201 });
     });
   } catch (err) {
     const message = errorMessage(err);

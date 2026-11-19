@@ -64,6 +64,15 @@ describe("safe LLM ESLint architecture guard", () => {
   });
 
   it.each([
+    ["alias", "@/lib/llm"],
+    ["relative", "../../../lib/llm"],
+  ])("rejects a namespace import through %s resolution", async (_name, source) => {
+    const rules = await guardRuleIds(`import * as model from "${source}";\nvoid model.chat;`);
+
+    expect(rules).toContain("no-restricted-imports");
+  });
+
+  it.each([
     ["alias", "@/lib/llm.js"],
     ["relative", "../../../lib/llm.js"],
   ])("rejects a .js named static import through %s resolution", async (_name, source) => {
@@ -81,6 +90,26 @@ describe("safe LLM ESLint architecture guard", () => {
     const rules = await guardRuleIds(
       `const { chatStream } = await import("${source}");\nvoid chatStream;`,
     );
+
+    expect(rules).toContain("no-restricted-syntax");
+  });
+
+  it.each([
+    ["alias", "@/lib/llm"],
+    ["relative", "../../../lib/llm"],
+    ["alias extension", "@/lib/llm.js"],
+    ["relative extension", "../../../lib/llm.js"],
+  ])("rejects CommonJS require through %s resolution", async (_name, source) => {
+    const rules = await guardRuleIds(`const model = require("${source}");\nvoid model.chat;`);
+
+    expect(rules).toContain("no-restricted-syntax");
+  });
+
+  it.each([
+    ["aliased require", `const load = require;\nconst model = load("@/lib/llm");\nvoid model.chat;`],
+    ["createRequire", `const load = createRequire(import.meta.url);\nconst model = load("@/lib/llm");\nvoid model.chat;`],
+  ])("rejects indirect module loading through %s", async (_name, code) => {
+    const rules = await guardRuleIds(code);
 
     expect(rules).toContain("no-restricted-syntax");
   });

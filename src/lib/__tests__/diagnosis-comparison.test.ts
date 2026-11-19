@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { compareDiagnosisSnapshots, compareDiagnosisScores } from "@/lib/diagnosis-comparison";
 import { sanitizeModulesForDiagnosis, type DiagnosisRecord } from "@/lib/diagnosis";
+import type { ModuleData } from "@/lib/modules";
 
 function diagnosis(): DiagnosisRecord {
   return { id: 1, job_id: "a", job_title: "前端", jd: "JD", created_at: "2026-09-27", adoptions: [],
@@ -10,6 +11,30 @@ function diagnosis(): DiagnosisRecord {
   };
 }
 describe("诊断前后对比", () => {
+  it.each(["work", "projects", "custom"] as const)("%s 的副项按纯文本传入，正文仍只解码一次且不修改原模块", (type) => {
+    const literal = "Array<T>、Map<K, V>、<template>、&amp;、&lt;tag&gt;";
+    const modules: ModuleData[] = [{ key: type, type, label: "技术经历", sort: 0, content: [{
+      id: "entry-1", company: "研发<T>", name: "工具<T>", title: "开发<T>", role: "开发", start: "", end: "",
+      description: "<strong>封装 Array&lt;T&gt;</strong><br>记录 &amp;lt;tag&amp;gt;",
+      descriptionItems: ["<strong>封装 Array&lt;T&gt;</strong>", "记录 &amp;lt;tag&amp;gt;"],
+      subItems: [{ id: "tech", label: "技术栈<T>", value: literal }],
+    }] }];
+    const before = structuredClone(modules);
+    const sanitized = sanitizeModulesForDiagnosis(modules);
+    const item = (sanitized[0]!.content as Record<string, unknown>[])[0]!;
+    expect(item.subItems).toEqual([{ id: "tech", label: "技术栈<T>", value: literal }]);
+    expect(item).toMatchObject({ id: "entry-1", company: "研发<T>", name: "工具<T>", title: "开发<T>" });
+    expect(item.description).toBe("封装 Array<T>\n记录 &lt;tag&gt;");
+    expect(item.descriptionItems).toEqual(["封装 Array<T>", "记录 &lt;tag&gt;"]);
+    expect(modules).toEqual(before);
+  });
+
+  it("技能中的泛型、HTML 代码和实体均为字面文本，不做富文本清洗", () => {
+    const skills: ModuleData = { key: "skills", type: "skills", label: "技能", sort: 0,
+      content: { items: ["Map<K, V>", "<template> 与 <strong>", "&amp;、&lt;tag&gt;"] } };
+    expect(sanitizeModulesForDiagnosis([skills])).toEqual([skills]);
+  });
+
   it("仅同岗位计算匹配度及相同模块的四维分数变化", () => {
     const before = diagnosis();
     const after = diagnosis();
@@ -46,7 +71,7 @@ describe("诊断前后对比", () => {
     expect(compareDiagnosisSnapshots(null, after)).toBeNull();
   });
 
-  it("sanitizeModulesForDiagnosis 清洗富文本标签为纯文本且保留模块与条目骨架", () => {
+  it("sanitizeModulesForDiagnosis 仅清洗正文富文本，保留纯文本字段及模块与条目骨架", () => {
     const rawModules = [
       {
         key: "work_1",
@@ -84,14 +109,14 @@ describe("诊断前后对比", () => {
     const workItem = (sanitized[0]!.content as Extract<typeof rawModules[number]["content"], unknown[]>)[0]!;
     expect(workItem.description).toBe("核心页面响应耗时[待确认示例：从2.5s降至0.8s]");
     expect(workItem.descriptionItems).toEqual(["从2.5s降至0.8s", "普通描述"]);
-    expect(workItem.subItems![0]!.value).toBe("第一名");
+    expect(workItem.subItems![0]!.value).toBe('<span style="color: #1d4ed8">第一名</span>');
     expect(workItem.id).toBe("w1");
 
     const summary = sanitized[1]!.content as { text: string };
     expect(summary.text).toBe("熟练掌握 React 与微前端架构");
 
     const skills = sanitized[2]!.content as { items: string[] };
-    expect(skills.items).toEqual(["TypeScript", "React"]);
+    expect(skills.items).toEqual(["<strong>TypeScript</strong>", "React"]);
   });
 });
 

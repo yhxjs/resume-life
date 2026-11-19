@@ -22,8 +22,8 @@ export function useResumeVersionSelection(
     if (!resume || selection?.key === key) return;
     // 外部简历列表首次就绪时固定默认版本，后续刷新不会跟随最新发布版。
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSelection({ key, id: resumeVersionId });
-  }, [resume, key, resumeVersionId, selection?.key]);
+    setSelection({ key, id: candidate });
+  }, [resume, key, candidate, selection?.key]);
 
   return {
     resumeVersionId,

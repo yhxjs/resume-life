@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId, parseCanonicalStoredId } from "@/lib/id-parsing";
 import { NextResponse } from "next/server";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
@@ -6,8 +7,8 @@ import { listResumeVersions, publishResumeVersion, ResumeVersionError } from "@/
 type Context = { params: Promise<{ id: string }> };
 
 async function handleGet(_request: Request, { params }: Context) {
-  const id = Number((await params).id);
-  if (!Number.isSafeInteger(id) || id <= 0) return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
+  const id = parseCanonicalStoredId((await params).id);
+  if (!Number.isSafeInteger(id)) return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   try { return NextResponse.json(listResumeVersions(id)); }
   catch (error) {
     if (error instanceof ResumeVersionError) return NextResponse.json({ error: error.message }, { status: error.status });
@@ -16,7 +17,7 @@ async function handleGet(_request: Request, { params }: Context) {
 }
 
 async function handlePost(request: Request, { params }: Context) {
-  const id = Number((await params).id);
+  const id = parseCanonicalPositiveId((await params).id);
   if (!Number.isSafeInteger(id) || id <= 0) return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   const parsed = await parseApiJson<unknown>(request);
   if (!parsed.ok) return parsed.response;

@@ -30,12 +30,15 @@ npm run setup:ocr
 npx playwright install chromium
 ```
 
+`npm ci` 会执行 picomatch 4.0.7 的固定哈希补丁，保留上游包身份与许可证。不要跳过安装脚本；若因本地配置跳过，先运行 `node scripts/patch-picomatch.mjs`，再执行 `npm run check:dependency-security`。未知版本或源文件漂移需要重新审查，不能跳过校验。
+
 ## 验证顺序
 
 先运行定向测试，再运行发布检查：
 
 ```bash
 npm test -- <changed-test-file>
+npm run audit:dependencies
 npm run lint
 npm run typecheck
 npm run build
@@ -46,6 +49,10 @@ npm run check:release
 ```
 
 完整检查可能需要 Chromium、SQLite、OCR 语言包和可联网的依赖安装环境。没有 Linux 实际执行结果时，不要在描述中声称 Linux 已验证。
+
+`audit:dependencies` 使用官方 npm 审计接口，保存原始生产/完整报告与补丁证据到 `.test-artifacts/dependency-audit/`。生产 moderate、完整依赖 high 门槛保持；唯一限时例外及其固定版本、依赖图、哈希和到期日见 [安全政策](SECURITY.md)。原始报告中的 14 个开发依赖节点仍会显示。
+
+提示词评测默认使用虚构数据和离线快照，例如 `npm run eval:prompts -- --suite=intro`；其他套件名称以 `--help` 为准。`npm run eval:vision` 默认生成合成图片与提示快照。两者不加 `--live` 就不调用模型。真实模型评测需要显式配置与人工启动，可能向选定服务发送输入并产生费用；发布验证不调用真实模型。
 
 ## 提交变更
 

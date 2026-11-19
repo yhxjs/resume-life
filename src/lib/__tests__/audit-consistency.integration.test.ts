@@ -156,7 +156,7 @@ describe("audit fixes: reference protocol and identity", () => {
         await locked.promise;
         worker.postMessage("release");
         return kind === "reverse"
-          ? '{"answer":"Old model answer","evaluation":{"score":8,"level":"优秀","insight":"Old insight","feedback":"Old feedback","suggestions":"Old suggestions"}}'
+          ? '{"answer":"Old model answer","evaluation":{"score":8,"insight":"Old insight","feedback":"Old feedback","suggestions":"Old suggestions"}}'
           : '{"depth":7,"structure":7,"authenticity":7,"completeness":7,"comment":"Old grade","reference":"Old reference"}';
       });
       const { POST } = kind === "reverse"

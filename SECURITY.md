@@ -20,3 +20,15 @@
 - 不在日志中记录请求正文、模型输出、密钥或个人资料。
 - 对请求体、文件上传、外部来源和 CLI 路径执行边界校验。
 - 公开发布前检查构建追踪、示例、截图和备份内容。
+
+## 依赖补丁与限时审计政策
+
+2026-11-18，官方 [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) 将 picomatch ≤4.0.7 的单分支重复 extglob ReDoS 列为 high，尚无修复版本。当前仅开发依赖受影响，原始完整 audit 报告 14 个传播节点，生产 audit 为零。
+
+安装钩子 `scripts/patch-picomatch.mjs` 按版本与原始/修补后 `lib/parse.js` SHA-256 验证全部锁文件及实际加载副本，在重复 extglob 内增加无界 wildcard 检测，沿用上游的危险模式字面匹配回退。`+(*a)` 等模式因此按字面匹配；普通通配、转义、字符类及已验证的安全嵌套模式保持。`maxExtglobRecursion:false` 不能关闭这项防护。
+
+`npm run audit:dependencies` 每次保存原始报告、验证文件完整性并运行有 1.5 秒期限的行为检查。项目保留 picomatch 原名、4.0.7 版本和 MIT 许可；不会把原始 audit 中的条目称为零漏洞。
+
+经单独审查批准的 [精确政策](.github/dependency-audit-policy.json) 只适用于该 GHSA 在冻结的开发依赖图上的传播，**2026-12-18 08:00（香港时间）到期**。锁文件、版本、位置、依赖边、补丁哈希或行为验证不匹配时阻断；新的公告、未知副本和未知传播关系也阻断。原始生产 moderate、完整依赖 high 门槛保持。政策与补丁证据随 CI 制品保留。
+
+该补丁针对已审查的 wildcard-in-repeated-extglob 缺陷，不能作为任意正则或 glob 都安全的保证。上游提供兼容修复后，应验证正式升级、更新锁文件并移除临时补丁和政策；不得延长到期日或扩大范围来绕过失败。

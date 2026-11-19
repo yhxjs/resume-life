@@ -54,6 +54,37 @@ async function restore() {
 }
 
 describe("简历客户端令牌跨备份恢复", () => {
+  it("恢复历史主键后，目录、详情与版本可读，复制草稿获得新的正编号", async () => {
+    const { publishResumeVersion } = await import("../resume-versions");
+    const published = publishResumeVersion(1, { name: "旧版" });
+    db.exec("INSERT INTO resumes (id,title,created_at,updated_at) VALUES (-1,'旧简历','',''), (0,'零号简历','','')");
+    db.prepare("INSERT INTO resume_versions (id,resume_id,version,name,created_at,snapshot) VALUES (0,-1,1,'历史版','',?)").run(JSON.stringify(published.snapshot));
+    db.exec("UPDATE resumes SET base_version_id=0 WHERE id=-1");
+    db.exec("INSERT INTO resume_modules (resume_id,module_key,type,label,content,updated_at) SELECT -1,module_key,type,label,content,updated_at FROM resume_modules WHERE resume_id=1");
+    await restore();
+    const { GET: list } = await import("@/app/api/resumes/route");
+    const { readResumeList, validateExistingResume } = await import("../resume-history");
+    const req = new Request("http://localhost/api/resumes");
+    const directory = readResumeList(await (await list(req)).json());
+    expect(directory.map(row => row.id).sort((a, b) => a - b)).toEqual([-1, 0, 1]);
+    expect(directory.find(row => row.id === -1)?.versions).toEqual([{ id: 0, version: 1, name: "历史版" }]);
+    const source = { params: Promise.resolve({ id: "-1" }) };
+    const { GET, DELETE } = await import("@/app/api/resumes/[id]/route");
+    const detail = await (await GET(req, source)).json();
+    validateExistingResume(detail, -1);
+    expect(detail.resume.base_version_id).toBe(0);
+    expect((await DELETE(new Request(req, { method: "DELETE" }), source)).status).toBe(400);
+    const { GET: version } = await import("@/app/api/resumes/[id]/versions/[versionId]/route");
+    expect(await (await version(req, { params: Promise.resolve({ id: "-1", versionId: "0" }) })).json()).toMatchObject({ id: 0, snapshot: published.snapshot });
+    const { POST: copy } = await import("@/app/api/resumes/[id]/copy/route");
+    const response = await copy(new Request(req, { method: "POST" }), source);
+    expect(response.status).toBe(201);
+    const { id } = await response.json();
+    expect(id).toBeGreaterThan(1);
+    const { loadResume } = await import("../resumes");
+    expect(loadResume(id)?.modules[0]?.content).toEqual(detail.modules[0].content);
+  });
+
   it.each(["title", "module"])("恢复同一基线后旧 %s 令牌拒绝写入，新令牌正常", async (field) => {
     const { PATCH } = await import("@/app/api/resumes/[id]/route");
     const initial = await read();

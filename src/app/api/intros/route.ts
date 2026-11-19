@@ -5,10 +5,10 @@ import { parseApiJson } from "@/lib/api-request";
 import { checkModelField } from "@/lib/llm-input-budget";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction, now } from "@/lib/db";
-import { extractJson, LlmConfigError } from "@/lib/llm";
-import { loadResumeContext } from "@/lib/resumes";
+import { LlmConfigError } from "@/lib/llm";
+import { IntroResumeContextError, loadIntroResumeContext } from "@/lib/intro-resume-context";
 import { ResumeNotFoundError } from "@/lib/resume-errors";
-import { normalizeIntroVersions } from "@/lib/intro";
+import { validateGeneratedIntroVersions } from "@/lib/intro";
 import { INTRO_SYSTEM_PROMPT, buildGenerateUserMessage } from "@/lib/intro-llm";
 import {
   checkSafeModelInput,
@@ -50,8 +50,8 @@ async function handlePost(req: Request) {
     jd?: unknown;
     application_id?: unknown;
   } | null;
-  const resumeId = Number(body?.resume_id);
-  if (!Number.isInteger(resumeId)) {
+  const resumeId = body?.resume_id;
+  if (typeof resumeId !== "number" || !Number.isSafeInteger(resumeId) || resumeId <= 0) {
     return NextResponse.json({ error: "请选择简历" }, { status: 400 });
   }
   const jd = typeof body?.jd === "string" ? body.jd.trim() : "";
@@ -76,8 +76,9 @@ async function handlePost(req: Request) {
 
   let resumeContext: string;
   try {
-    resumeContext = loadResumeContext(resumeId, resumeVersionId);
+    resumeContext = loadIntroResumeContext(resumeId, resumeVersionId);
   } catch (error) {
+    if (error instanceof IntroResumeContextError) return NextResponse.json({ error: error.message }, { status: 422 });
     if (!(error instanceof ResumeNotFoundError)) throw error;
     return NextResponse.json({ error: "简历不存在" }, { status: 404 });
   }
@@ -103,10 +104,9 @@ async function handlePost(req: Request) {
         { feature: LLM_FEATURES.introGenerate, entity: { type: "resume", id: resumeId } },
         INTRO_SYSTEM_PROMPT,
         messages,
-        (delta) => {
-          emitter.sendDelta(delta);
-        },
-        { signal: emitter.signal, requestId }
+        // 生成协议是 JSON；完整校验并保存前不把临时正文或点评作为页面结果。
+        () => {},
+        { signal: emitter.signal, requestId, requireJson: "strict" }
       );
     } catch (err) {
       if (err instanceof LlmConfigError) {
@@ -118,27 +118,51 @@ async function handlePost(req: Request) {
       return;
     }
 
-    const versions = normalizeIntroVersions(extractJson<unknown>(raw));
+    let versions: ReturnType<typeof validateGeneratedIntroVersions> = null;
+    try {
+      versions = validateGeneratedIntroVersions(JSON.parse(raw));
+    } catch {
+      // 格式错误与残缺版本统一报生成异常，不保存部分内容。
+    }
     if (!versions) {
-      emitter.sendError("AI 生成结果异常：缺少有效版本或句子，请重试");
+      emitter.sendError("AI 生成结果异常：版本、句子或点评不完整，或内容超限，请重试");
       return;
     }
 
     const db = getDb();
     const ts = now();
-    const id = inTransaction(() => {
-      if (applicationId !== null) resolvePreparationApplication(body, { resumeId, resumeVersionId, jd });
-      const result = db
-        .prepare("INSERT INTO intros (resume_id, resume_version_id, jd, created_at) VALUES (?, ?, ?, ?)")
-        .run(resumeId, resumeVersionId, jd, ts);
-      const newId = Number(result.lastInsertRowid);
-      const insert = db.prepare(
-        "INSERT INTO intro_versions (intro_id, kind, sentences, updated_at) VALUES (?, ?, ?, ?)"
-      );
-      for (const v of versions) insert.run(newId, v.kind, JSON.stringify(v.sentences), ts);
-      if (applicationId !== null) linkPreparationResource(applicationId, "intro", newId);
-      return newId;
-    });
+    let id: number;
+    const contextConflict = "参考简历或所选发布版本已变化或删除，请核对材料后重新生成";
+    try {
+      id = inTransaction(() => {
+        // 固定本次已选发布版；后来发布新版本不换材料，实际依据变化则整组拒绝。
+        resolveResumeVersionId(resumeId, resumeVersionId);
+        if (loadIntroResumeContext(resumeId, resumeVersionId) !== resumeContext) {
+          throw new ResumeVersionError(contextConflict, 409);
+        }
+        if (applicationId !== null) resolvePreparationApplication(body, { resumeId, resumeVersionId, jd });
+        const result = db
+          .prepare("INSERT INTO intros (resume_id, resume_version_id, jd, created_at) VALUES (?, ?, ?, ?)")
+          .run(resumeId, resumeVersionId, jd, ts);
+        const newId = Number(result.lastInsertRowid);
+        const insert = db.prepare(
+          "INSERT INTO intro_versions (intro_id, kind, sentences, updated_at) VALUES (?, ?, ?, ?)"
+        );
+        for (const v of versions) insert.run(newId, v.kind, JSON.stringify(v.sentences), ts);
+        if (applicationId !== null) linkPreparationResource(applicationId, "intro", newId);
+        return newId;
+      });
+    } catch (error) {
+      if (error instanceof ResumeVersionError || error instanceof ResumeNotFoundError || error instanceof IntroResumeContextError) {
+        emitter.sendError(contextConflict);
+        return;
+      }
+      if (error instanceof PreparationInputError) {
+        emitter.sendError(error.message);
+        return;
+      }
+      throw error;
+    }
 
     emitter.sendDone({ id });
   }, requestId);

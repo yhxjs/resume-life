@@ -8,18 +8,23 @@ import {
   NotebookStarButton,
 } from "../index";
 import { jsonFetch } from "@/lib/fetcher";
+import { confirmDialog } from "@/components/common/confirm-dialog";
 
-vi.mock("@/lib/fetcher", () => ({ jsonFetch: vi.fn() }));
+vi.mock("@/lib/fetcher", async original => ({ ...await original<typeof import("@/lib/fetcher")>(), jsonFetch: vi.fn() }));
+vi.mock("@/components/common/confirm-dialog", () => ({ confirmDialog: vi.fn() }));
 
 const categories = [{ id: 1, name: "面试", entry_count: 2 }];
+const review = { review_card_id: 301, review_mastery: "new", next_review_date: "2026-10-28" };
 
 beforeEach(() => {
+  vi.mocked(confirmDialog).mockResolvedValue(true);
   vi.mocked(jsonFetch).mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     if (method === "GET" && url === "/api/notebook/categories") return categories as never;
-    if (method === "POST" && url === "/api/notebook") return { id: 99 } as never;
+    if (method === "POST" && url === "/api/notebook") return { id: 99, review } as never;
+    if (url === "/api/notebook/lookup?source=drill&source_id=11") return { id: 99, source: "drill", source_id: 11, category_id: 1, question: "什么是闭包？", answer: "", comment: "", reference: "", review } as never;
     if (method === "POST" && url === "/api/notebook/categories") return { id: 2, name: "算法" } as never;
-    if (method === "PATCH" && url === "/api/notebook/categories/1") return { id: 1, name: "面试改" } as never;
+    if (method === "PATCH" && url === "/api/notebook/categories/1") return { ok: true } as never;
     if (method === "PATCH" && url === "/api/notebook/5") return { ok: true } as never;
     if (method === "DELETE" && url === "/api/notebook/5") return { ok: true } as never;
     throw new Error(`unexpected request: ${method} ${url}`);
@@ -55,13 +60,13 @@ describe("NotebookStarButton 收藏星标", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "收藏" }));
 
     await waitFor(() => {
-      expect(onChanged).toHaveBeenCalledWith(99);
+      expect(onChanged).toHaveBeenCalledWith(99, review);
     });
     const call = vi.mocked(jsonFetch).mock.calls.find(([, init]) => init?.method === "POST");
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ source: "drill", source_id: 11, category_id: 1 });
   });
 
-  it("已收藏时点击直接取消收藏并回调 null", async () => {
+  it("已收藏时确认移出后取消收藏并回调 null", async () => {
     const onChanged = vi.fn();
     render(
       <NotebookStarButton
@@ -76,7 +81,7 @@ describe("NotebookStarButton 收藏星标", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消收藏" }));
 
     await waitFor(() => {
-      expect(onChanged).toHaveBeenCalledWith(null);
+      expect(onChanged).toHaveBeenCalledWith(null, null);
     });
     expect(vi.mocked(jsonFetch).mock.calls.some(([url, init]) => url === "/api/notebook/5" && init?.method === "DELETE")).toBe(true);
   });

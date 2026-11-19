@@ -52,7 +52,7 @@ beforeEach(() => {
   });
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     if (url === "/api/backup/validate") {
-      return new Response(JSON.stringify({ ok: true, manifest, stats: stats.stats, totalRecords: 33 }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, manifest, stats: { resumes: 3 }, totalRecords: 3 }), { status: 200 });
     }
     if (url === "/api/backup/export") {
       return new Response("BACKUPDATA", {
@@ -61,7 +61,7 @@ beforeEach(() => {
       });
     }
     if (url === "/api/backup/restore") {
-      return new Response(JSON.stringify({ ok: true, snapshotCreated: "snap-001" }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, stats: { resumes: 3 }, snapshotCreated: "snap-001" }), { status: 200 });
     }
     throw new Error(`unexpected fetch: ${url}`);
   }));

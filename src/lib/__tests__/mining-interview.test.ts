@@ -5,12 +5,17 @@ import os from "node:os";
 import path from "node:path";
 import { getInterviewStyle, interviewStyleOf, INTERVIEW_STYLES } from "../interview";
 import { normalizeReport } from "../scores";
+import { MINING_INTERVIEW_RULES } from "../prompt-guidelines";
+
+const model = vi.hoisted(() => ({ chatStream: vi.fn() }));
+vi.mock("@/lib/llm", async (original) => ({ ...await original<typeof import("@/lib/llm")>(), ...model }));
 
 let tempDir: string;
 let db: DatabaseSync;
 
 beforeEach(async () => {
   vi.resetModules();
+  model.chatStream.mockReset();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "resume-life-mining-test-"));
   vi.stubEnv("RESUME_LIFE_DATA_DIR", path.join(tempDir, "data"));
   db = (await import("@/lib/db")).getDb();
@@ -32,14 +37,56 @@ describe("经历挖掘访谈官 (mining style)", () => {
     expect(mining).toBeDefined();
     expect(mining?.label).toBe("经历挖掘");
     expect(mining?.persona).toContain("经历挖掘访谈官");
-    expect(mining?.persona).toContain("背景与业务痛点");
-    expect(mining?.persona).toContain("量化结果与个人贡献");
+    expect(mining?.persona).toContain("开放式提问");
+    expect(mining?.persona).toContain("接受定性结果与记忆边界");
   });
 
   it("getInterviewStyle 与 interviewStyleOf 正确识别 mining 风格", () => {
     expect(getInterviewStyle("mining")).toBe("mining");
     expect(interviewStyleOf("mining").key).toBe("mining");
     expect(interviewStyleOf("mining").label).toBe("经历挖掘");
+  });
+
+  it.each([1, 3])("首题与后续作答共用事实边界，题数 %i 时仍遵守结束协议", async (rounds) => {
+    db.exec("INSERT INTO resumes (id,title,created_at,updated_at) VALUES (1,'普通维护经历','','')");
+    (await import("../resume-versions")).publishResumeVersion(1, { name: "真实维护经历" });
+    model.chatStream.mockResolvedValueOnce(JSON.stringify({ question: "请选一段你愿意讨论的真实工作，介绍当时要完成的任务。" }));
+    const create = (await import("@/app/api/interviews/route")).POST;
+    const initial = await create(new Request("http://localhost/api/interviews", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resume_id: 1, jd: "维护业务接口", style: "mining", rounds }),
+    }));
+    expect(await initial.text()).toContain("event: done");
+    const interview = db.prepare("SELECT id FROM interviews").get() as { id: number };
+    const firstTurn = db.prepare("SELECT id FROM interview_turns WHERE interview_id = ?").get(interview.id) as { id: number };
+    const candidateAnswer = "我只参与接口维护，没有选型权，结果没有量化统计。";
+    model.chatStream.mockResolvedValueOnce(JSON.stringify({
+      depth: 7, structure: 8, authenticity: 8, completeness: 8,
+      comment: "已说明维护职责和记忆边界，具体处理方式可在后续核实。",
+      next_kind: "question", next_question: rounds === 1 ? "" : "你能确认当时实际完成了哪一项维护工作？",
+    }));
+    const answer = (await import("@/app/api/interviews/[id]/answer/route")).POST;
+    const response = await answer(new Request(`http://localhost/api/interviews/${interview.id}/answer`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turn_id: firstTurn.id, answer: candidateAnswer }),
+    }), { params: Promise.resolve({ id: String(interview.id) }) });
+    const events = await response.text();
+    expect(events).toContain("event: done");
+    expect(events).not.toContain("event: error");
+    for (const call of model.chatStream.mock.calls) {
+      const system = call[1][0].content as string;
+      expect(system).toContain(MINING_INTERVIEW_RULES);
+      expect(system).not.toContain("【量化结果与个人核心贡献】");
+      expect(system).not.toContain("【量化结果与个人贡献】");
+    }
+    const answerMessages = model.chatStream.mock.calls[1]![1] as { role: string; content: string }[];
+    expect(answerMessages.some((message) => message.role === "user" && message.content.includes(candidateAnswer))).toBe(true);
+    const saved = db.prepare("SELECT answer FROM interview_turns WHERE id = ?").get(firstTurn.id);
+    expect(saved).toEqual({ answer: candidateAnswer });
+    const result = db.prepare("SELECT status FROM interviews WHERE id = ?").get(interview.id);
+    expect(result).toEqual({ status: rounds === 1 ? "finished" : "ongoing" });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM interview_turns WHERE interview_id = ?").get(interview.id))
+      .toEqual({ count: rounds === 1 ? 1 : 2 });
   });
 
   it("数据库 interviews 表支持插入与读取 style='mining' 记录，并保存 mining_summary 报告", async () => {

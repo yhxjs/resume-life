@@ -3,8 +3,6 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { confirmDialog, alertDialog } from "@/components/common/confirm-dialog";
-import { jsonFetch } from "@/lib/fetcher";
 import { LoadError } from "@/components/common/ui-bits";
 import {
   COMPANY_TIER_OPTIONS,
@@ -22,8 +20,10 @@ import {
   labelCls,
   textErr,
 } from "@/lib/ui";
-import { errorMessage } from "@/lib/error-message";
 import { useCursorList } from "@/hooks/use-cursor-list";
+import { useSalaryNegotiationCreation } from "@/hooks/use-salary-negotiation-creation";
+import { useToolHistoryDeletion } from "@/hooks/use-tool-history-deletion";
+import { ToolHistoryDeletionFeedback } from "@/components/common/tool-history-deletion-feedback";
 
 type NegotiationListItem = {
   id: number;
@@ -42,7 +42,7 @@ type NegotiationListItem = {
 
 export default function SalaryNegotiationListPage() {
   const router = useRouter();
-  const { items, total, nextCursor, loadingMore, listError: loadError, failedCursor, loadMore, reload } = useCursorList<NegotiationListItem>({
+  const { items, total, nextCursor, loading, loadingMore, listError: loadError, failedCursor, loadMore, reload } = useCursorList<NegotiationListItem>({
     queryKey: "salary-negotiations",
     buildUrl: (cursor) => `/api/tools/salary-negotiations?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
     delay: 0,
@@ -56,62 +56,31 @@ export default function SalaryNegotiationListPage() {
   const [competingOffer, setCompetingOffer] = useState("");
   const [selectedHrStyle, setSelectedHrStyle] = useState<HrStyle>("standard");
 
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState("");
+  const deletion = useToolHistoryDeletion("salary-negotiations", reload);
+  const visibleItems = items?.filter((item) => !deletion.deletedIds.has(item.id)) ?? null;
+  const creation = useSalaryNegotiationCreation({
+    historyReady: items !== null && !loading && !loadError,
+    onUnknown: reload,
+    onCreated: (id) => router.push(`/tools/salary/${id}`),
+    onRestore: (input) => {
+      const tier = COMPANY_TIER_OPTIONS.find((option) => option.key === input.target_company_tier);
+      setSelectedTier(tier?.key ?? "custom"); setCustomTier(tier ? "" : input.target_company_tier);
+      setTargetRole(input.target_role); setExpectedSalary(input.expected_salary);
+      setCompetingOffer(input.current_or_competing_offer); setSelectedHrStyle(input.hr_style);
+    },
+  });
 
-  async function handleStart() {
-    if (!targetRole.trim() || !expectedSalary.trim()) {
-      setCreateError("请填写目标岗位与期望薪资");
-      return;
-    }
-
-    setCreating(true);
-    setCreateError("");
-
+  function handleStart() {
+    if (!deletion.canStart()) return;
     const companyTier =
       selectedTier === "custom" && customTier.trim()
         ? customTier.trim()
         : selectedTier;
 
-    try {
-      const data = await jsonFetch<{ id: number }>("/api/tools/salary-negotiations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          target_company_tier: companyTier,
-          target_role: targetRole.trim(),
-          expected_salary: expectedSalary.trim(),
-          current_or_competing_offer: competingOffer.trim(),
-          hr_style: selectedHrStyle,
-        }),
-      });
-      router.push(`/tools/salary/${data.id}`);
-    } catch (err) {
-      setCreateError(errorMessage(err));
-      setCreating(false);
-    }
-  }
-
-  async function handleDelete(id: number) {
-    if (
-      !(await confirmDialog({
-        title: "删除谈判演练",
-        message: "确定要删除这场薪酬博弈演练吗？包含的所有回合记录都将被移除。",
-        danger: true,
-      }))
-    ) {
-      return;
-    }
-
-    try {
-      await jsonFetch(`/api/tools/salary-negotiations/${id}`, { method: "DELETE" });
-      reload();
-    } catch (err) {
-      await alertDialog({
-        title: "删除失败",
-        message: errorMessage(err),
-      });
-    }
+    void creation.start({
+      target_company_tier: companyTier, target_role: targetRole.trim(), expected_salary: expectedSalary.trim(),
+      current_or_competing_offer: competingOffer.trim(), hr_style: selectedHrStyle,
+    });
   }
 
   function getTierLabel(key: string) {
@@ -125,7 +94,7 @@ export default function SalaryNegotiationListPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="mx-auto max-w-6xl space-y-8 wrap-anywhere">
       {/* 顶部标题栏 */}
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-line pb-5">
         <div>
@@ -133,12 +102,12 @@ export default function SalaryNegotiationListPage() {
             Offer 谈判与薪酬博弈模拟器
           </h1>
           <p className="mt-1 max-w-prose text-sm text-muted leading-relaxed">
-            通过人机拟真博弈，与挑刺/规范/画饼型 HR 进行多轮拉扯，右侧实时军师拆解说服逻辑漏洞并示范高情商反击话术，谈出最优 Package。
+            练习薪酬沟通、核实条件与表达诉求。HR 回应、心理状态和军师建议均为模拟，不代表真实公司的报价、预算或态度，也不保证涨薪。
           </p>
         </div>
         {items !== null && (
           <div className="flex items-center gap-2 text-xs text-muted">
-            <span>已载入博弈存档：<strong className="font-mono text-ink font-bold text-sm">{items.length}</strong> 场{total !== null && ` / 共 ${total} 场`}</span>
+            <span>已载入博弈存档：<strong className="font-mono text-ink font-bold text-sm">{visibleItems?.length}</strong> 场{total !== null && ` / 共 ${total} 场`}</span>
           </div>
         )}
       </div>
@@ -148,7 +117,7 @@ export default function SalaryNegotiationListPage() {
         <div className="border-b border-line pb-4">
           <h2 className="font-serif text-lg font-bold text-ink">发起一场薪酬博弈演练</h2>
           <p className="mt-1 text-xs text-muted">
-            提供你的求职背景与底牌筹码，AI 将化身对手 HR 与己方军师，开启拟真双重视角推拉。
+            提供本次练习的求职背景与筹码，生成模拟开场和练习建议；请保留薪酬口径、条件及尚未确认的信息。
           </p>
         </div>
 
@@ -163,6 +132,8 @@ export default function SalaryNegotiationListPage() {
                   key={tier.key}
                   type="button"
                   onClick={() => setSelectedTier(tier.key)}
+                  disabled={creation.busy}
+                  aria-pressed={active}
                   className={`flex flex-col items-start rounded-xl border p-3 text-left transition-all ${
                     active
                       ? "border-primary bg-primary-soft shadow-xs"
@@ -172,7 +143,7 @@ export default function SalaryNegotiationListPage() {
                   <span className={`text-sm font-semibold ${active ? "text-primary" : "text-ink"}`}>
                     {tier.label}
                   </span>
-                  <span className="mt-1 line-clamp-2 text-[11px] leading-tight text-muted">
+                  <span className="mt-1 text-[11px] leading-tight text-muted">
                     {tier.desc}
                   </span>
                 </button>
@@ -183,6 +154,8 @@ export default function SalaryNegotiationListPage() {
             <input
               type="text"
               value={customTier}
+              aria-label="自定义公司类型或特点"
+              disabled={creation.busy}
               onChange={(e) => setCustomTier(e.target.value)}
               placeholder="请输入自定义公司类型或特点，如：某细分行业头部拟上市公司"
               className={`${inputCls} mt-2 text-sm`}
@@ -197,6 +170,7 @@ export default function SalaryNegotiationListPage() {
             <input
               type="text"
               value={targetRole}
+              disabled={creation.busy}
               onChange={(e) => setTargetRole(e.target.value)}
               placeholder="例如：资深前端工程师 (P7/Tech Lead)"
               className={`${inputCls} mt-1`}
@@ -208,6 +182,7 @@ export default function SalaryNegotiationListPage() {
             <input
               type="text"
               value={expectedSalary}
+              disabled={creation.busy}
               onChange={(e) => setExpectedSalary(e.target.value)}
               placeholder="例如：35k * 16 薪，预期总包 55W~60W"
               className={`${inputCls} mt-1`}
@@ -217,16 +192,19 @@ export default function SalaryNegotiationListPage() {
 
         {/* 3. 底牌筹码：现有或竞品 Offer */}
         <label className="block">
-          <span className={labelCls}>
+          <span id="salary-competing-label" className={labelCls}>
             已有竞品 Offer 或当前薪资（谈判底牌 / 筹码）
           </span>
           <textarea
+            aria-labelledby="salary-competing-label"
+            aria-describedby="salary-competing-hint"
             value={competingOffer}
+            disabled={creation.busy}
             onChange={(e) => setCompetingOffer(e.target.value)}
             placeholder="例如：目前手头持有某独角兽 32k*15 + 3W 签字费的口头 Offer，要求下周一前答复；或者：当前公司 base 28k，年终稳定 3 个月"
             className={`${textareaShortCls} mt-1`}
           />
-          <span className="mt-1 block text-[11px] text-faint">
+          <span id="salary-competing-hint" className="mt-1 block text-[11px] text-faint">
             提示：竞品 Offer、现有福利补贴、签字费或业务替代门槛都是拉扯的关键筹码。
           </span>
         </label>
@@ -251,6 +229,7 @@ export default function SalaryNegotiationListPage() {
                     name="hr-style"
                     value={style.key}
                     checked={active}
+                    disabled={creation.busy}
                     onChange={() => setSelectedHrStyle(style.key)}
                     aria-labelledby={`hr-style-${style.key}`}
                     className="sr-only"
@@ -272,8 +251,8 @@ export default function SalaryNegotiationListPage() {
                   </span>
                   <span className="mt-2 block text-xs leading-relaxed text-muted">{style.persona}</span>
                   <span className="mt-2 block border-t border-line/60 pt-2 text-[11px] text-primary/90">
-                    <span className="font-medium">突破点：</span>
-                    {style.weakness}
+                    <span className="font-medium">练习重点：</span>
+                    {style.practiceFocus}
                   </span>
                 </label>
               );
@@ -281,26 +260,42 @@ export default function SalaryNegotiationListPage() {
           </div>
         </fieldset>
 
-        {createError && <p className={`text-sm ${textErr}`}>{createError}</p>}
+        {creation.error && <div role="alert" aria-label="谈薪创建状态" className={`space-y-2 text-sm ${textErr}`}>
+          <p>{creation.error}</p>
+          {creation.phase === "unknown" && <div className="flex flex-wrap gap-2">
+            <button type="button" className={btnPrimary} onClick={creation.retryCheck}>重新读取创建结果</button>
+            <button type="button" className={btnGhost} onClick={creation.reviewUnresolved}>核对历史后另建演练</button>
+          </div>}
+          {creation.phase === "review" && <div className="flex flex-wrap gap-2">
+            {creation.canCheckRequest && <button type="button" className={btnPrimary} onClick={creation.retryCheck}>按请求编号核对结果</button>}
+            <button type="button" className={btnGhost} onClick={reload} disabled={loading}>刷新历史记录</button>
+            <button type="button" className={btnPrimary} onClick={creation.allowRetry} disabled={loading || items === null || !!loadError}>已核对历史，允许再次创建</button>
+          </div>}
+        </div>}
+        {creation.notice && <p role="status" className="text-sm text-muted">{creation.notice}</p>}
+        {(creation.phase === "posting" || creation.phase === "checking" || creation.phase === "navigating") && <p role="status" className="text-sm text-muted">
+          {creation.phase === "posting" ? "正在生成模拟开场，表单已锁定…" : creation.phase === "checking" ? "正在核对已保存的创建结果，不会重复调用模型…" : "已核对模拟记录，正在进入对战室…"}
+        </p>}
 
         <div className="flex items-center justify-end pt-2">
           <button
             type="button"
             onClick={handleStart}
-            disabled={creating}
+            disabled={creation.busy || deletion.busy}
             className={`${btnPrimary} px-6 py-2.5 text-sm font-medium shadow-sm`}
           >
-            {creating ? "正在推演 HR 初始出招与首轮解盘…" : "开局！进入薪资博弈对决"}
+            {creation.phase === "posting" ? "正在推演 HR 初始出招与首轮解盘…" : "开局！进入薪资博弈对决"}
           </button>
         </div>
       </div>
 
       {/* 历史演练记录列表 */}
-      <div>
+      <div className="space-y-3">
+        <ToolHistoryDeletionFeedback deletion={deletion} />
         <div className="flex items-center justify-between">
           <h2 className="font-serif text-lg font-bold text-ink">历史博弈记录</h2>
-          {items && items.length > 0 && (
-            <span className="font-mono text-xs text-muted">已载入 {items.length} 场演练</span>
+          {visibleItems && visibleItems.length > 0 && (
+            <span className="font-mono text-xs text-muted">已载入 {visibleItems.length} 场演练</span>
           )}
         </div>
 
@@ -310,7 +305,7 @@ export default function SalaryNegotiationListPage() {
           <p className="mt-4 text-xs text-muted">正在加载历史记录…</p>
         )}
 
-        {items !== null && items.length === 0 && (
+        {visibleItems !== null && visibleItems.length === 0 && (
           <div className={`mt-4 p-8 text-center ${cardCls}`}>
             <p className="text-sm text-muted">暂无薪酬谈判历史记录。</p>
             <p className="mt-1 text-xs text-faint">
@@ -319,13 +314,15 @@ export default function SalaryNegotiationListPage() {
           </div>
         )}
 
-        {items !== null && items.length > 0 && (
+        {visibleItems !== null && visibleItems.length > 0 && (
           <div className="mt-4 overflow-hidden rounded-2xl border border-line bg-card shadow-card-subtle divide-y divide-line">
-            {items.map((it) => {
+            {visibleItems.map((it) => {
               const isFinished = it.status === "finished";
               return (
                 <div
                   key={it.id}
+                  role="group"
+                  aria-label={`谈薪演练 #${it.id}`}
                   className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5 transition-colors hover:bg-surface/50"
                 >
                   <div className="min-w-0 space-y-1">
@@ -349,7 +346,7 @@ export default function SalaryNegotiationListPage() {
                             : "bg-primary-soft text-primary border border-primary/25"
                         }`}
                       >
-                        {isFinished ? "已达成 / 已复盘" : "交锋进行中"}
+                        {isFinished ? "模拟已结束 / 已复盘" : "交锋进行中"}
                       </span>
                     </div>
 
@@ -371,7 +368,8 @@ export default function SalaryNegotiationListPage() {
                     </Link>
                     <button
                       type="button"
-                      onClick={() => handleDelete(it.id)}
+                      onClick={() => { if (creation.canStart()) void deletion.remove(it.id, it.target_role); }}
+                      disabled={deletion.busy || creation.busy}
                       className={btnDanger}
                     >
                       删除

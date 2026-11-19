@@ -2,6 +2,7 @@ import { logCleanupFailure } from "@/lib/server-errors";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import { validateProjectMaterialTableProvenance } from "./backup-domain";
 import { readSettings } from "@/lib/settings";
 import { UPLOADS_DIR, listReferencedUploadFilenames, uploadPathFromUrl } from "@/lib/upload-storage";
 import { createPreRestoreSnapshot, discardFailedPreRestoreSnapshot, rotatePreRestoreSnapshots, type CreatedPreRestoreSnapshot } from "./backup-snapshot";
@@ -14,6 +15,7 @@ export { MAX_PRE_RESTORE_SNAPSHOTS, MIN_SNAPSHOT_BUDGET_BYTES, SNAPSHOT_DATABASE
 /** 按依赖关系自底向上清空表（从依赖子表到独立主表） */
 export const TABLES_CLEAR_ORDER = [
   "application_interview_recap_exports",
+  "application_interview_recap_contexts",
   "application_interview_recaps",
   "application_interview_questions",
   "review_attempts",
@@ -37,6 +39,7 @@ export const TABLES_CLEAR_ORDER = [
   "interview_series",
   "intro_versions",
   "intros",
+  "project_material_table_provenance",
   "project_materials",
   "project_summary_history",
   "resume_modules",
@@ -54,6 +57,12 @@ export const TABLES_CLEAR_ORDER = [
 
 /** 逆序为插入顺序（从独立主表到依赖子表） */
 export const TABLES_INSERT_ORDER = [...TABLES_CLEAR_ORDER].reverse();
+
+/** 旧版本不能夹带后来新增的业务表；恢复时缺席的新表保持为空。 */
+export function backupTablesForDbVersion(version: number, tables: readonly string[] = TABLES_CLEAR_ORDER): readonly string[] {
+  return tables.filter(table => !(version < 4 && table === "application_interview_recap_contexts") &&
+    !(version < 5 && table === "project_material_table_provenance"));
+}
 
 /** 拥有 AUTOINCREMENT 自增主键的表清单 */
 export const AUTOINCREMENT_TABLES = [
@@ -351,6 +360,10 @@ export function restoreAllData(
     createdSnapshot = createPreRestoreSnapshot(true);
     snapshotCreated = createdSnapshot.path;
     restoreFiles = stageRestoreFiles(staged, UPLOADS_DIR);
+    // 请求回执是本机运行状态，不导入备份；恢复前清除旧待处理和完成回执。
+    db.exec("DELETE FROM salary_creation_requests");
+    db.exec("DELETE FROM resume_creation_requests");
+    db.exec("DELETE FROM resume_import_source_receipts");
     // 逆序清空所有数据表。
     for (const table of TABLES_CLEAR_ORDER) {
       if (table === "settings" && preserveAiConfig) {
@@ -397,6 +410,7 @@ export function restoreAllData(
     if (fkErrors.length > 0) {
       throw new Error(`外键完整性校验失败：检测到 ${fkErrors.length} 处损坏的外键引用关系`);
     }
+    validateProjectMaterialTableProvenance(db);
 
     // 提交事务
     const referenced = listReferencedUploadFilenames(db);

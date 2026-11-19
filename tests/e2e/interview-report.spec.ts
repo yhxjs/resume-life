@@ -5,7 +5,7 @@ test("missing evaluator stays explicit and retry preserves the candidate report"
   await mockApi(page);
   const writes: string[] = [];
   const candidate = { depth: 9, structure: 9, authenticity: 9, completeness: 9, jd_match: 9, overall: 9, strengths: "原有候选人优势", weaknesses: "原有短板", suggestions: "原有建议" };
-  const evaluator = { recommendation: "Lean No", level: "P5", level_justification: "需验证系统设计能力", summary_for_hr: "原始回答证据不足", hire_reasons: [], concerns_and_risks: ["系统设计薄弱"], placement_suggestion: "建议追加考察" };
+  const evaluator = { recommendation: "Lean No", level: "P5", level_justification: "需验证系统设计能力", summary_for_hr: "原始回答证据不足", hire_reasons: [], concerns_and_risks: ["系统设计薄弱"], placement_suggestion: "建议追加考察", evidence_quotes: [] };
   await page.route("**/api/interviews/9004**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (route.request().method() === "POST") {
@@ -20,10 +20,11 @@ test("missing evaluator stays explicit and retry preserves the candidate report"
   });
   await page.goto("/interviews/9004");
   await expect(page.getByText("原有候选人优势", { exact: true })).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("面试官评估未生成");
-  await page.getByRole("button", { name: "前往重试面试官评估" }).click();
+  await expect(page.getByRole("status")).toContainText("本页尚无可用的面试官评估。候选人复盘报告已保留");
+  await page.getByRole("button", { name: "查看生成或恢复状态", exact: true }).click();
   await expect(page.getByRole("heading", { name: "面试官评估未生成" })).toBeVisible();
   await expect(page.getByText(/STRONG HIRE|P7/)).toHaveCount(0);
+  expect(writes).toEqual([]);
   await page.getByRole("button", { name: "重试生成面试官评估", exact: true }).click();
   await expect(page.getByText("原始回答证据不足", { exact: true })).toBeVisible();
   expect(writes).toEqual(["/api/interviews/9004/evaluator-report"]);

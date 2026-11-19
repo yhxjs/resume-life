@@ -4,19 +4,22 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { collectProofingFields, findSourceMatches } from "@/lib/import-proofing";
 import { btnGhost, btnPrimary, inputCls, textErr, textOk } from "@/lib/ui";
 import { motionSafeScrollBehavior } from "@/lib/reduced-motion";
+import { useCopyFeedback } from "@/hooks/use-copy-feedback";
 
 type Draft = { title: string; modules: Record<string, unknown> };
 type OcrInfo = { engine: "vision" | "local"; pageCount: number; sourceType?: "pdf" | "image" };
 
 export function ImportProofingWorkbench({
   draft, sourceText, ocrInfo, manualDraft, creating, error,
-  onTitleChange, onConfirm, onBack, renderEditors,
+  onTitleChange, onConfirm, onBack, renderEditors, locked = creating, recovery,
 }: {
   draft: Draft;
   sourceText: string;
   ocrInfo: OcrInfo | null;
   manualDraft: boolean;
   creating: boolean;
+  locked?: boolean;
+  recovery?: ReactNode;
   error: string;
   onTitleChange: (title: string) => void;
   onConfirm: () => void;
@@ -25,7 +28,7 @@ export function ImportProofingWorkbench({
 }) {
   const fields = useMemo(() => collectProofingFields(draft.modules), [draft.modules]);
   const [selection, setSelection] = useState<{ id: string; value: string; index: number } | null>(null);
-  const [copyStatus, setCopyStatus] = useState("");
+  const { copiedText, copyError, copying, copy } = useCopyFeedback();
   const [revealRequest, setRevealRequest] = useState(0);
   const sourceSectionRef = useRef<HTMLElement>(null);
   const sourcePaneRef = useRef<HTMLDivElement>(null);
@@ -66,15 +69,6 @@ export function ImportProofingWorkbench({
     pane.scrollTo({ top: pane.scrollTop + markTop - paneTop - 64, behavior: motionSafeScrollBehavior() });
   }, [selectedField?.id, selectedField?.value, selectedIndex, matches]);
 
-  async function copySource() {
-    try {
-      await navigator.clipboard.writeText(sourceText);
-      setCopyStatus("原文已复制");
-    } catch {
-      setCopyStatus("复制失败，请手动选择原文");
-    }
-  }
-
   const sourceParts: ReactNode[] = [];
   let cursor = 0;
   for (const [index, match] of matches.entries()) {
@@ -113,11 +107,11 @@ export function ImportProofingWorkbench({
                 <h2 className="text-sm font-semibold text-ink">导入原文</h2>
                 <p className="text-xs text-muted">
                   {ocrInfo
-                    ? `${ocrInfo.sourceType === "image" ? "图片" : "扫描件"} · ${ocrInfo.engine === "vision" ? "视觉模型 OCR" : "本地离线 OCR"} · ${ocrInfo.pageCount} 页`
+                    ? `${ocrInfo.sourceType === "image" ? "图片" : "PDF"} · ${ocrInfo.engine === "vision" ? "视觉模型 OCR" : "本地离线 OCR"} · ${ocrInfo.pageCount} 页`
                     : "原始文本 · 只读"}
                 </p>
               </div>
-              <button type="button" className={btnGhost} onClick={() => void copySource()} title="复制完整原文">复制原文</button>
+              <button type="button" className={btnGhost} onClick={() => { void copy(sourceText); }} disabled={copying || !sourceText} title="复制完整原文">复制原文</button>
             </div>
             <div ref={sourcePaneRef} aria-label="导入原文" className="max-h-[58vh] min-h-64 overflow-y-auto px-4 py-4 lg:max-h-[calc(100vh-13rem)]">
               <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-7 text-ink">{sourceParts}</pre>
@@ -130,7 +124,8 @@ export function ImportProofingWorkbench({
                     : `${selectedField.label} · 原文未找到`
                   : "选择右侧字段以定位原文"}
               </span>
-              {copyStatus && <span className="ml-3" aria-live="polite">{copyStatus}</span>}
+              {copiedText === sourceText && <span role="status" aria-label="原文复制状态" className="ml-3">原文已复制</span>}
+              {copyError?.text === sourceText && <p role="alert" className={`mt-1 ${textErr}`}>{copyError.message}</p>}
             </div>
           </div>
         </section>
@@ -141,6 +136,7 @@ export function ImportProofingWorkbench({
               <div>
                 <h2 className="text-sm font-semibold text-ink">易错字段</h2>
                 <p className="mt-0.5 text-xs text-muted">日期、联系方式、学校、公司与量化指标</p>
+                <p className="mt-1 text-xs text-muted">定位仅帮助查找原文，仍需核对上下文、数值口径与个人分工。</p>
               </div>
               {selectedField && matches.length > 1 && <div className="flex items-center gap-2">
                 <button type="button" className={btnGhost} onClick={() => move(-1)} aria-label="上一个匹配" title="上一个匹配">←</button>
@@ -170,14 +166,17 @@ export function ImportProofingWorkbench({
             </ul> : <p className="mt-3 text-sm text-muted">草稿中暂无可核对的易错字段。</p>}
           </section>
 
+          <fieldset disabled={locked} inert={locked} aria-label="导入草稿编辑区" className="min-w-0">
           <label className="mt-5 block max-w-lg">
             <span className="text-xs font-medium text-muted">简历标题</span>
             <input className={`${inputCls} mt-1`} value={draft.title} onChange={(event) => onTitleChange(event.target.value)} />
           </label>
           <div className="mt-6 space-y-8">{renderEditors(locate)}</div>
+          </fieldset>
+          {recovery}
           <div className="mt-8 flex flex-wrap gap-3 border-t border-line pt-5">
-            <button type="button" className={btnPrimary} onClick={onConfirm} disabled={creating}>{creating ? "创建中…" : "确认导入"}</button>
-            <button type="button" className={btnGhost} onClick={onBack} disabled={creating}>返回重新解析</button>
+            <button type="button" className={btnPrimary} onClick={onConfirm} disabled={locked}>{creating ? "创建中…" : "确认导入"}</button>
+            <button type="button" className={btnGhost} onClick={onBack} disabled={locked}>返回重新解析</button>
           </div>
         </div>
       </div>

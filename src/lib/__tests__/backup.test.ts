@@ -65,7 +65,7 @@ describe("backup.ts 数据备份与一致性定义", () => {
     expect(oldFormat.valid).toBe(false);
     expect(oldFormat).toMatchObject({ error: expect.stringContaining("不支持此备份版本") });
 
-    const oldDatabase = validateBackupPayload(withMeta({ version: BACKUP_VERSION, dbVersion: CURRENT_DB_VERSION - 1 }));
+    const oldDatabase = validateBackupPayload(withMeta({ version: BACKUP_VERSION, dbVersion: 0 }));
     expect(oldDatabase.valid).toBe(false);
     expect(oldDatabase).toMatchObject({ error: expect.stringContaining("不支持此备份版本") });
 

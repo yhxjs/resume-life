@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { alertDialog, confirmDialog } from "@/components/common/confirm-dialog";
 import { useCursorList } from "@/hooks/use-cursor-list";
 import { useResumeOptions, type ResumeOption } from "@/hooks/use-resume-options";
 import { useResumeVersionSelection } from "@/hooks/use-resume-version-selection";
-import { jsonFetch } from "@/lib/fetcher";
-import { errorMessage } from "@/lib/error-message";
+import { useRecordDeletion } from "@/hooks/use-record-deletion";
+import { interviewDeletionTitle, validateExistingInterview, validateExistingInterviewSeries } from "@/lib/interview-history";
 import type { ResumeVersionBinding } from "@/components/resume/resume-version-badge";
 
 export type ResumeBrief = ResumeOption;
@@ -32,13 +31,17 @@ export type SeriesItem = ResumeVersionBinding & {
 };
 
 export function useInterviewsPage(queryResumeId: string | null, queryResumeVersionId: string | null = null) {
-  const [resumeId, setResumeId] = useState<number | "">("");
+  const [selection, setSelection] = useState<{ key: string; id: number | "" } | null>(null);
   const [keyword, setKeyword] = useState("");
 
   const { resumes, resumesError, reloadResumes } = useResumeOptions();
+  const selectionKey = JSON.stringify([queryResumeId, queryResumeVersionId]);
+  const candidate = selection?.key === selectionKey ? selection.id
+    : queryResumeId !== null ? Number(queryResumeId) : resumes?.[0]?.id ?? "";
+  const resumeId: number | "" = typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0 && resumes?.some((resume) => resume.id === candidate) ? candidate : "";
   const { resumeVersionId, setResumeVersionId } = useResumeVersionSelection(
     resumes?.find((resume) => resume.id === resumeId),
-    queryResumeId && Number(queryResumeId) === resumeId && queryResumeVersionId ? Number(queryResumeVersionId) : null,
+    queryResumeId !== null && Number(queryResumeId) === resumeId && queryResumeVersionId !== null ? Number(queryResumeVersionId) : null,
   );
   const buildListUrl = (path: string, cursor?: string) => {
     const params = new URLSearchParams();
@@ -57,60 +60,58 @@ export function useInterviewsPage(queryResumeId: string | null, queryResumeVersi
     delay: 250,
     buildUrl: (cursor) => buildListUrl("/api/interviews/series", cursor),
   });
+  const singleDeletion = useRecordDeletion({
+    baseUrl: "/api/interviews", confirmTitle: "删除面试", recordLabel: "面试", listLabel: "面试历史",
+    confirmMessage: (id, title) => `确定删除面试 #${id}「${title}」？该场全部对话与报告会一并删除，已收藏错题及已生成追练题保留。`,
+    validateExisting: validateExistingInterview,
+  }, singles.reload);
+  const seriesDeletion = useRecordDeletion({
+    baseUrl: "/api/interviews/series", confirmTitle: "删除进阶面试", recordLabel: "进阶面试", listLabel: "进阶面试历史",
+    confirmMessage: (id, title) => `确定删除进阶面试 #${id}「${title}」？三轮对话记录与总评会一并删除，已收藏错题及已生成的追练题保留。`,
+    validateExisting: validateExistingInterviewSeries,
+  }, series.reload);
+  const canDelete = () => singleDeletion.canStart() && seriesDeletion.canStart();
+  const items = singles.items?.filter(item => !singleDeletion.deletedIds.has(item.id)) ?? null;
+  const seriesItems = series.items?.filter(item => !seriesDeletion.deletedIds.has(item.id)) ?? null;
+  // 原列表仍包含已确认删除的条目时同步扣除；服务端刷新已移除后不重复扣减。
+  const removedSingles = singles.items?.filter(item => singleDeletion.deletedIds.has(item.id)).length ?? 0;
+  const removedSeries = series.items?.filter(item => seriesDeletion.deletedIds.has(item.id)).length ?? 0;
 
-  // 简历列表就绪后确定当前选中项：URL 指定且存在则用之，否则落到第一份。
-  // 与拉取分离，避免 queryResumeId 变化时重取列表（旧响应可能覆盖新参数下的选择）。
-  // 这是「外部数据就绪 → 本地默认值」的一次性同步；规则针对的是渲染期级联重渲染，
-  // 而此处只在 resumes 或 queryResumeId 变化时触发一次，故显式豁免该规则。
+  // 仅固定当前来源的首次选择；刷新不重置手选，指定材料缺失时也不借用另一份。
   useEffect(() => {
-    if (!resumes || resumes.length === 0) return;
-    if (queryResumeId && resumes.some((resume) => resume.id === Number(queryResumeId))) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setResumeId(Number(queryResumeId));
-    } else {
-      setResumeId(resumes[0]!.id);
-    }
-  }, [resumes, queryResumeId]);
+    if (!resumes || selection?.key === selectionKey || (candidate === "" && queryResumeId === null)) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelection({ key: selectionKey, id: candidate });
+  }, [resumes, selection?.key, selectionKey, candidate, queryResumeId]);
 
   async function remove(id: number) {
-    if (!(await confirmDialog({ title: "删除面试", message: "确定删除这场面试及其全部对话记录？", danger: true }))) return;
-    try {
-      await jsonFetch(`/api/interviews/${id}`, { method: "DELETE" });
-    } catch (err) {
-      await alertDialog({ title: "删除失败", message: errorMessage(err) });
-      return;
-    }
-    singles.reload();
+    if (!canDelete()) return;
+    const item = items?.find(item => item.id === id);
+    if (item) await singleDeletion.remove(id, interviewDeletionTitle(item));
   }
 
   async function removeSeries(id: number) {
-    if (
-      !(await confirmDialog({
-        title: "删除进阶面试",
-        message: "确定删除这场进阶面试？三轮对话记录与总评会一并删除，已生成的追练题保留。",
-        danger: true,
-      }))
-    ) return;
-    try {
-      await jsonFetch(`/api/interviews/series/${id}`, { method: "DELETE" });
-    } catch (err) {
-      await alertDialog({ title: "删除失败", message: errorMessage(err) });
-      return;
-    }
-    series.reload();
+    if (!canDelete()) return;
+    const item = seriesItems?.find(item => item.id === id);
+    if (item) await seriesDeletion.remove(id, interviewDeletionTitle(item));
   }
 
   return {
     resumes,
     resumesError,
     reloadResumes,
-    items: singles.items,
-    seriesItems: series.items,
-    totalCount: singles.total !== null && series.total !== null ? singles.total + series.total : null,
+    items,
+    seriesItems,
+    totalCount: singles.total !== null && series.total !== null ? Math.max(0, singles.total - removedSingles) + Math.max(0, series.total - removedSeries) : null,
+    deletion: { single: singleDeletion, series: seriesDeletion, busy: singleDeletion.busy || seriesDeletion.busy, canStart: canDelete },
     loadError: singles.listError || series.listError,
     retryLoad: () => {
       if (singles.listError) singles.reload();
       if (series.listError) series.reload();
+    },
+    reloadHistory: () => {
+      singles.reload();
+      series.reload();
     },
     itemsHasMore: singles.hasMore,
     itemsLoadingMore: singles.loadingMore,
@@ -121,7 +122,7 @@ export function useInterviewsPage(queryResumeId: string | null, queryResumeVersi
     seriesLoadFailed: typeof series.failedCursor === "string",
     loadMoreSeries: series.loadMore,
     resumeId,
-    setResumeId,
+    setResumeId: (id: number) => setSelection({ key: selectionKey, id }),
     resumeVersionId,
     setResumeVersionId,
     keyword,

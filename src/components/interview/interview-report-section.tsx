@@ -14,6 +14,7 @@ type InterviewReportSectionProps = {
   setReportTab: (tab: ReportTab) => void;
   focusLabels: string[];
   remediating: boolean;
+  remediationDisabled?: boolean;
   remedialError: string;
   onStartRemediation: () => void;
   onEvaluatorReportGenerated: (report: EvaluatorReport) => void;
@@ -25,6 +26,7 @@ export function InterviewReportSection({
   setReportTab,
   focusLabels,
   remediating,
+  remediationDisabled = false,
   remedialError,
   onStartRemediation,
   onEvaluatorReportGenerated,
@@ -37,13 +39,15 @@ export function InterviewReportSection({
     : interviewStyleOf(data.style).label;
 
   const hasMiningSummary = Boolean(report.mining_summary);
+  const answeredCount = data.turns.filter((turn) => turn.answered_at).length;
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4 wrap-anywhere">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-2.5">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <button
             type="button"
+            aria-pressed={reportTab === "candidate"}
             onClick={() => setReportTab("candidate")}
             className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
               reportTab === "candidate"
@@ -57,6 +61,7 @@ export function InterviewReportSection({
           {(hasMiningSummary || data.style === "mining") && (
             <button
               type="button"
+              aria-pressed={reportTab === "mining"}
               onClick={() => setReportTab("mining")}
               className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
                 reportTab === "mining"
@@ -73,6 +78,7 @@ export function InterviewReportSection({
 
           <button
             type="button"
+            aria-pressed={reportTab === "evaluator"}
             onClick={() => setReportTab("evaluator")}
             className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
               reportTab === "evaluator"
@@ -80,16 +86,16 @@ export function InterviewReportSection({
                 : "border border-line bg-card text-muted hover:text-ink"
             }`}
           >
-            <span>🕵️ 主考官内部录用评审表</span>
-            <span className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-bold text-danger">
-              {data.evaluator_report ? "呈报HR" : "未生成"}
+            <span>🕵️ 面试官模拟评估</span>
+            <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${reportTab === "evaluator" ? "bg-white/20 text-on-primary" : "bg-primary-soft text-primary"}`}>
+              {data.evaluator_report ? "练习参考" : "待补全"}
             </span>
           </button>
         </div>
 
         {reportTab === "evaluator" && data.evaluator_report && (
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-muted font-serif">对标职级：</span>
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+            <span className="text-muted font-serif">职级参考（非官方）：</span>
             <span className="rounded-md border border-primary/30 bg-primary-soft px-2.5 py-0.5 font-mono font-bold text-primary">
               {data.evaluator_report.level}
             </span>
@@ -99,9 +105,9 @@ export function InterviewReportSection({
 
       {!data.evaluator_report && reportTab === "candidate" && (
         <p className="text-xs text-muted" role="status">
-          面试官评估未生成。候选人复盘报告已保留，
+          本页尚无可用的面试官评估。候选人复盘报告已保留，
           <button type="button" className="text-primary underline" onClick={() => setReportTab("evaluator")}>
-            前往重试面试官评估
+            查看生成或恢复状态
           </button>。
         </p>
       )}
@@ -115,7 +121,7 @@ export function InterviewReportSection({
                 <span>本场面试全景评估结果</span>
               </h2>
               <p className="mt-1 text-xs text-muted">
-                结合现场 4 轮追问深度、作答结构与真实项目经验综合评定
+                根据本场已作答的 {answeredCount} 题与提供的材料整理，仅供模拟练习参考；未考察内容仍待核实。
               </p>
             </div>
             <div className="text-right">
@@ -150,7 +156,7 @@ export function InterviewReportSection({
 
             <div className="rounded-xl border border-danger/20 bg-danger-wash/40 p-4 space-y-1.5">
               <div className="flex items-center gap-1.5 font-serif text-xs font-bold text-danger">
-                <span>⚠️ 暴露短板</span>
+                <span>⚠️ 待核实与改进方向</span>
               </div>
               <p className="text-xs text-ink/90 leading-relaxed font-sans">{report.weaknesses}</p>
             </div>
@@ -168,7 +174,7 @@ export function InterviewReportSection({
               <div>
                 <span className="text-xs font-bold text-accent font-serif">⛏️ 经历挖掘专属产物已就绪：</span>
                 <span className="text-xs text-muted ml-1">
-                  已提炼背景/行动/取舍/结果全景、{report.mining_summary!.pending_confirmations.length} 项待确认材料、{report.mining_summary!.resume_bullets.length} 条精修简历草稿
+                  {report.mining_summary!.pending_confirmations.length} 项待确认材料、{report.mining_summary!.resume_bullets.length} 条简历草稿
                 </span>
               </div>
               <button
@@ -185,15 +191,15 @@ export function InterviewReportSection({
             <div className="text-xs text-muted">
               <strong>追练建议重点：</strong>
               <span className="text-primary font-bold ml-1">{focusLabels.join("、") || "综合巩固"}</span>
-              <span className="text-faint ml-2">（将围绕薄弱项一键出 5 道针对性专项考题）</span>
+              <span className="text-faint ml-2">（将围绕重点生成最多 5 道专项练习题）</span>
             </div>
             <button
               type="button"
               className={btnPrimary}
               onClick={onStartRemediation}
-              disabled={remediating}
+              disabled={remediating || remediationDisabled}
             >
-              {remediating ? "出题中…" : "围绕短板一键生成追练题"}
+              {remediating ? "出题中…" : "按练习重点生成追练题"}
             </button>
           </div>
           {remedialError && <p className={`mt-2 text-sm ${textErr}`}>{remedialError}</p>}
@@ -210,14 +216,15 @@ export function InterviewReportSection({
         )
       )}
 
-      {reportTab === "evaluator" && (
+      {/* 切换报告只隐藏卡片，保留在途请求和待读取状态。 */}
+      <div hidden={reportTab !== "evaluator"}>
         <InterviewEvaluatorCard
           report={data.evaluator_report}
           interviewId={data.id}
           styleName={styleName}
           onReportGenerated={onEvaluatorReportGenerated}
         />
-      )}
+      </div>
     </div>
   );
 }

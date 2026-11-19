@@ -4,6 +4,8 @@ import React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScanRepoModal } from "../scan-repo-modal";
+import { emptySummary } from "@/lib/summary";
+import { compareProjectSummaries } from "@/lib/project-summary-diff";
 
 const requests = vi.hoisted(() => ({ jsonFetch: vi.fn(), fetchSse: vi.fn(), confirm: vi.fn() }));
 
@@ -58,6 +60,45 @@ async function startPrecheck() {
 }
 
 describe("ScanRepoModal 初始化边界", () => {
+  it.each(["Codex CLI", "智能推荐 (Auto)"])("晚到的环境检测不能改写用户选择的 %s", async (engine) => {
+    const detected = deferred<{ codex: { available: boolean }; claude: { available: boolean }; recommended: "claude" }>();
+    requests.jsonFetch.mockReturnValueOnce(detected.promise);
+    render(<ScanRepoModal {...baseProps} />);
+    await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(engine.replace(/[()]/g, "\\$&")) }));
+    await act(async () => { detected.resolve({ codex: { available: true }, claude: { available: true }, recommended: "claude" }); });
+    fireEvent.click(screen.getByRole("button", { name: "开始扫描并提炼" }));
+    expect(requests.fetchSse.mock.calls[0]![1].body.preferredCli).toBe(engine === "Codex CLI" ? "codex" : "auto");
+  });
+
+  it("关闭／项目切换会取消检测，重开不沿用旧可用性或未提交路径", async () => {
+    const { rerender, unmount } = render(<ScanRepoModal {...baseProps} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /Codex CLI/ }).querySelector('[title="已安装"]')).not.toBeNull());
+    const firstSignal = requests.jsonFetch.mock.calls[0]![1]?.signal;
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "D:\\synthetic\\unsubmitted" } });
+    fireEvent.click(screen.getByRole("button", { name: /Codex CLI/ }));
+    rerender(<ScanRepoModal {...baseProps} open={false} />);
+    expect(firstSignal?.aborted).toBe(true);
+
+    const second = deferred<unknown>();
+    requests.jsonFetch.mockReturnValueOnce(second.promise);
+    rerender(<ScanRepoModal {...baseProps} />);
+    await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledTimes(2));
+    const secondSignal = requests.jsonFetch.mock.calls[1]![1]?.signal;
+    expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("");
+    expect(screen.getAllByText("检测中...")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /Codex CLI/ }).querySelector('[title="已安装"]')).toBeNull();
+    rerender(<ScanRepoModal {...baseProps} projectId={2} repoPaths={[secondPath]} />);
+    expect(secondSignal?.aborted).toBe(true);
+    await act(async () => { second.resolve({ codex: { available: false }, claude: { available: true }, recommended: "claude" }); });
+    expect(screen.getByRole("button", { name: /Claude Code/ }).querySelector('[title="已安装"]')).toBeNull();
+    expect(screen.getByText(secondPath)).toBeTruthy();
+    expect(screen.queryByText(firstPath)).toBeNull();
+    const currentSignal = requests.jsonFetch.mock.calls[2]![1]?.signal;
+    unmount();
+    expect(currentSignal?.aborted).toBe(true);
+  });
+
   it("重开时使用最新外部路径，普通 props 更新不会重新探测或覆盖本地草稿", async () => {
     const { rerender } = render(<ScanRepoModal {...baseProps} />);
     await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledTimes(1));
@@ -93,6 +134,20 @@ describe("ScanRepoModal 初始化边界", () => {
 });
 
 describe("扫描预检取消和降级", () => {
+  it("从加载遮罩中取消预检，保留路径并明确反馈取消状态", async () => {
+    const { request } = await startPrecheck();
+    const overlay = screen.getByRole("status");
+    const cancel = screen.getByRole("button", { name: "取消" });
+    expect(overlay.contains(cancel)).toBe(true);
+    fireEvent.click(cancel);
+    expect(screen.getByRole("status").textContent).toContain("操作已被用户取消");
+    expect(screen.getByText(firstPath)).toBeTruthy();
+    expect(screen.getByText(secondPath)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "合并扫描 2 个代码库" }) as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => { request.resolve(related); });
+    expect(requests.fetchSse).not.toHaveBeenCalled();
+  });
+
   it.each(["resolve", "reject"])("取消后预检 %s 都不能启动扫描", async (outcome) => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { request } = await startPrecheck();
@@ -148,7 +203,8 @@ describe("扫描预检取消和降级", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始扫描并提炼" }));
     const options = requests.fetchSse.mock.calls[0]![1];
     vi.useFakeTimers();
-    act(() => { options.onDone({ summary: { overview: "合成总结" } }); });
+    const summary = { ...emptySummary(), overview: "合成总结" };
+    act(() => { options.onDone({ summary, comparison: compareProjectSummaries(emptySummary(), summary, {}), materialChanges: [], materialFingerprint: "a".repeat(64), revisionId: 0 }); });
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     act(() => {
       options.onDelta("旧扫描不应回填");
@@ -166,6 +222,7 @@ describe("扫描预检取消和降级", () => {
     const { request } = await startPrecheck();
     await act(async () => { request.resolve({ isRelated: false, reason: "工程不同", method: "heuristic" }); });
     expect(requests.confirm).toHaveBeenCalledTimes(1);
+    expect(requests.confirm.mock.calls[0]![0].signal).toBe(requests.jsonFetch.mock.calls[1]![1].signal);
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await act(async () => { confirmation.resolve(true); });
     expect(requests.fetchSse).not.toHaveBeenCalled();

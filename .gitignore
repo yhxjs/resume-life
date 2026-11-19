@@ -7,6 +7,10 @@
 /coverage
 /test-results/
 /playwright-report/
+/.test-artifacts/
+
+# CI supply chain reports
+/artifacts/
 
 # next.js
 /.next/
@@ -58,4 +62,12 @@ public/uploads/
 # 本地工具目录：截图与草稿可能含真实简历内容，绝不入库
 .impeccable/
 .claude/
+.idea/
+
+# local open-source preparation records
+/.process.json
+/.checklist.json
+/.plan.md
+/.open-source-analysis.md
+/.open-source-proposal.md
 

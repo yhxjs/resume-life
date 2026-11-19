@@ -6,7 +6,7 @@ let cachedKey: string | undefined;
 let cachedDispatcher: Dispatcher | undefined;
 
 function cacheKey(config: ProxyConfig): string {
-  return [config.enabled ? "1" : "0", config.url, config.username, config.password].join("|");
+  return JSON.stringify([config.enabled, config.url, config.username, config.password]);
 }
 
 function closeDispatcher(dispatcher: Dispatcher | undefined): void {

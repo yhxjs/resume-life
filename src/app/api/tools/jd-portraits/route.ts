@@ -4,9 +4,9 @@ import { PreparationInputError, resolvePreparationApplication, linkPreparationRe
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction, now } from "@/lib/db";
-import { extractJson, LlmConfigError } from "@/lib/llm";
-import { normalizeJdPortrait } from "@/lib/jd-portrait";
-import { JD_PORTRAIT_SYSTEM_PROMPT } from "@/lib/jd-portrait-llm";
+import { LlmConfigError } from "@/lib/llm";
+import { validateGeneratedJdPortrait } from "@/lib/jd-portrait";
+import { buildJdPortraitMessages, JD_PORTRAIT_SYSTEM_PROMPT } from "@/lib/jd-portrait-llm";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
 import { createCursorPage, parsePaginationParams } from "@/lib/cursor-pagination";
@@ -47,32 +47,23 @@ async function handlePost(req: Request) {
       "question",
       { feature: LLM_FEATURES.jdPortraitGenerate },
       JD_PORTRAIT_SYSTEM_PROMPT,
-      [
-        {
-          role: "user",
-          parts: [
-            { trust: "trusted", text: "【岗位要求（JD）】\n" },
-            { trust: "untrusted", tag: "job_description", text: jd },
-            { trust: "trusted", text: "\n\n请解析这份 JD，生成考点雷达。" },
-          ],
-        },
-      ],
-      { signal: req.signal, requireJson: true }
+      buildJdPortraitMessages(jd),
+      { signal: req.signal, requireJson: "strict" }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);
     return NextResponse.json({ error: message }, { status: err instanceof ModelInputBudgetError ? 413 : 502 });
   }
 
-  let result: ReturnType<typeof normalizeJdPortrait> = null;
+  let result: ReturnType<typeof validateGeneratedJdPortrait> = null;
   try {
-    result = normalizeJdPortrait(extractJson<unknown>(raw));
+    result = validateGeneratedJdPortrait(JSON.parse(raw));
   } catch {
     // 无效 JSON 或结构不完整时由下方统一返回 502。
   }
   if (!result) {
     return NextResponse.json(
-      { error: "AI 生成结果异常：必考技能/追问方向/公司风格不齐全，请重试" },
+      { error: "AI 生成结果异常：画像字段缺失、重复、超限或格式无效，请重试" },
       { status: 502 }
     );
   }

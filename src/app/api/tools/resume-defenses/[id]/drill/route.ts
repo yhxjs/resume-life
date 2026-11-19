@@ -1,13 +1,17 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
+import { acquireCommandLock } from "@/lib/db";
 import { LlmConfigError } from "@/lib/llm";
+import { ModelInputBudgetError } from "@/lib/llm-input-budget";
 import {
   ModelProtocolError,
   parseDefenseDrillEvaluation,
 } from "@/lib/model-protocol";
-import { getDefenseReport, saveDefenseDrill } from "@/lib/resume-defense";
+import { DefenseDrillSaveError, getDefenseDrill, getDefenseReport, saveDefenseDrill } from "@/lib/resume-defense";
 import {
+  buildResumeDefenseDrillMessages,
   RESUME_DEFENSE_DRILL_SYSTEM_PROMPT,
 } from "@/lib/resume-defense-llm";
 import { logServerError, requestIdFrom } from "@/lib/server-errors";
@@ -18,10 +22,11 @@ async function handlePost(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let release: (() => void) | null = null;
   try {
     const { id } = await params;
-    const numId = Number(id);
-    if (!Number.isInteger(numId) || numId <= 0) {
+    const numId = parseCanonicalPositiveId(id);
+    if (!Number.isSafeInteger(numId) || numId <= 0) {
       return NextResponse.json({ error: "无效的报告 ID" }, { status: 400 });
     }
 
@@ -31,18 +36,22 @@ async function handlePost(
     }
 
     const parsedBody = await parseApiJson<unknown>(req);
-  if (!parsedBody.ok) return parsedBody.response;
-  const body = parsedBody.data as {
-      itemId?: unknown;
-      question?: unknown;
-      userAnswer?: unknown;
-      defensePlan?: unknown;
-    } | null;
+    if (!parsedBody.ok) return parsedBody.response;
+    const body = parsedBody.data;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ error: "请求体必须是 JSON 对象" }, { status: 400 });
+    }
+    const fields = body as Record<string, unknown>;
+    if (["itemId", "question", "userAnswer", "defensePlan"].some(
+      (field) => fields[field] !== undefined && typeof fields[field] !== "string",
+    )) {
+      return NextResponse.json({ error: "演练条目、问题、回答和参考方案必须是字符串" }, { status: 400 });
+    }
 
-    const itemId = typeof body?.itemId === "string" ? body.itemId.trim() : "";
-    const question = typeof body?.question === "string" ? body.question.trim() : "";
-    const userAnswer = typeof body?.userAnswer === "string" ? body.userAnswer.trim() : "";
-    const defensePlan = typeof body?.defensePlan === "string" ? body.defensePlan.trim() : "";
+    const itemId = typeof fields.itemId === "string" ? fields.itemId.trim() : "";
+    const question = typeof fields.question === "string" ? fields.question.trim() : "";
+    const userAnswer = typeof fields.userAnswer === "string" ? fields.userAnswer.trim() : "";
+    const defensePlan = typeof fields.defensePlan === "string" ? fields.defensePlan.trim() : "";
 
     if (!itemId || !question) {
       return NextResponse.json({ error: "题目与项目信息不完整" }, { status: 400 });
@@ -53,9 +62,24 @@ async function handlePost(
     }
 
     const matchedItem = report.items.find((it) => it.id === itemId);
-    const originalText = matchedItem ? matchedItem.originalText : "简历高危软肋";
+    if (!matchedItem) {
+      return NextResponse.json({ error: "演练条目不存在，请刷新报告后重试" }, { status: 400 });
+    }
+    const originalText = matchedItem.originalText;
 
-    const selectedDefensePlan = defensePlan || matchedItem?.defensePlan.standardDefense;
+    // 同进程重复提交在模型前拒绝；保存事务仍复核跨进程写入和背景变化。
+    release = acquireCommandLock(`defense-drill:${JSON.stringify([numId, itemId])}`);
+    if (!release) {
+      return NextResponse.json({ error: "该条演练正在评分，请稍后重试" }, { status: 409 });
+    }
+
+    const selectedDefensePlan = defensePlan || matchedItem.defensePlan.standardDefense;
+    const saveGuard = {
+      sourceContent: report.sourceContent.trim() ? report.sourceContent : "",
+      originalText,
+      ...(!defensePlan ? { defaultDefensePlan: matchedItem.defensePlan.standardDefense } : {}),
+      previousDrill: getDefenseDrill(numId, itemId),
+    };
 
     let raw: string;
     try {
@@ -63,34 +87,15 @@ async function handlePost(
         "evaluate",
         { feature: LLM_FEATURES.defenseDrillGrade, entity: { type: "defense", id: numId } },
         RESUME_DEFENSE_DRILL_SYSTEM_PROMPT,
-        [
-          {
-            role: "user",
-            parts: [
-              { trust: "trusted", text: "【简历原句】\n" },
-              { trust: "untrusted", tag: "resume_excerpt", text: originalText },
-              { trust: "trusted", text: "\n【面试官致命追问】\n" },
-              { trust: "untrusted", tag: "interview_question", text: question },
-              ...(selectedDefensePlan
-                ? [
-                    { trust: "trusted", text: "\n【参考防御方向】\n" } as const,
-                    { trust: "untrusted", tag: "defense_plan", text: selectedDefensePlan } as const,
-                  ]
-                : []),
-              { trust: "trusted", text: "\n【求职者回答】\n" },
-              { trust: "untrusted", tag: "candidate_answer", text: userAnswer },
-              { trust: "trusted", text: "\n\n请以毒舌大厂面试官身份对求职者的回答进行严格批改打分。" },
-            ],
-          },
-        ],
-        { signal: req.signal }
+        buildResumeDefenseDrillMessages({ resumeSource: report.sourceContent, originalText, question, defensePlan: selectedDefensePlan, answer: userAnswer }),
+        { signal: req.signal, requireJson: "strict" }
       );
     } catch (err) {
       const msg =
         err instanceof LlmConfigError
           ? err.message
           : errorMessage(err);
-      return NextResponse.json({ error: msg }, { status: 502 });
+      return NextResponse.json({ error: msg }, { status: err instanceof ModelInputBudgetError ? 413 : 502 });
     }
 
     let parsed;
@@ -115,15 +120,18 @@ async function handlePost(
       defenseScore: parsed.defense_score,
       defenseCritique: parsed.defense_critique,
       improvedAnswer: parsed.improved_answer,
-    });
+    }, saveGuard);
 
     return NextResponse.json(saved);
   } catch (err) {
+    if (err instanceof DefenseDrillSaveError) return NextResponse.json({ error: err.message }, { status: err.status });
     const requestId = logServerError("resume-defenses.drill.save", err, { requestId: requestIdFrom(req), status: 500 });
     return NextResponse.json(
       { error: "保存防御演练失败，请稍后重试", requestId },
       { status: 500 }
     );
+  } finally {
+    release?.();
   }
 }
 

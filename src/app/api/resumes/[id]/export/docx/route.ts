@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { NextResponse } from "next/server";
 import path from "node:path";
 import { withRouteErrorHandling } from "@/lib/api-route";
@@ -14,7 +15,7 @@ import { readUploadFile, uploadPathFromUrl } from "@/lib/upload-storage";
 export const runtime = "nodejs";
 
 async function exportDocx(id: string, options: ResumeExportOptions = {}) {
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isSafeInteger(numericId) || numericId <= 0) {
     return NextResponse.json({ error: "无效的简历 ID" }, { status: 400 });
   }

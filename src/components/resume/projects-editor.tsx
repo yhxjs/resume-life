@@ -16,7 +16,7 @@ import { ExtractDialog, type ExtractPayload } from "@/components/resume/extract-
 import { RichTextEditor } from "@/components/resume/rich-text-editor";
 import { GripIcon, ProjectSubItems } from "@/components/resume/project-sub-items";
 import { genEntryId } from "@/components/resume/project-entry-id";
-import { splitRichTextToLines } from "@/lib/rich-text";
+import { escapePlainTextToRichHtml, splitRichTextToLines } from "@/lib/rich-text";
 import { btnGhost, inputCls, labelCls } from "@/lib/ui";
 
 function parseTextToLines(text: string): string[] {
@@ -215,12 +215,17 @@ function GenericExperienceEditor<T extends CommonExperienceItem>({
       }
     }
 
-    const newDescItems = payload.achievements ?? [];
+    // 摘取草稿来自纯文本输入框；在进入富文本存储时只转义一次，保留泛型、标签及实体字面量。
+    const newDescItems = (payload.achievements ?? []).map(escapePlainTextToRichHtml);
+    // 与编辑区展示规则一致：旧条目可能只有整段 description，不能在摘取时丢失。
+    const existingDescItems = current.descriptionItems && current.descriptionItems.length > 0
+      ? current.descriptionItems
+      : current.description ? parseTextToLines(current.description) : [""];
     let nextDescItems: string[];
     if (payload.mode === "replace") {
-      nextDescItems = newDescItems.length > 0 ? newDescItems : (current.descriptionItems ?? [""]);
+      nextDescItems = newDescItems.length > 0 ? newDescItems : existingDescItems;
     } else {
-      const existing = (current.descriptionItems ?? []).filter((d) => d.trim().length > 0);
+      const existing = existingDescItems.filter((d) => d.trim().length > 0);
       nextDescItems = existing.concat(newDescItems);
       if (nextDescItems.length === 0) nextDescItems = [""];
     }
@@ -558,8 +563,12 @@ function GenericExperienceEditor<T extends CommonExperienceItem>({
                       }
                     />
                     <ExtractDialog
+                      targetId={JSON.stringify([resumeId, config.moduleType, entry.id])}
                       current={entry.description || descList.join("\n")}
                       currentName={(entry[config.primaryField1.key] as string) || ""}
+                      currentSecondary={{ label: config.primaryField2.label, value: (entry[config.primaryField2.key] as string) || "" }}
+                      currentStart={entry.start}
+                      currentEnd={entry.end}
                       currentSubItems={entry.subItems}
                       currentDescriptionItems={descList}
                       onApply={(payload) => handleApplyExtract(itemIndex, payload)}
@@ -692,6 +701,7 @@ export interface CustomEditorProps {
   onChange: (items: CustomItem[], opts?: ChangeOptions) => void;
   status: Status;
   resumeId?: string;
+  onProofingFieldFocus?: (index: number, key: string) => void;
 }
 
 const CUSTOM_CONFIG: ExperienceEditorConfig<CustomItem> = {

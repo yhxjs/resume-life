@@ -106,7 +106,8 @@ export function writeDiagnosisValue(
     return { ...content, text: descriptionItems.join("\n"), descriptionItems };
   }
   if (!Array.isArray(content)) return null;
-  if (!asRecords(content).some((raw) => str(raw.id) === id)) return null;
+  // 旧档案可能含重复 ID；不能把针对一条经历的建议写入所有同名目标。
+  if (!id || asRecords(content).filter((raw) => str(raw.id) === id).length !== 1) return null;
   // education 的 normalizeContent 分支不产出 descriptionItems，
   // 只写 description 就落得住；work/projects 走共用规则。
   if (type === "education") {

@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { NextResponse } from "next/server";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
@@ -12,7 +13,7 @@ type Context = { params: Promise<{ id: string; interviewId: string }> };
 
 async function ids(context: Context) {
   const params = await context.params;
-  return { applicationId: Number(params.id), interviewId: Number(params.interviewId) };
+  return { applicationId: parseCanonicalPositiveId(params.id), interviewId: parseCanonicalPositiveId(params.interviewId) };
 }
 
 function domainError(error: unknown): Response {
@@ -26,7 +27,7 @@ async function handleGet(request: Request, context: Context) {
   try {
     const { applicationId, interviewId } = await ids(context);
     const rawId = new URL(request.url).searchParams.get("recap_id");
-    const recapId = rawId === null ? undefined : Number(rawId);
+    const recapId = rawId === null ? undefined : parseCanonicalPositiveId(rawId);
     return NextResponse.json(getInterviewReview(applicationId, interviewId, recapId));
   } catch (error) { return domainError(error); }
 }

@@ -1,3 +1,5 @@
+import { hasQuestionContent } from "./question-normalization";
+
 /** 进阶面试固定三轮：一面技术面 → 二面主管面 → 三面 HR 面，轮次与人设一一对应 */
 export const SERIES_ROUNDS = 3;
 
@@ -26,6 +28,20 @@ export type SeriesReport = {
   weaknesses: string;
   suggestions: string;
 };
+
+/** 仅约束新生成的每段总评；旧报告读取不套用新篇幅限制。 */
+export const SERIES_REPORT_TEXT_LIMIT = 1200;
+
+export function validateGeneratedSeriesReport(raw: unknown, overall: number): SeriesReport | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const source = raw as Record<string, unknown>;
+  if (Object.keys(source).length !== 4 || ["verdict", "strengths", "weaknesses", "suggestions"].some((key) => !Object.hasOwn(source, key))) return null;
+  if (["verdict", "strengths", "weaknesses", "suggestions"].some((key) =>
+    typeof source[key] !== "string" || !(source[key] as string).trim() ||
+    (source[key] as string).length > SERIES_REPORT_TEXT_LIMIT || !hasQuestionContent(source[key] as string))) return null;
+  // 总分只采用服务端根据三轮报告计算的值，忽略模型自行附加的分数。
+  return normalizeSeriesReport({ ...source, overall });
+}
 
 export function normalizeSeriesReport(raw: unknown): SeriesReport | null {
   if (!raw || typeof raw !== "object") return null;

@@ -1,6 +1,8 @@
 import type { Stats } from "node:fs";
 import { isSafeRepoSourceText } from "./source-snapshot";
 import { repoRootPathError } from "./path-policy";
+import { decodeRepoSourcePrefix, sliceRepoSourcePrefix } from "./source-text";
+import { REPO_MARKERS } from "./project-files";
 
 const fs = process.getBuiltinModule("fs");
 const path = process.getBuiltinModule("path");
@@ -21,28 +23,6 @@ export interface MultiPathValidationResult {
   error?: string;
 }
 
-/** 常见工程构建清单或仓库标识文件 */
-const REPO_MARKERS = [
-  ".git",
-  "package.json",
-  "pom.xml",
-  "build.gradle",
-  "build.gradle.kts",
-  "go.mod",
-  "Cargo.toml",
-  "requirements.txt",
-  "pyproject.toml",
-  "setup.py",
-  "composer.json",
-  "Gemfile",
-  "CMakeLists.txt",
-  "Makefile",
-  "solution.sln",
-  "tsconfig.json",
-  "README.md",
-  "readme.md",
-];
-
 /** 元数据同样只读普通文件；拒绝链接和身份变化，并在读取前限制预算。 */
 function readRepoMetadata(directory: string, name: string): string {
   const root = fs.realpathSync(directory);
@@ -54,9 +34,14 @@ function readRepoMetadata(directory: string, name: string): string {
     const current = fs.fstatSync(descriptor);
     if (!current.isFile() || current.dev !== before.dev || current.ino !== before.ino) return "";
     const bytes = Buffer.alloc(Math.min(current.size, 32_000));
-    const read = fs.readSync(descriptor, bytes, 0, bytes.length, 0);
-    const content = bytes.subarray(0, read).toString("utf8");
-    return isSafeRepoSourceText(content) ? content : "";
+    let read = 0;
+    while (read < bytes.length) {
+      const count = fs.readSync(descriptor, bytes, read, bytes.length - read, read);
+      if (count === 0) break;
+      read += count;
+    }
+    const content = decodeRepoSourcePrefix(bytes.subarray(0, read), current.size > read);
+    return isSafeRepoSourceText(content, current.size > read) ? content : "";
   } finally {
     fs.closeSync(descriptor);
   }
@@ -143,7 +128,7 @@ export function validateRepoPath(inputPath: string): PathValidationResult {
       try {
         const content = readRepoMetadata(normalized, rm);
         if (!content) continue;
-        readmeSnippet = content.slice(0, 1000).trim();
+        readmeSnippet = sliceRepoSourcePrefix(content, 1000).trim();
         break;
       } catch {
         // 忽略读取错误

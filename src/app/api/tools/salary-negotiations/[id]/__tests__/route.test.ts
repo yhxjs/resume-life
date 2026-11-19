@@ -57,13 +57,14 @@ const seedNegotiation = (): number => {
 };
 
 describe("GET/DELETE /api/tools/salary-negotiations/[id] 谈判演练详情", () => {
-  it("GET 返回详情、回合计数与规范化后的心理/建议字段", async () => {
+  it("GET 保留详情和回合，旧空对象不补造模拟状态、评分或练习建议", async () => {
     const id = seedNegotiation();
     const route = await import("../route");
     const res = await route.GET(request(), idContext(id));
     expect(res.status).toBe(200);
     const data = (await res.json()) as {
       id: number;
+      revision: string;
       target_role: string;
       status: string;
       initial_offer: string;
@@ -77,6 +78,7 @@ describe("GET/DELETE /api/tools/salary-negotiations/[id] 谈判演练详情", ()
       }[];
     };
     expect(data.id).toBe(id);
+    expect(data.revision).toMatch(/^[a-f0-9]{64}$/);
     expect(data.target_role).toBe("后端工程师");
     expect(data.status).toBe("ongoing");
     expect(data.initial_offer).toBe("年薪 32 万");
@@ -84,9 +86,8 @@ describe("GET/DELETE /api/tools/salary-negotiations/[id] 谈判演练详情", ()
     expect(data.turns).toHaveLength(1);
     expect(data.turns[0]?.turn_no).toBe(1);
     expect(data.turns[0]?.hr_response).toContain("32 万");
-    // 空对象入库的 hr_mindset 会被规范化为默认心理画像
-    expect(data.turns[0]?.hr_mindset?.looseness).toBe(15);
-    expect(data.turns[0]?.mentor_analysis?.user_argument_score).toBeGreaterThan(0);
+    expect(data.turns[0]?.hr_mindset).toEqual({ looseness: null, current_attitude: "", estimated_package: "", tactics_label: "", internal_pressure: "" });
+    expect(data.turns[0]?.mentor_analysis).toEqual({ user_argument_score: null, strengths: [], vulnerabilities: [], tactical_tips: "", suggested_replies: [] });
   });
 
   it("GET 不存在的演练返回 404，非法 id 返回 400", async () => {
@@ -120,5 +121,48 @@ describe("GET/DELETE /api/tools/salary-negotiations/[id] 谈判演练详情", ()
     expect(zero.status).toBe(400);
     const data = (await zero.json()) as { error: string };
     expect(data.error).toContain("无效的演练 ID");
+  });
+
+  it.each(["abc", "0", "-1", "1.5", "9007199254740992"])("GET/DELETE 无效 ID %s 在查询前拒绝且不改变存档", async (invalid) => {
+    seedNegotiation();
+    const before = db!.prepare("SELECT * FROM salary_negotiations").all();
+    const route = await import("../route");
+    expect((await route.GET(request(), idContext(invalid))).status).toBe(400);
+    expect((await route.DELETE(new Request(request(), { method: "DELETE" }), idContext(invalid))).status).toBe(400);
+    expect(db!.prepare("SELECT * FROM salary_negotiations").all()).toEqual(before);
+  });
+
+  it.each(["{", "[]", "null", '{"suggested_replies":[null]}'])("损坏的军师存档 %s 返回422，不伪造评分或改写数据库", async (invalid) => {
+    const id = seedNegotiation();
+    db!.prepare("UPDATE salary_negotiation_turns SET mentor_analysis=?").run(invalid);
+    const before = db!.prepare("SELECT * FROM salary_negotiation_turns").all();
+    const route = await import("../route");
+    const response = await route.GET(request(), idContext(id));
+    expect(response.status).toBe(422);
+    expect((await response.json()).error).toContain("原始存档未修改");
+    expect(db!.prepare("SELECT * FROM salary_negotiation_turns").all()).toEqual(before);
+    db!.prepare("UPDATE salary_negotiation_turns SET mentor_analysis='{}'").run();
+    expect((await route.GET(request(), idContext(id))).status).toBe(200);
+  });
+
+  it("历史长条件、所有建议和小数评分完整回读，读取零写入", async () => {
+    const id = seedNegotiation();
+    const long = " 原始条件 <T> &amp;\n" + "此前提供的条件。".repeat(100) + "需审批，尚未书面确认。 ";
+    const mindset = { looseness: 20.5, current_attitude: long, estimated_package: long, tactics_label: long, internal_pressure: long };
+    const mentor = { user_argument_score: 7.5, strengths: Array(6).fill(long), vulnerabilities: [], tactical_tips: long,
+      suggested_replies: Array.from({ length: 4 }, (_, index) => ({ title: `${index}${long}`, content: long, rationale: long })) };
+    const report = { final_package_summary: long, score: 70.5, persuasion_grade: "A", leverage_efficiency: "", mentor_summary: long,
+      turn_critiques: [{ turn_no: 1, gain_or_loss: "neutral", summary: long, key_point: long }], real_world_tips: Array(7).fill(long) };
+    db!.prepare("UPDATE salary_negotiation_turns SET hr_mindset=?,mentor_analysis=?").run(JSON.stringify(mindset), JSON.stringify(mentor));
+    db!.prepare("UPDATE salary_negotiations SET status='finished',report=?").run(JSON.stringify(report));
+    const before = [db!.prepare("SELECT * FROM salary_negotiations").all(), db!.prepare("SELECT * FROM salary_negotiation_turns").all()];
+    const { GET } = await import("../route");
+    const response = await GET(request(), idContext(id));
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.turns[0].hr_mindset).toEqual(mindset);
+    expect(data.turns[0].mentor_analysis).toEqual(mentor);
+    expect(data.report).toEqual(report);
+    expect([db!.prepare("SELECT * FROM salary_negotiations").all(), db!.prepare("SELECT * FROM salary_negotiation_turns").all()]).toEqual(before);
   });
 });

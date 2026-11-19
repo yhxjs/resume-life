@@ -31,7 +31,7 @@ afterEach(() => {
   fs.rmSync(resolved, { recursive: true, force: true });
 });
 
-describe("错题本自动同步与回填端到端逻辑", () => {
+describe("错题本写入时补全与反馈归属", () => {
   it("模拟面试生成参考答案后，自动同步到已收藏的错题本中", async () => {
     // 准备数据
     db.prepare("INSERT INTO resumes (id, title, created_at, updated_at) VALUES (1, '测试简历', '2026-01-01', '2026-01-01')").run();
@@ -145,6 +145,95 @@ describe("错题本自动同步与回填端到端逻辑", () => {
     expect(entry.comment).toBe("回答非常到位");
     expect(entry.reference).toContain("标准参考答案：标准盒模型与怪异盒模型");
     expect(entry.scores).toContain('"depth":9');
+  });
+
+  it("练习重答保存成功，但旧收藏的缺失反馈不能从新原答补入", async () => {
+    db.exec(`INSERT INTO drills (id, source, jd, focus, created_at) VALUES (1, 'bank', '接口开发', '', '');
+      INSERT INTO drill_questions (id, drill_id, idx, question, answer, answered_at)
+        VALUES (20, 1, 1, '你个人负责什么？', '原答：仅做接口校验，未上线。', '已答');`);
+    const { POST } = await import("@/app/api/notebook/route");
+    const collected = await POST(new Request("http://localhost/api/notebook", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "drill", source_id: 20 }),
+    }));
+    expect(collected.status).toBe(201);
+    const notebook = await collected.json();
+    const before = db.prepare("SELECT * FROM notebook_entries WHERE id = ?").get(notebook.id);
+    vi.doMock("@/lib/safe-llm", async () => ({
+      ...await vi.importActual<typeof import("@/lib/safe-llm")>("@/lib/safe-llm"),
+      safeChat: vi.fn().mockResolvedValue(JSON.stringify({
+        depth: 8, structure: 8, authenticity: 9, completeness: 8,
+        comment: "本次重答点评", reference: "本次重答参考 <T> &amp;，仍待验证。",
+      })),
+    }));
+    const answer = "新原答：还负责联调 <T> &amp;，仍未上线。";
+    const response = await (await import("@/app/api/drills/[id]/questions/[qid]/route")).POST(
+      new Request("http://localhost/api/drills/1/questions/20", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answer }) }),
+      { params: Promise.resolve({ id: "1", qid: "20" }) },
+    );
+    expect(response.status).toBe(200);
+    expect(db.prepare("SELECT answer, comment FROM drill_questions WHERE id = 20").get())
+      .toEqual({ answer, comment: "本次重答点评" });
+    expect(db.prepare("SELECT * FROM notebook_entries WHERE id = ?").get(notebook.id)).toEqual(before);
+    const detail = await (await import("@/app/api/notebook/[id]/route")).GET(
+      new Request(`http://localhost/api/notebook/${notebook.id}`), { params: Promise.resolve({ id: String(notebook.id) }) },
+    );
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({ answer: "原答：仅做接口校验，未上线。", comment: "", reference: "" });
+    const review = await (await import("@/app/api/reviews/[id]/route")).GET(
+      new Request(`http://localhost/api/reviews/${notebook.review.review_card_id}`),
+      { params: Promise.resolve({ id: String(notebook.review.review_card_id) }) },
+    );
+    expect(review.status).toBe(200);
+    expect(await review.json()).toMatchObject({ answer: "原答：仅做接口校验，未上线。", comment: "", reference: "" });
+  });
+
+  it.each(["重答前", "重答后"])("%s 收藏面试题，重答参考只属于该次重答；原题参考可另行生成补全", async (timing) => {
+    db.exec(`INSERT INTO resumes (id, title, created_at, updated_at) VALUES (1, '测试简历', '', '');
+      INSERT INTO interviews (id, resume_id, jd, rounds, style, status, created_at)
+        VALUES (1, 1, '接口开发', 1, 'deep', 'finished', '');
+      INSERT INTO interview_turns (id, interview_id, idx, kind, question, answer, comment, scores, answered_at)
+        VALUES (10, 1, 1, 'question', '你的个人分工？', '原答：仅做接口校验，未上线。', '原答点评', '{"depth":6,"structure":6,"authenticity":6,"completeness":6}', '已答');`);
+    const notebookRoute = await import("@/app/api/notebook/route");
+    const collect = async () => {
+      const response = await notebookRoute.POST(new Request("http://localhost/api/notebook", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "interview", source_id: 10 }),
+      }));
+      expect(response.status).toBe(201);
+      return response.json() as Promise<{ id: number }>;
+    };
+    let notebook = timing === "重答前" ? await collect() : null;
+    const before = notebook ? db.prepare("SELECT * FROM notebook_entries WHERE id = ?").get(notebook.id) : null;
+    const reference = "本次重答参考 <T> &amp;\n[待补充：真实联调记录]。";
+    vi.doMock("@/lib/safe-llm", async () => ({
+      ...await vi.importActual<typeof import("@/lib/safe-llm")>("@/lib/safe-llm"),
+      safeChat: vi.fn()
+        .mockResolvedValueOnce(JSON.stringify({ depth: 8, structure: 8, authenticity: 9, completeness: 8, comment: "重答点评", reference }))
+        .mockResolvedValueOnce(JSON.stringify({ reference: "依据原答生成的题目参考" })),
+    }));
+    const retry = await (await import("@/app/api/interviews/[id]/turns/[tid]/retry/route")).POST(
+      new Request("http://localhost/api/interviews/1/turns/10/retry", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answer: "重答：还负责联调，未上线。" }),
+      }), { params: Promise.resolve({ id: "1", tid: "10" }) },
+    );
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ reference: "", retry: { answer: "重答：还负责联调，未上线。", reference } });
+    const turn = db.prepare("SELECT answer, comment, reference, retries FROM interview_turns WHERE id = 10").get() as {
+      answer: string; comment: string; reference: string; retries: string;
+    };
+    expect(turn).toMatchObject({ answer: "原答：仅做接口校验，未上线。", comment: "原答点评", reference: "" });
+    expect(JSON.parse(turn.retries)).toEqual([expect.objectContaining({ reference, comment: "重答点评" })]);
+    if (notebook) expect(db.prepare("SELECT * FROM notebook_entries WHERE id = ?").get(notebook.id)).toEqual(before);
+    else notebook = await collect();
+    expect(db.prepare("SELECT answer, comment, reference FROM notebook_entries WHERE id = ?").get(notebook.id))
+      .toEqual({ answer: turn.answer, comment: "原答点评", reference: "" });
+    const generated = await (await import("@/app/api/interviews/[id]/turns/[tid]/reference/route")).POST(
+      new Request("http://localhost/api/interviews/1/turns/10/reference", { method: "POST" }),
+      { params: Promise.resolve({ id: "1", tid: "10" }) },
+    );
+    expect(generated.status).toBe(200);
+    expect(db.prepare("SELECT answer, comment, reference FROM notebook_entries WHERE id = ?").get(notebook.id))
+      .toEqual({ answer: turn.answer, comment: "原答点评", reference: "依据原答生成的题目参考" });
+    expect(db.prepare("SELECT retries FROM interview_turns WHERE id = 10").get()).toEqual({ retries: turn.retries });
   });
 
   it.each(["列表", "详情"])("GET %s 不回填历史快照，并发写锁下仍可只读访问", async (view) => {

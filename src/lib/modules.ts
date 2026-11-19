@@ -152,6 +152,17 @@ export type ModuleData = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
+/** 显式 ID 必须在所属列表内唯一；缺省或空 ID 仍由规范化过程生成。 */
+function hasUniqueExplicitIds(entries: unknown[]): boolean {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!isRecord(entry) || typeof entry.id !== "string" || !entry.id) continue;
+    if (seen.has(entry.id)) return false;
+    seen.add(entry.id);
+  }
+  return true;
+}
+
 /** PATCH 边界只接受符合模块形状的显式草稿；补默认值仍由 normalizeContent 负责。 */
 export function isValidModuleContentInput(type: ModuleKey, raw: unknown): boolean {
   const strings = (o: Record<string, unknown>, keys: string[]) =>
@@ -171,7 +182,7 @@ export function isValidModuleContentInput(type: ModuleKey, raw: unknown): boolea
     return !Object.hasOwn(raw, "descriptionItems") ||
       (Array.isArray(raw.descriptionItems) && raw.descriptionItems.every((value) => typeof value === "string"));
   }
-  if (!Array.isArray(raw)) return false;
+  if (!Array.isArray(raw) || !hasUniqueExplicitIds(raw)) return false;
   const fields = type === "education"
     ? ["id", "school", "degree", "field", "start", "end", "description"]
     : type === "work"
@@ -186,7 +197,7 @@ export function isValidModuleContentInput(type: ModuleKey, raw: unknown): boolea
     if (Object.hasOwn(entry, "descriptionItems") &&
       (!Array.isArray(entry.descriptionItems) || !entry.descriptionItems.every((item) => typeof item === "string"))) return false;
     return !Object.hasOwn(entry, "subItems") ||
-      (Array.isArray(entry.subItems) && entry.subItems.every((item) =>
+      (Array.isArray(entry.subItems) && hasUniqueExplicitIds(entry.subItems) && entry.subItems.every((item) =>
         isRecord(item) && strings(item, ["id", "label", "value"])));
   });
 }

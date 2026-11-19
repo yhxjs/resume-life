@@ -42,6 +42,18 @@ afterEach(() => {
 });
 
 describe("getOverallScore 跨表聚合", () => {
+  it("真实查询失败抛给页面区分于无评分，恢复数据库后仍读取原分", async () => {
+    insertScoredAnswer("drill_questions", { depth: 7.4, structure: 7.4, authenticity: 7.4, completeness: 7.4 });
+    const { getOverallScore } = await import("../overall-score");
+    expect(getOverallScore()).toBe(7.4);
+    db!.exec("BEGIN; ALTER TABLE drill_questions RENAME TO temporarily_unavailable_questions");
+    try {
+      expect(() => getOverallScore()).toThrow();
+    } finally {
+      db!.exec("ROLLBACK");
+    }
+    expect(getOverallScore()).toBe(7.4);
+  });
   it("大量历史作答只从 SQLite 取一行聚合结果，不逐行加载评分", async () => {
     insertScoredAnswer("drill_questions", { depth: 8, structure: 7, authenticity: 9, completeness: 6 });
     const insert = db!.prepare("INSERT INTO drill_questions (drill_id, idx, question, scores, answered_at) VALUES (1, ?, '题', ?, '2026-09-22')");

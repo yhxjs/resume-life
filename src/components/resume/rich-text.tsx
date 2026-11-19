@@ -1,5 +1,5 @@
 import React, { type CSSProperties } from "react";
-import { decodeHtmlEntities, parseRichTextToNodes, type RichTextNode } from "@/lib/rich-text";
+import { parseRichTextToNodes, type RichTextNode } from "@/lib/rich-text";
 
 function renderNode(node: RichTextNode, index: number): React.ReactNode {
   if (node.type === "text") {
@@ -44,10 +44,8 @@ export function RichText({
   as: Component = "span",
 }: RichTextProps) {
   if (!content) return null;
-  const decodedContent = content.includes("&lt;") && content.includes("&gt;")
-    ? decodeHtmlEntities(content)
-    : content;
-  const nodes = parseRichTextToNodes(decodedContent);
+  // 解析器在识别标签后对文本节点解码一次；提前解码会把 Array&lt;T&gt; 等正文吞成标签。
+  const nodes = parseRichTextToNodes(content);
 
   return (
     <Component className={className} style={style}>

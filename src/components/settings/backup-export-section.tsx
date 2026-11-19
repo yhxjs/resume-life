@@ -11,6 +11,7 @@ export function BackupExportSection({
   exportPassword,
   exportConfirmation,
   exporting,
+  locked,
   exportFeedback,
   onExportPasswordChange,
   onExportConfirmationChange,
@@ -21,6 +22,7 @@ export function BackupExportSection({
   exportPassword: string;
   exportConfirmation: string;
   exporting: boolean;
+  locked: boolean;
   exportFeedback: Feedback | null;
   onExportPasswordChange: (password: string) => void;
   onExportConfirmationChange: (confirmation: string) => void;
@@ -46,7 +48,7 @@ export function BackupExportSection({
             autoComplete="off"
             value={exportPassword}
             onChange={(event) => onExportPasswordChange(event.target.value)}
-            disabled={exporting}
+            disabled={locked}
           />
         </label>
         <label className="block">
@@ -57,13 +59,13 @@ export function BackupExportSection({
             autoComplete="off"
             value={exportConfirmation}
             onChange={(event) => onExportConfirmationChange(event.target.value)}
-            disabled={exporting}
+            disabled={locked}
           />
         </label>
       </div>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-[11px] text-faint">密码长度为 12–256 个 Unicode code point，且两次输入必须一致。</p>
-        <button type="button" className={btnPrimary} onClick={onExport} disabled={exporting}>
+        <button type="button" className={btnPrimary} onClick={onExport} disabled={locked}>
           {exporting ? "正在打包导出…" : "导出加密备份 (.rlbackup)"}
         </button>
       </div>

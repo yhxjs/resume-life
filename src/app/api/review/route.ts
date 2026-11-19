@@ -2,9 +2,9 @@ import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { DIMENSIONS, overallOf, safeScores, type ScoreMap } from "@/lib/scores";
+import { MAX_REVIEW_ANSWERS_PER_KIND } from "@/lib/review-dashboard";
 
 const BATCH_SIZE = 1000;
-const MAX_REVIEW_ANSWERS_PER_KIND = 10_000;
 
 type ScoreAccumulator = { count: number; sums: ScoreMap };
 

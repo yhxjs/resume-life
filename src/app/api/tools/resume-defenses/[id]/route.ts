@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
 import { deleteDefenseReport, getDefenseDrills, getDefenseReport } from "@/lib/resume-defense";
@@ -9,8 +10,8 @@ async function handleGet(
 ) {
   try {
     const { id } = await params;
-    const numId = Number(id);
-    if (!Number.isInteger(numId) || numId <= 0) {
+    const numId = parseCanonicalPositiveId(id);
+    if (!Number.isSafeInteger(numId) || numId <= 0) {
       return NextResponse.json({ error: "无效的报告 ID" }, { status: 400 });
     }
 
@@ -40,8 +41,8 @@ async function handleDelete(
 ) {
   try {
     const { id } = await params;
-    const numId = Number(id);
-    if (!Number.isInteger(numId) || numId <= 0) {
+    const numId = parseCanonicalPositiveId(id);
+    if (!Number.isSafeInteger(numId) || numId <= 0) {
       return NextResponse.json({ error: "无效的报告 ID" }, { status: 400 });
     }
 

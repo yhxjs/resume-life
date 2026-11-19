@@ -1,6 +1,7 @@
 import { isStoredProjectSummary } from "./summary";
 import type { DatabaseSync } from "node:sqlite";
 import { BASIC_REORDERABLE_FIELD_KEYS } from "./modules";
+import { DocumentTableProvenanceError, parseDocumentTableProvenance } from "./document-table-provenance";
 
 type Check = (value: unknown) => boolean;
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -51,10 +52,11 @@ const diagnosisSuggestion: Check = (value) => object({
   itemId: string, field: oneOf("description", "text", "items"), reason: string,
   draft: record(value) && value.field === "items" ? strings : string,
 })(value);
-const diagnosis = object({
+/** 历史报告与备份共用存储结构校验；不清洗或重排建议，保留采纳索引。 */
+export const isStoredDiagnosisReport = object({
   match: range(0, 10), summary: string,
   modules: list(object({ moduleKey: string, label: string, scores, gaps: string, suggestions: list(diagnosisSuggestion) })),
-});
+}, { textFormat: oneOf("plain-text"), draftFormat: oneOf("plain-text") });
 const realInterviewQuestion = object({ question: string, answer: string, stuck: string, feedback: string });
 const realInterviewResult = object({
   mistakes: list(object({ question_index: number, gap: string, improved_answer: string })),
@@ -103,6 +105,18 @@ const moduleContent: Record<string, Check> = {
     },
   )),
 };
+
+export const isStoredDiagnosisSnapshot = object({ title: string, modules: list((value) => object({
+  key: string, type: oneOf(...Object.keys(moduleContent)), label: string, sort: number,
+  content: (content) => record(value) && typeof value.type === "string" &&
+    Object.hasOwn(moduleContent, value.type) && moduleContent[value.type]!(content),
+})(value)) });
+
+export const isStoredDiagnosisAdoptions = list(object({
+  moduleKey: string, suggestionIndex: (value) => Number.isSafeInteger(value) && (value as number) >= 0,
+  value: (value) => string(value) || strings(value),
+  applied_at: (value) => typeof value === "string" && Number.isFinite(Date.parse(value)),
+}));
 
 const color: Check = (value) => typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value);
 const style = object({
@@ -183,6 +197,17 @@ const json = (check: Check, allowEmptyString = false): Check => (raw) => {
   if (raw === "" && allowEmptyString) return true;
   try { return check(JSON.parse(raw)); } catch { return false; }
 };
+
+/** 总结历史与备份共用结构约束；空基线和未知材料快照由调用方显式处理。 */
+export const isStoredSummaryAiBaseline: Check = (value) => record(value) && Object.entries(value).every(([key, text]) =>
+  (key === "overview" || key === "architecture" || key === "highlights" || key === "responsibilities" ||
+    key === "challenges" || key === "techStack" || key === "brief" || /^achievement:(0|[1-9]\d*)$/.test(key)) && string(text));
+export const isStoredProjectMaterialSnapshot = list(object({
+  id: (value) => Number.isSafeInteger(value) && (value as number) > 0,
+  title: string,
+  digest: (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
+}));
+
 const fields: Record<string, Record<string, Check>> = {
   application_interview_recaps: { questions: json(list(realInterviewQuestion)), result: json(realInterviewResult) },
   resume_versions: {
@@ -209,14 +234,8 @@ const fields: Record<string, Record<string, Check>> = {
   projects: { summary: json(isStoredProjectSummary) },
   project_summary_history: {
     summary: json(isStoredProjectSummary),
-    ai_baseline: json((value) => record(value) && Object.entries(value).every(([key, text]) =>
-      (key === "overview" || key === "architecture" || key === "highlights" || key === "responsibilities" ||
-        key === "challenges" || key === "techStack" || key === "brief" || /^achievement:(0|[1-9]\d*)$/.test(key)) && string(text))),
-    material_snapshot: nullable(json(list(object({
-      id: (value) => Number.isSafeInteger(value) && (value as number) > 0,
-      title: string,
-      digest: (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
-    })))),
+    ai_baseline: json(isStoredSummaryAiBaseline),
+    material_snapshot: nullable(json(isStoredProjectMaterialSnapshot)),
   },
   drill_questions: { scores: json(scores, true) },
   notebook_entries: { scores: json(scores, true) },
@@ -224,17 +243,9 @@ const fields: Record<string, Record<string, Check>> = {
   interview_turns: { scores: json(scores, true), retries: json(retries) },
   interview_series: { final_report: json(seriesReport, true) },
   resume_diagnoses: {
-    report: json(diagnosis),
-    resume_snapshot: json(object({ title: string, modules: list((value) => object({
-      key: string, type: oneOf(...Object.keys(moduleContent)), label: string, sort: number,
-      content: (content) => record(value) && typeof value.type === "string" &&
-        Object.hasOwn(moduleContent, value.type) && moduleContent[value.type]!(content),
-    })(value)) })),
-    adoptions: json(list(object({
-      moduleKey: string, suggestionIndex: (value) => Number.isSafeInteger(value) && (value as number) >= 0,
-      value: (value) => string(value) || strings(value),
-      applied_at: (value) => typeof value === "string" && Number.isFinite(Date.parse(value)),
-    }))),
+    report: json(isStoredDiagnosisReport),
+    resume_snapshot: json(isStoredDiagnosisSnapshot),
+    adoptions: json(isStoredDiagnosisAdoptions),
   },
   intro_versions: { sentences: json(list(object({ text: string, comment: string }))) },
   resume_templates: { style: json(style) },
@@ -274,6 +285,25 @@ export function validateResumeVersionRelations(database: DatabaseSync): void {
     if (database.prepare(`SELECT 1 FROM ${table} c JOIN resume_versions v ON v.id = c.resume_version_id
       WHERE c.resume_id IS NULL OR c.resume_id != v.resume_id LIMIT 1`).get()) {
       throw new Error(`${table} 的简历版本归属无效`);
+    }
+  }
+}
+
+/** 行可乱序导入；全表到齐后核对来源的严格结构、正文哈希和 UTF-16 范围。 */
+export function validateProjectMaterialTableProvenance(
+  database: DatabaseSync,
+  InvalidData: new (message: string) => Error = Error,
+): void {
+  const rows = database.prepare(`SELECT p.material_id, p.provenance, m.content
+    FROM project_material_table_provenance p LEFT JOIN project_materials m ON m.id = p.material_id`);
+  for (const row of rows.iterate()) {
+    try {
+      if (typeof row.content !== "string" || typeof row.provenance !== "string") throw new DocumentTableProvenanceError();
+      parseDocumentTableProvenance(row.provenance, row.content);
+    } catch (error) {
+      if (!(error instanceof DocumentTableProvenanceError)) throw error;
+      // Do not echo source text or malformed JSON into backup errors.
+      throw new InvalidData(`项目材料表格来源无效：material_id=${String(row.material_id)}`);
     }
   }
 }

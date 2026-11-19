@@ -45,6 +45,7 @@ for (const leave of [true, false]) {
 function syntheticIntro() {
   return {
     id: 9003, jd: "测试岗位", resume_id: 9001, resume_title: "合成简历", created_at: "2026-10-11T00:00:00Z",
+    resume_version_id: null, resume_version: null, resume_version_name: null,
     versions: [
       { kind: "30s", revision: "a".repeat(64), sentences: [
         { text: "字".repeat(40), comment: "合成点评" }, { text: "字".repeat(40), comment: "合成点评" },
@@ -53,6 +54,32 @@ function syntheticIntro() {
     ],
   };
 }
+
+test("intro regeneration confirmation closes when browser history leaves the record", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/intros/9003", route => route.fulfill({ json: syntheticIntro() }));
+  let regenerationRequests = 0;
+  await page.route("**/api/intros/9003/regenerate", route => {
+    regenerationRequests++;
+    return route.fulfill({ status: 500, json: { error: "未确认时不应提交" } });
+  });
+  await page.goto("/intros/9003");
+  await page.getByRole("link", { name: "工具箱", exact: true }).click();
+  await expect(page).toHaveURL(/\/tools$/);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/intros\/9003$/);
+  await page.getByRole("button", { name: "重新构思本版", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("重新生成30 秒版");
+  await page.goForward();
+  await expect(page).toHaveURL(/\/tools$/);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.goBack();
+  await page.getByRole("button", { name: "重新构思本版", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("重新生成30 秒版");
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(regenerationRequests).toBe(0);
+});
 
 test("intro editor preserves oversized pasted text and saves all 800 characters at the boundary", async ({ page }) => {
   await mockApi(page);

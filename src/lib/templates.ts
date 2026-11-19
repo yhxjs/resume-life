@@ -1,6 +1,6 @@
 import { RESUME_TEMPLATES } from "./template-catalog";
 import type { TemplateKey } from "./template-catalog";
-import { BUILTIN_STYLES, DEFAULT_STYLE } from "./template-styles";
+import { BUILTIN_STYLES, DEFAULT_STYLE, SKILL_PILL_ALPHA_HEX } from "./template-styles";
 import type { ResumeStyle } from "./template-styles";
 
 export { RESUME_TEMPLATES } from "./template-catalog";
@@ -57,6 +57,11 @@ const GENERATED_STYLE_KEYS = [
   "sectionTracking", "sectionDeco", "sectionDecoColor", "sectionGapBefore", "sectionGapAfter",
   "entryTitleSize", "entryTitleWeight", "entrySubAccent", "entryGap", "descItemGap", "skillStyle",
 ] as const;
+const GENERATED_STYLE_OPTIONAL_KEYS = [
+  "asidePosition", "asideBg", "asideBorder", "asideBorderColor", "asidePadding", "asideGap", "asideModules",
+  "headerLayout", "contactLayout", "contactSeparator", "contactGap", "skillCols", "entryCols",
+] as const;
+const GENERATED_STYLE_KEY_SET = new Set<string>([...GENERATED_STYLE_KEYS, ...GENERATED_STYLE_OPTIONAL_KEYS]);
 
 function pickEnum<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return typeof value === "string" && (allowed as readonly string[]).includes(value)
@@ -97,19 +102,47 @@ function isHexColor(value: unknown): value is string {
   return typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value);
 }
 
+function contrastRatio(foreground: string, background: string, tintAlpha = 0): number {
+  const channelsOf = (color: string) => color.slice(1).match(/.{2}/g)!.map(channel => parseInt(channel, 16) / 255);
+  const luminance = (channels: number[]) => {
+    const linear = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    return linear[0]! * 0.2126 + linear[1]! * 0.7152 + linear[2]! * 0.0722;
+  };
+  const foregroundChannels = channelsOf(foreground);
+  // CSS 的半透明标签底色先与所在栏的底色合成，再计算文字对比；保留小数避免阈值舍入。
+  const backgroundChannels = channelsOf(background).map((channel, index) =>
+    foregroundChannels[index]! * tintAlpha + channel * (1 - tintAlpha));
+  const values = [luminance(foregroundChannels), luminance(backgroundChannels)].sort((a, b) => b - a);
+  return (values[0]! + 0.05) / (values[1]! + 0.05);
+}
+
+function meetsTextContrast(foreground: string, background: string, tintAlpha = 0): boolean {
+  return contrastRatio(foreground, background, tintAlpha) >= 4.5;
+}
+
 function isEnum<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
-/** AI 样式生成专用的严格校验，避免不完整结果被 normalizeStyle 静默补成默认样式。 */
+/** AI 样式生成专用的严格校验；可选字段可省略，但显式提供的非法值不能静默回退。 */
 export function isCompleteGeneratedStyle(input: unknown): input is ResumeStyle {
   if (!input || typeof input !== "object" || Array.isArray(input)) return false;
   const o = input as Record<string, unknown>;
-  if (GENERATED_STYLE_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(o, key))) return false;
+  if (GENERATED_STYLE_KEYS.some((key) => !Object.prototype.hasOwnProperty.call(o, key)) ||
+      Object.keys(o).some((key) => !GENERATED_STYLE_KEY_SET.has(key))) return false;
 
   const weighted = (value: unknown) =>
     isNumberInRange(value, 400, 900) && Number.isInteger(value) && value % 100 === 0;
   const colors = [o.headerBg, o.accent, o.ink, o.text, o.muted, o.sectionColor, o.sectionDecoColor];
+  const white = "#ffffff";
+  const coloredHeader = o.headerStyle === "banner" || o.headerStyle === "card";
+  const bandSection = o.sectionDeco === "band";
+  // accent 只在经历副标题或技能标签中用作文字；仅用于装饰线时不套文字对比度。
+  const accentText = o.entrySubAccent === true || o.skillStyle === "pill";
+  const contentColors = [o.ink, o.text, o.muted, ...(accentText ? [o.accent] : []), ...(bandSection ? [] : [o.sectionColor])];
+  const contentBackgrounds = o.layout === "twocol" && typeof o.asideBg === "string" ? [white, o.asideBg] : [white];
+  const optional = (key: keyof ResumeStyle, validate: (value: unknown) => boolean) =>
+    !Object.prototype.hasOwnProperty.call(o, key) || validate(o[key]);
 
   return (
     isEnum(o.layout, STYLE_ENUMS.layout) &&
@@ -120,6 +153,8 @@ export function isCompleteGeneratedStyle(input: unknown): input is ResumeStyle {
     isEnum(o.sectionDeco, STYLE_ENUMS.sectionDeco) &&
     isEnum(o.skillStyle, STYLE_ENUMS.skillStyle) &&
     colors.every(isHexColor) &&
+    (!coloredHeader || meetsTextContrast(white, o.headerBg as string)) &&
+    (!bandSection || meetsTextContrast(white, o.sectionDecoColor as string)) &&
     isNumberInRange(o.asideWidth, 30, 100) &&
     isNumberInRange(o.pageMargin, 6, 25) &&
     isNumberInRange(o.baseSize, 9, 14) &&
@@ -138,7 +173,24 @@ export function isCompleteGeneratedStyle(input: unknown): input is ResumeStyle {
     weighted(o.entryTitleWeight) &&
     typeof o.entrySubAccent === "boolean" &&
     isNumberInRange(o.entryGap, 4, 20) &&
-    isNumberInRange(o.descItemGap, 0, 16)
+    isNumberInRange(o.descItemGap, 0, 16) &&
+    optional("contactSeparator", (value) => typeof value === "string" && value.length <= 8) &&
+    optional("contactGap", (value) => isNumberInRange(value, 0, 32)) &&
+    optional("asidePosition", (value) => isEnum(value, STYLE_ENUMS.asidePosition)) &&
+    optional("asideModules", (value) => Array.isArray(value) && value.length <= 6 &&
+      value.every((item) => typeof item === "string" && item.trim().length > 0)) &&
+    optional("asideBg", isHexColor) &&
+    contentBackgrounds.every(background =>
+      contentColors.every(color => meetsTextContrast(color as string, background)) &&
+      (o.skillStyle !== "pill" || meetsTextContrast(o.accent as string, background, parseInt(SKILL_PILL_ALPHA_HEX, 16) / 255))) &&
+    optional("asideBorder", (value) => isEnum(value, STYLE_ENUMS.asideBorder)) &&
+    optional("asideBorderColor", isHexColor) &&
+    optional("asidePadding", (value) => isNumberInRange(value, 0, 40)) &&
+    optional("asideGap", (value) => isNumberInRange(value, 0, 40)) &&
+    optional("headerLayout", (value) => isEnum(value, STYLE_ENUMS.headerLayout)) &&
+    optional("contactLayout", (value) => isEnum(value, STYLE_ENUMS.contactLayout)) &&
+    optional("skillCols", (value) => value === 1 || value === 2 || value === 3) &&
+    optional("entryCols", (value) => value === 1 || value === 2)
   );
 }
 

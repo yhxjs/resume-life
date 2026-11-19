@@ -1,106 +1,66 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Loading, LoadError, SectionTitle } from "@/components/common/ui-bits";
-import { alertDialog, confirmDialog } from "@/components/common/confirm-dialog";
+import { ToolHistoryDeletionFeedback } from "@/components/common/tool-history-deletion-feedback";
+import { useToolHistoryDeletion } from "@/hooks/use-tool-history-deletion";
 import { jsonFetch } from "@/lib/fetcher";
 import {
   btnDanger,
   btnGhost,
   btnPrimary,
   cardCls,
-  badgeDanger,
-  badgeAccent,
-  badgePrimary,
 } from "@/lib/ui";
 import type {
   DefenseDrillRecord,
   ResumeDefenseReport,
-  RiskLevel,
-  RiskType,
   ScannedDefenseItem,
 } from "@/lib/resume-defense";
 import { DefenseDrillDrawer } from "@/components/defense/defense-drill-drawer";
-import { RichText } from "@/components/resume/rich-text";
+import { DefenseQuote } from "@/components/defense/defense-quote";
+import { DefenseRiskLevelTag, DefenseRiskTypeTag } from "@/components/defense/defense-badges";
+import { readDefenseDetail } from "@/lib/resume-defense-detail";
 import { errorMessage } from "@/lib/error-message";
 import { ResumeVersionBadge } from "@/components/resume/resume-version-badge";
 
-function RiskLevelTag({ level }: { level: RiskLevel }) {
-  if (level === "critical") {
-    return <span className={badgeDanger}>⚠️ 极度高危 / 破绽百出</span>;
-  }
-  if (level === "high") {
-    return <span className={badgeDanger}>🔥 疑点密集 / 重点追问</span>;
-  }
-  if (level === "medium") {
-    return <span className={badgeAccent}>⚡ 局部软肋 / 需做预案</span>;
-  }
-  return <span className={badgePrimary}>✓ 相对严密 / 风险可控</span>;
-}
-
-function RiskTypeBadge({ type }: { type: RiskType }) {
-  const map: Record<RiskType, { label: string; cls: string }> = {
-    vague_phrase: { label: "假大空与泛化踩雷", cls: badgeDanger },
-    data_suspicion: { label: "数据悬浮 / 无基线", cls: badgeDanger },
-    buzzword_stuffing: { label: "术语堆砌 / 挂件技术", cls: badgeAccent },
-    scope_ambiguity: { label: "职责边界模糊 / 蹭成果", cls: badgeAccent },
-    logic_flaw: { label: "方案逻辑硬伤", cls: badgeDanger },
-  };
-  const config = map[type] || { label: "潜在软肋", cls: badgeAccent };
-  return <span className={config.cls}>{config.label}</span>;
-}
-
 export default function ResumeDefenseDetailPage() {
   const params = useParams<{ id: string }>();
+  return <DefenseDetail key={params.id} id={params.id} />;
+}
+
+function DefenseDetail({ id }: { id: string }) {
   const router = useRouter();
-  const id = params.id;
 
   const [report, setReport] = useState<ResumeDefenseReport | null>(null);
   const [drills, setDrills] = useState<DefenseDrillRecord[]>([]);
   const [loadError, setLoadError] = useState("");
-  const [isDeleting, setIsDeleting] = useState(false);
+  const active = useRef(false);
+  const deletion = useToolHistoryDeletion("resume-defenses", () => router.push("/tools/defense"));
+  const deleted = report !== null && deletion.deletedIds.has(report.id);
 
   // 侧边抽屉状态
   const [activeItem, setActiveItem] = useState<ScannedDefenseItem | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
 
-  async function handleDeleteReport() {
-    if (!report) return;
-    if (
-      !(await confirmDialog({
-        title: "删除排雷报告",
-        message: "确定删除这份简历排雷报告吗？删除后相关防御演练记录将一并清除。",
-        danger: true,
-      }))
-    ) {
-      return;
-    }
-
-    setIsDeleting(true);
-    try {
-      await jsonFetch(`/api/tools/resume-defenses/${report.id}`, { method: "DELETE" });
-      router.push("/tools/defense");
-    } catch (err) {
-      setIsDeleting(false);
-      await alertDialog({
-        title: "删除失败",
-        message: errorMessage(err),
-      });
-    }
-  }
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    jsonFetch<{ report: ResumeDefenseReport; drills: DefenseDrillRecord[] }>(
-      `/api/tools/resume-defenses/${id}`
+    const controller = new AbortController();
+    jsonFetch<unknown>(
+      `/api/tools/resume-defenses/${id}`, { signal: controller.signal, cache: "no-store" }
     )
       .then((res) => {
         if (cancelled) return;
-        setReport(res.report);
-        setDrills(res.drills || []);
+        const data = readDefenseDetail(res, id);
+        setReport(data.report);
+        setDrills(data.drills);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -108,15 +68,18 @@ export default function ResumeDefenseDetailPage() {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [id, loadAttempt]);
 
   function openDrill(item: ScannedDefenseItem) {
+    if (!active.current || deletion.busy || deleted) return;
     setActiveItem(item);
     setDrawerOpen(true);
   }
 
   function handleDrillSaved(newDrill: DefenseDrillRecord) {
+    if (!active.current || !report || newDrill.defenseId !== report.id) return;
     setDrills((prev) => {
       const idx = prev.findIndex((d) => d.itemId === newDrill.itemId);
       if (idx >= 0) {
@@ -140,34 +103,40 @@ export default function ResumeDefenseDetailPage() {
   }
 
   if (!report) {
-    return <Loading label="正在拉取毒舌面试官排雷报告…" />;
+    return <Loading label="正在读取简历排雷报告…" />;
   }
+
+  if (deleted) return <div className="space-y-3">
+    <p role="status">报告已不存在，正在返回排雷列表…</p>
+    <Link href="/tools/defense" className={btnGhost}>返回排雷列表</Link>
+  </div>;
 
   const drillsMap = new Map(drills.map((d) => [d.itemId, d]));
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="mx-auto min-w-0 max-w-6xl space-y-8 [overflow-wrap:anywhere]">
+      <ToolHistoryDeletionFeedback deletion={deletion} />
       {/* 顶栏导航 */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-line pb-5">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-start gap-3">
           <Link
             href="/tools/defense"
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-line bg-card text-muted hover:text-ink hover:bg-surface transition-colors shadow-xs"
+            className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-line bg-card text-muted hover:text-ink hover:bg-surface transition-colors shadow-xs"
             title="返回排雷工具"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
               <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
             </svg>
           </Link>
-          <div>
-            <div className="flex items-center gap-2">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
               <h1 className="font-serif text-2xl sm:text-3xl font-bold text-ink">{report.title}</h1>
               <ResumeVersionBadge resume_version_id={report.resumeVersionId} />
-              <RiskLevelTag level={report.riskLevel} />
+              <DefenseRiskLevelTag level={report.riskLevel} />
             </div>
             {report.targetRole && (
               <p className="text-xs text-muted mt-0.5">
-                模拟目标大厂定位：<span className="font-medium text-ink">{report.targetRole}</span>
+                目标岗位：<span className="font-medium text-ink">{report.targetRole}</span>
               </p>
             )}
           </div>
@@ -179,24 +148,24 @@ export default function ResumeDefenseDetailPage() {
           </Link>
           <button
             type="button"
-            onClick={handleDeleteReport}
-            disabled={isDeleting}
+            onClick={() => void deletion.remove(report.id, report.title)}
+            disabled={deletion.busy}
             className={`${btnDanger} text-xs cursor-pointer`}
           >
-            {isDeleting ? "正在删除…" : "删除报告"}
+            删除报告
           </button>
         </div>
       </div>
 
       {/* 毒舌面试官总体吐槽 */}
       <div className="rounded-2xl border border-danger/30 bg-gradient-to-br from-danger-wash/60 via-card to-card p-6 shadow-card-subtle space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-danger/10 text-danger font-bold text-base">
-              🤬
+              🔎
             </span>
             <span className="font-serif text-base font-bold text-ink">
-              大厂毒舌面试官 · 综合现场开盘风评
+              简历表述审阅 · 整体建议
             </span>
           </div>
           <span className="text-[11px] text-faint font-mono">
@@ -206,13 +175,14 @@ export default function ResumeDefenseDetailPage() {
         <p className="text-xs sm:text-sm text-ink leading-relaxed font-sans bg-card/70 border border-line/60 rounded-xl p-4">
           &ldquo;{report.overallRoast}&rdquo;
         </p>
+        <p className="text-xs text-muted leading-relaxed">以下内容基于本次材料生成，是待核实线索，不是事实认定；练习参考不代表你的真实经历。</p>
       </div>
 
       {/* 抓出的软肋列表 */}
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <SectionTitle count={report.items.length}>
-            被圈出的高危破绽与防御预案
+            待核实表述与练习参考
           </SectionTitle>
           <span className="text-xs text-muted">
             已完成演练: <b className="font-mono text-ink">{drills.length}</b> / {report.items.length}
@@ -230,11 +200,11 @@ export default function ResumeDefenseDetailPage() {
               >
                 {/* 卡片头部 */}
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/60 pb-3">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-surface font-mono text-xs font-bold text-muted border border-line">
                       #{idx + 1}
                     </span>
-                    <RiskTypeBadge type={item.riskType} />
+                    <DefenseRiskTypeTag type={item.riskType} />
                     <span className="text-xs text-faint">模块: {item.sectionHint}</span>
                   </div>
 
@@ -242,15 +212,16 @@ export default function ResumeDefenseDetailPage() {
                     {existingDrill && (
                       <span className="inline-flex items-center gap-1 rounded-md bg-surface px-2 py-0.5 text-xs text-muted border border-line font-mono">
                         <span>已演练得分:</span>
-                        <b className={existingDrill.defenseScore >= 75 ? "text-primary" : "text-danger"}>
-                          {existingDrill.defenseScore}分
-                        </b>
+                        {existingDrill.defenseScore >= 0 && existingDrill.defenseScore <= 100
+                          ? <b className={existingDrill.defenseScore >= 90 ? "text-primary" : existingDrill.defenseScore >= 50 ? "text-accent" : "text-danger"}>{existingDrill.defenseScore}分</b>
+                          : <span>未提供有效演练分数</span>}
                       </span>
                     )}
 
                     <button
                       type="button"
                       onClick={() => openDrill(item)}
+                      disabled={deletion.busy}
                       className={`${btnPrimary} text-xs py-1.5 px-3 cursor-pointer`}
                     >
                       <span aria-hidden>🛡️</span>
@@ -263,17 +234,17 @@ export default function ResumeDefenseDetailPage() {
                 <div className="space-y-1.5">
                   <div className="text-xs font-semibold text-muted flex items-center gap-1.5">
                     <span className="h-1.5 w-1.5 rounded-full bg-danger" />
-                    <span>抓包原句：</span>
+                    <span>引用预览：</span>
                   </div>
                   <div className="rounded-xl border border-danger/20 bg-danger-wash/30 p-3 font-mono text-xs text-ink leading-relaxed break-words">
-                    &ldquo;<RichText content={item.originalText} />&rdquo;
+                    <DefenseQuote text={item.originalText} />
                   </div>
                 </div>
 
                 {/* 毒舌吐槽 */}
                 <div className="space-y-1.5 rounded-xl border border-line/80 bg-surface/40 p-3.5 text-xs">
                   <div className="flex items-center gap-1.5 font-bold text-danger text-[11px]">
-                    <span>💬 面试官内心OS / 毒舌挑刺：</span>
+                    <span>💬 表述点评：</span>
                   </div>
                   <p className="text-ink leading-relaxed font-sans">{item.interviewerRoast}</p>
                 </div>
@@ -281,7 +252,7 @@ export default function ResumeDefenseDetailPage() {
                 {/* 致命连环追问 */}
                 <div className="space-y-2">
                   <span className="text-xs font-bold text-ink flex items-center gap-1.5">
-                    <span>🎯 面试现场致命连环追问：</span>
+                    <span>🎯 可练习的追问：</span>
                   </span>
                   <div className="space-y-1.5">
                     {(item.deadlyQuestions || []).map((q, qIdx) => (
@@ -292,7 +263,7 @@ export default function ResumeDefenseDetailPage() {
                         <span className="shrink-0 mt-0.5 rounded bg-surface px-1.5 py-0.2 font-mono text-[10px] text-faint border border-line">
                           追问 {qIdx + 1}
                         </span>
-                        <span className="leading-relaxed">{q}</span>
+                        <span className="min-w-0 leading-relaxed">{q}</span>
                       </div>
                     ))}
                   </div>
@@ -301,37 +272,39 @@ export default function ResumeDefenseDetailPage() {
                 {/* 防御应答预案 */}
                 <div className="rounded-xl border border-line bg-surface/30 p-4 space-y-3 text-xs">
                   <div className="font-serif font-bold text-ink flex items-center gap-1.5 text-xs">
-                    <span>🛡️ 攻防拆解与自辩预案</span>
+                    <span>🛡️ 追问分析与练习参考</span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div className={`grid grid-cols-1 ${item.defensePlan?.tabooMistakes?.length ? "md:grid-cols-2" : ""} gap-3 pt-1`}>
                     <div className="space-y-1">
                       <span className="font-semibold text-muted text-[11px] block">
-                        🧐 考官探底真实动机：
+                        🧐 追问可能核实的信息：
                       </span>
                       <p className="text-ink leading-relaxed bg-card p-2.5 rounded-lg border border-line/60">
                         {item.defensePlan?.interviewerIntent}
                       </p>
                     </div>
 
-                    <div className="space-y-1">
-                      <span className="font-semibold text-danger text-[11px] block">
-                        🚫 绝对不能说的自曝禁忌：
-                      </span>
-                      <ul className="space-y-1 bg-card p-2.5 rounded-lg border border-line/60">
-                        {(item.defensePlan?.tabooMistakes || []).map((t, tIdx) => (
-                          <li key={tIdx} className="text-danger/90 leading-relaxed flex items-start gap-1">
-                            <span>•</span>
-                            <span>{t}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                    {!!item.defensePlan?.tabooMistakes?.length && (
+                      <div className="space-y-1">
+                        <span className="font-semibold text-danger text-[11px] block">
+                          🚫 应避免的失实表达：
+                        </span>
+                        <ul className="space-y-1 bg-card p-2.5 rounded-lg border border-line/60">
+                          {item.defensePlan.tabooMistakes.map((t, tIdx) => (
+                            <li key={tIdx} className="text-danger/90 leading-relaxed flex items-start gap-1">
+                              <span>•</span>
+                              <span>{t}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-1 pt-1">
                     <span className="font-semibold text-primary text-[11px] block">
-                      💡 推荐标准防御口径（STAR+数据基准+权衡）：
+                      💡 练习参考（按已确认事实调整）：
                     </span>
                     <div className="rounded-lg border border-primary/20 bg-primary-soft/20 p-3 text-ink leading-relaxed font-sans">
                       {item.defensePlan?.standardDefense}
@@ -352,6 +325,7 @@ export default function ResumeDefenseDetailPage() {
         isOpen={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         onDrillSaved={handleDrillSaved}
+        onDrillsReloaded={(records) => { if (active.current) setDrills(records); }}
       />
     </div>
   );

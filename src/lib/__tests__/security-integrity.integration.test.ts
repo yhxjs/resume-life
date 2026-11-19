@@ -161,7 +161,7 @@ describe("安全与完整性：练习评分提交", () => {
 });
 
 describe("安全与完整性：AI 总结协议", () => {
-  // 现行协议（summary.ts isGeneratedProjectSummary）：五维其一非空即放行，仅接受全空/类型错误的结构
+  // 完整生成必须返回八字段；缺失字段不能靠清洗补齐成成功草稿。
   it.each(["[]", "null", '{"overview":42}'])("拒绝结构错误的模型输出 %s", async (raw) => {
     db.prepare("INSERT INTO projects (id,name,summary,created_at,updated_at) VALUES (1,'项目',?,'old','old')").run(JSON.stringify({ ...emptySummary(), overview: "原总结" }));
     db.exec("INSERT INTO project_materials (project_id,title,content,created_at) VALUES (1,'材料','项目事实','old')");
@@ -173,22 +173,21 @@ describe("安全与完整性：AI 总结协议", () => {
     expect(stream).not.toContain("event: done");
     expect(db.prepare("SELECT summary FROM projects WHERE id = 1").get()).toEqual({ summary: JSON.stringify({ ...emptySummary(), overview: "原总结" }) });
   });
-  it("单个有效五维字段的模型输出仍返回待确认草稿", async () => {
+  it("单个有效五维字段不能掩盖残缺的模型输出", async () => {
     db.prepare("INSERT INTO projects (id,name,summary,created_at,updated_at) VALUES (1,'项目',?,'old','old')").run(JSON.stringify({ ...emptySummary(), overview: "原总结" }));
     db.exec("INSERT INTO project_materials (project_id,title,content,created_at) VALUES (1,'材料','项目事实','old')");
     llm.chatStream.mockResolvedValueOnce('{"overview":"概述"}');
     const { POST } = await import("@/app/api/projects/[id]/summarize/route");
     const response = await POST(new Request("http://localhost/api/projects/1/summarize", { method: "POST" }), resumeParams);
     const stream = await response.text();
-    expect(stream).toContain("event: done");
-    expect(stream).not.toContain("event: error");
-    // 草稿确认制：AI 产出不经确认不写库，原总结保持不变
+    expect(stream).toContain("event: error");
+    expect(stream).not.toContain("event: done");
     expect(db.prepare("SELECT summary FROM projects WHERE id = 1").get()).toEqual({ summary: JSON.stringify({ ...emptySummary(), overview: "原总结" }) });
   });
-  it("合法五字段模型输出仍返回待确认草稿", async () => {
+  it("完整八字段的稀疏模型输出仍返回待确认草稿", async () => {
     db.exec("INSERT INTO projects (id,name,created_at,updated_at) VALUES (1,'项目','old','old'); INSERT INTO project_materials (project_id,title,content,created_at) VALUES (1,'材料','项目事实','old')");
     llm.chatStream.mockResolvedValueOnce(JSON.stringify({
-      overview: "概述", architecture: "架构", highlights: "亮点", responsibilities: "职责", challenges: "难点",
+      ...emptySummary(), overview: "概述", architecture: "架构", highlights: "亮点", challenges: "难点",
     }));
     const { POST } = await import("@/app/api/projects/[id]/summarize/route");
     const response = await POST(new Request("http://localhost/api/projects/1/summarize", { method: "POST" }), resumeParams);

@@ -18,6 +18,6 @@ describe("AI 生成输出结构校验", () => {
 
   it("拒绝只有摘要的薪酬复盘报告", async () => {
     const { validateGeneratedNegotiationReport } = await import("../salary-negotiation");
-    expect(validateGeneratedNegotiationReport({ final_package_summary: "30k", mentor_summary: "完成" })).toBeNull();
+    expect(validateGeneratedNegotiationReport({ final_package_summary: "30k", mentor_summary: "完成" }, [])).toBeNull();
   });
 });

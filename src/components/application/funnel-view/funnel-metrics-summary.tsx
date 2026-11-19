@@ -12,12 +12,13 @@ export function FunnelMetricsSummary({ metrics }: FunnelMetricsSummaryProps) {
     totalActive,
     totalOffers,
     totalRejected,
+    totalCompleted,
     winRate,
     overallYieldRate,
   } = metrics;
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <section aria-label="投递统计概览" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {/* 总求职投递 */}
       <div className="rounded-xl border border-line bg-card p-3 shadow-card-subtle flex flex-col justify-between">
         <span className="text-xs text-muted">总跟进意向/投递</span>
@@ -25,7 +26,7 @@ export function FunnelMetricsSummary({ metrics }: FunnelMetricsSummaryProps) {
           <span className="font-mono text-2xl font-bold text-ink tabular-nums">
             {totalApplications}
           </span>
-          <span className="text-[10px] text-faint">家企业</span>
+          <span className="text-[10px] text-faint">条记录</span>
         </div>
       </div>
 
@@ -64,33 +65,32 @@ export function FunnelMetricsSummary({ metrics }: FunnelMetricsSummaryProps) {
         </div>
       </div>
 
-      {/* 终局胜率 */}
+      {/* 只在已结束记录中计算 Offer 占比 */}
       <div className="rounded-xl border border-line bg-card p-3 shadow-card-subtle flex flex-col justify-between">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-muted">完赛胜率 (Offer率)</span>
-        </div>
+        <span className="text-xs text-muted">已结束记录 Offer 占比</span>
         <div className="mt-2 flex items-baseline justify-between">
           <span className="font-mono text-2xl font-bold text-accent tabular-nums">
-              {metrics.totalCompleted ? `${winRate}%` : "—"}
+            {totalCompleted ? `${winRate}%` : "—"}
           </span>
-          <span className="text-[10px] text-muted">通过/(通过+终止)</span>
+          <span className="text-[10px] text-muted">{totalOffers} / {totalCompleted}</span>
         </div>
+        <p className="mt-1 text-[10px] text-muted">Offer /（Offer + 终止）</p>
       </div>
 
-      {/* 总体投录比 */}
+      {/* 全部记录包含尚未投递的意向 */}
       <div className="rounded-xl border border-line bg-card p-3 shadow-card-subtle flex flex-col justify-between">
-        <span className="text-xs text-muted">总体投录产出比</span>
+        <span className="text-xs text-muted">全部记录 Offer 占比</span>
         <div className="mt-2 flex items-baseline justify-between">
           <span className="font-mono text-2xl font-bold text-ink tabular-nums">
-            {overallYieldRate}%
+            {totalApplications ? `${overallYieldRate}%` : "—"}
           </span>
           <span className="text-[10px] text-faint">
-            {totalOffers > 0 && totalApplications > 0
-              ? `约 1:${Math.round(totalApplications / totalOffers)}`
-              : "暂无产出"}
+            {totalOffers} / {totalApplications}
           </span>
         </div>
+        <p className="mt-1 text-[10px] text-muted">Offer / 全部记录（含意向）</p>
       </div>
-    </div>
+      <p className="col-span-full text-xs leading-relaxed text-muted">按当前所选批次的意向／投递记录统计，同一企业的不同记录分别计数；“—”表示没有可计算的记录。</p>
+    </section>
   );
 }

@@ -297,9 +297,9 @@ export interface ApplicationStats {
   totalActive: number;
   upcomingInterviews: Application[];
   rates: {
-    appliedRate: number;    // 意向 -> 投递
-    interviewRate: number;  // 投递 -> 约面
-    offerRate: number;      // 约面 -> Offer
+    appliedRate: number;    // 意向阶段已结算推进率；无分母时兼容返回 0。
+    interviewRate: number;  // 简历筛选已结算通过率；无分母时同上。
+    offerRate: number;      // 已结束记录 Offer 占比，等于 funnel.winRate。
   };
   batchStats?: FunnelBatchMetric[];
   funnel?: FunnelMetrics;
@@ -367,8 +367,8 @@ export interface FunnelMetrics {
   totalCompleted: number; // offer + rejected
   totalOffers: number;
   totalRejected: number;
-  winRate: number;         // 胜率: offer / (offer + rejected) * 100
-  overallYieldRate: number;// 投录比率: offer / totalApplications * 100
+  winRate: number;         // 已结束记录 Offer 占比；totalCompleted 为 0 时兼容返回 0，显示端须区分无分母。
+  overallYieldRate: number;// 全部记录（含意向）Offer 占比；totalApplications 为 0 时同上，不表示企业成功率。
   steps: FunnelStepMetric[];
   insights: FunnelInsight[];
   hiringSteps: HiringStepMetric[];

@@ -30,11 +30,11 @@ export function ReviewWorkbench({ initialCardId }: { initialCardId: number | nul
           </div>
           <label className="flex items-center gap-2 text-sm text-muted">复习来源<select className={inputCls} value={source} onChange={event => setSource(event.target.value as "all" | ReviewSource)}><option value="all">全部来源</option><option value="notebook">错题本</option><option value="remedial">面试追练</option></select></label>
         </div>
-        {error && <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg bg-danger-wash p-4 text-sm text-danger"><span>{error}</span><button type="button" className={btnGhost} onClick={reload}>重试加载</button></div>}
+        {error && <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg bg-danger-wash p-4 text-sm text-danger"><span className="min-w-0 [overflow-wrap:anywhere]">{error}</span><button type="button" className={btnGhost} onClick={reload}>重试加载</button></div>}
         {loading && <p role="status" className="text-sm text-muted">正在加载复习题目…</p>}
         {data && <ul aria-busy={loading} className="divide-y divide-line rounded-xl border border-line bg-card px-4 sm:px-6">{data.items.map(card => <li key={card.id} className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0 space-y-2"><div className="flex flex-wrap gap-2 text-xs text-muted"><span>{card.source === "notebook" ? "错题本" : "面试追练"}</span><span>{card.source_label}</span></div>
-            <h2 className="break-words font-serif text-base font-bold text-ink">{card.question}</h2>
+          <div className="min-w-0 space-y-2"><div className="flex flex-wrap gap-2 text-xs text-muted"><span>{card.source === "notebook" ? "错题本" : "面试追练"}</span><span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{card.source_label}</span></div>
+            <h2 className="whitespace-pre-wrap font-serif text-base font-bold text-ink [overflow-wrap:anywhere]">{card.question}</h2>
             <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted"><span className="text-primary">{REVIEW_MASTERY_LABELS[card.mastery]}</span><span>{card.mastery === "new" ? "今日可复习" : `下次复习 ${card.next_review_date}`}</span><span>{`已复习 ${card.review_count} 次`}</span>{card.mastery !== "new" && card.next_review_date < data.summary.date && <span className="text-danger">已逾期</span>}</p>
           </div>
           <Link href={`/reviews?card=${card.id}`} className={`${btnGhost} self-start sm:self-auto`}>遮住答案重答 →</Link>

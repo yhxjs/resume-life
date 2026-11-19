@@ -1,6 +1,9 @@
-import { getDb } from "./db";
-import { collectByCharacterBudget } from "./budgeted-query";
-import { parseSummary, SUMMARY_SECTIONS } from "./summary";
+import { getDb, inTransaction } from "./db";
+import { parseSummary, ProjectSummaryCorruptError } from "./summary";
+import { ModelInputBudgetError } from "./llm-input-budget";
+import { serializeProjectInterviewContext } from "./project-interview-context";
+import { iterateProjectMaterialSources } from "./project-materials";
+import { DocumentTableProvenanceError } from "./document-table-provenance";
 
 export class ProjectNotFoundError extends Error {
   constructor() {
@@ -9,8 +12,7 @@ export class ProjectNotFoundError extends Error {
   }
 }
 
-export function loadProjectRow(id: number) {
-  const db = getDb();
+export function loadProjectRow(id: number, db = getDb()) {
   return db
     .prepare("SELECT id, name, summary, summary_updated_at, created_at, updated_at FROM projects WHERE id = ?")
     .get(id) as
@@ -18,46 +20,29 @@ export function loadProjectRow(id: number) {
     | undefined;
 }
 
-export async function collectProjectMaterialText(
-  projectId: number,
-  maxChars: number,
-  format: (material: { id: number; title: string; content: string }, index: number) => string,
-): Promise<string> {
-  const db = getDb();
-  let index = 0;
-  const chunks = await collectByCharacterBudget({
-    maxChars,
-    batchSize: 50,
-    loadAfter: (cursor, limit) => db
-      .prepare(
-        "SELECT id, title, content FROM project_materials WHERE project_id = ? AND id > ? ORDER BY id LIMIT ?",
-      )
-      .all(projectId, cursor, limit) as { id: number; title: string; content: string }[],
-    cursorOf: (material) => material.id,
-    format: (material) => format(material, index++),
-  });
-  return chunks.join("");
+/** 完整项目档案与材料；超限即拒绝，不把截断片段交给出题或评分。 */
+export async function loadProjectContext(projectId: number, opts?: { maxChars?: number }): Promise<string> {
+  // 同步短事务读取同一份档案与材料，模型等待期间不持锁。
+  return inTransaction(() => readProjectContext(projectId, opts));
 }
 
-/** 把项目档案（总结条目 + 材料节选）拼成供 LLM 使用的上下文文本 */
-export async function loadProjectContext(projectId: number, opts?: { maxChars?: number }): Promise<string> {
+/** 提交前复核实际提供的完整记录；忽略未进入提示词的时间戳等元数据。 */
+export function projectContextMatches(projectId: number, expected: string): boolean {
+  try {
+    return inTransaction(() => readProjectContext(projectId) === expected);
+  } catch (error) {
+    if (error instanceof ProjectNotFoundError || error instanceof ProjectSummaryCorruptError
+      || error instanceof ModelInputBudgetError || error instanceof DocumentTableProvenanceError) return false;
+    throw error;
+  }
+}
+
+function readProjectContext(projectId: number, opts?: { maxChars?: number }): string {
   const row = loadProjectRow(projectId);
   if (!row) throw new ProjectNotFoundError();
-  const maxChars = opts?.maxChars ?? 40000;
-  const parts: string[] = [`项目名称：${row.name}`];
-  const summary = parseSummary(row.summary);
-  const summaryLines = SUMMARY_SECTIONS.filter((s) => summary[s.key].trim()).map(
-    (s) => `【${s.label}】${summary[s.key].trim()}`
-  );
-  if (summaryLines.length) parts.push("项目档案：\n" + summaryLines.join("\n"));
-  const fixedContext = parts.join("\n\n");
-  if (fixedContext.length >= maxChars) return fixedContext.slice(0, maxChars);
-
-  const materials = await collectProjectMaterialText(
-    projectId,
-    maxChars - fixedContext.length,
-    (material, index) =>
-      `${index === 0 ? "\n\n材料节选：\n" : "\n\n"}--- ${material.title} ---\n${material.content}`,
-  );
-  return fixedContext + materials;
+  return serializeProjectInterviewContext({
+    projectName: row.name,
+    archive: parseSummary(row.summary),
+    materials: iterateProjectMaterialSources(projectId),
+  }, opts?.maxChars ?? 40_000);
 }

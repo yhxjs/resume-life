@@ -2,21 +2,22 @@ import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction, now } from "@/lib/db";
-import { extractJson, LlmConfigError } from "@/lib/llm";
+import { LlmConfigError } from "@/lib/llm";
 import {
-  COMPANY_TIER_OPTIONS,
+  describeNegotiationCompany,
+  describeNegotiationHrStyle,
   HR_STYLE_OPTIONS,
   validateGeneratedNegotiationOpening,
-  type HrStyle,
 } from "@/lib/salary-negotiation";
 import {
   SALARY_NEGOTIATION_OPENING_PROMPT,
-  buildOpeningUserPrompt,
+  buildOpeningMessages,
   NegotiationBudgetError,
 } from "@/lib/salary-negotiation-llm";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
 import { createCursorPage, parsePaginationParams } from "@/lib/cursor-pagination";
+import { claimSalaryCreationRequest, completeSalaryCreationRequest, failSalaryCreationRequest, isSalaryCreationRequestId } from "@/lib/salary-creation-requests";
 
 async function handleGet(req: Request) {
   const searchParams = new URL(req.url).searchParams;
@@ -67,15 +68,27 @@ async function handleGet(req: Request) {
 }
 
 async function handlePost(req: Request) {
+  const requestId = req.headers.get("Idempotency-Key");
+  if (requestId !== null && !isSalaryCreationRequestId(requestId)) {
+    return NextResponse.json({ error: "创建请求编号无效" }, { status: 400 });
+  }
   const parsedBody = await parseApiJson<unknown>(req);
   if (!parsedBody.ok) return parsedBody.response;
+  if (!parsedBody.data || typeof parsedBody.data !== "object" || Array.isArray(parsedBody.data)) {
+    return NextResponse.json({ error: "谈薪创建请求必须是 JSON 对象" }, { status: 400 });
+  }
   const body = parsedBody.data as {
     target_company_tier?: unknown;
     target_role?: unknown;
     expected_salary?: unknown;
     current_or_competing_offer?: unknown;
     hr_style?: unknown;
-  } | null;
+  };
+  for (const field of ["target_company_tier", "target_role", "expected_salary", "current_or_competing_offer", "hr_style"] as const) {
+    if (body[field] !== undefined && typeof body[field] !== "string") {
+      return NextResponse.json({ error: "谈薪企业、岗位、期望薪资、现有筹码和 HR 风格必须是字符串" }, { status: 400 });
+    }
+  }
 
   const targetRole = typeof body?.target_role === "string" ? body.target_role.trim() : "";
   const expectedSalary = typeof body?.expected_salary === "string" ? body.expected_salary.trim() : "";
@@ -84,126 +97,117 @@ async function handlePost(req: Request) {
   }
 
   const rawTier = typeof body?.target_company_tier === "string" ? body.target_company_tier.trim() : "top_tech";
-  const tierMatch = COMPANY_TIER_OPTIONS.find((t) => t.key === rawTier);
-  const targetCompanyTier = tierMatch ? `${tierMatch.label}（${tierMatch.desc}）` : rawTier;
+  const targetCompanyTier = describeNegotiationCompany(rawTier);
 
   const currentOrCompeting =
     typeof body?.current_or_competing_offer === "string" ? body.current_or_competing_offer.trim() : "";
 
-  const rawStyle = (typeof body?.hr_style === "string" ? body.hr_style.trim() : "standard") as HrStyle;
-  const hrStyle: HrStyle = ["pressure", "standard", "emotional"].includes(rawStyle) ? rawStyle : "standard";
-  const styleMatch = HR_STYLE_OPTIONS.find((s) => s.key === hrStyle) ?? HR_STYLE_OPTIONS[1]!;
-  const hrStyleDesc = `${styleMatch.label}：${styleMatch.persona}。弱点与突破口：${styleMatch.weakness}`;
+  const rawStyle = typeof body.hr_style === "string" ? body.hr_style.trim() : "standard";
+  const styleMatch = HR_STYLE_OPTIONS.find((s) => s.key === rawStyle);
+  if (!styleMatch) return NextResponse.json({ error: "无效的 HR 风格" }, { status: 400 });
+  const hrStyle = styleMatch.key;
+  const hrStyleDesc = describeNegotiationHrStyle(styleMatch);
 
-  let rawLlmOutput: string;
-  try {
-    buildOpeningUserPrompt({
-      targetCompanyTier,
-      targetRole,
-      expectedSalary,
-      currentOrCompetingOffer: currentOrCompeting,
-      hrStyleDesc,
-    });
-    rawLlmOutput = await safeChat(
-      "evaluate",
-      { feature: LLM_FEATURES.negotiationStart },
-      SALARY_NEGOTIATION_OPENING_PROMPT,
-      [
-        {
-          role: "user",
-          parts: [
-            { trust: "trusted", text: "【目标公司类型】\n" },
-            { trust: "untrusted", tag: "target_company", text: targetCompanyTier },
-            { trust: "trusted", text: "\n【目标岗位及职级】\n" },
-            { trust: "untrusted", tag: "target_role", text: targetRole },
-            { trust: "trusted", text: "\n【求职者期望薪资】\n" },
-            { trust: "untrusted", tag: "expected_salary", text: expectedSalary },
-            { trust: "trusted", text: "\n【求职者现有或竞品 Offer 筹码】\n" },
-            {
-              trust: "untrusted",
-              tag: "competing_offer",
-              text: currentOrCompeting || "暂无特别说明",
-            },
-            { trust: "trusted", text: `\n【HR 风格偏好及人设】\n${hrStyleDesc}\n\n请根据以上背景，生成这场 Offer 薪酬博弈的开局（HR 初始出招 + 心理防线 + 军师解盘）。` },
-          ],
-        },
-      ],
-      { signal: req.signal, requireJson: true }
-    );
-  } catch (err) {
-    const message = err instanceof LlmConfigError ? err.message : errorMessage(err);
-    return NextResponse.json({ error: message }, { status: err instanceof NegotiationBudgetError ? 400 : 502 });
+  if (requestId) {
+    const claimed = claimSalaryCreationRequest(requestId, [rawTier, targetRole, expectedSalary, currentOrCompeting, hrStyle]);
+    if (claimed.status === "succeeded") return NextResponse.json({ id: claimed.id });
+    if (claimed.status === "conflict") return NextResponse.json({ error: "同一创建请求编号不能用于不同背景" }, { status: 409 });
+    if (claimed.status === "pending") return NextResponse.json({ error: "该创建请求仍在处理中，请按请求编号读取结果，不要重复提交" }, { status: 409 });
+    if (claimed.status === "deleted") return NextResponse.json({ error: "该请求创建的演练已删除，不会重新创建" }, { status: 410 });
+    if (claimed.status === "failed") return NextResponse.json({ error: "该创建请求已失败，请核对历史后显式发起新请求" }, { status: 422 });
   }
 
-  type OpeningParsed = {
-    initial_offer?: unknown;
-    hr_response?: unknown;
-    hr_tactics?: unknown;
-    hr_mindset?: unknown;
-    mentor_analysis?: unknown;
-  };
-
-  let parsed: OpeningParsed;
+  let completed = false;
   try {
-    parsed = extractJson<OpeningParsed>(rawLlmOutput);
-  } catch (err) {
-    return NextResponse.json(
-      { error: `AI 初始出招格式解析失败：${errorMessage(err)}` },
-      { status: 502 }
-    );
-  }
+    let rawLlmOutput: string;
+    try {
+      const messages = buildOpeningMessages({
+        targetCompanyTier,
+        targetRole,
+        expectedSalary,
+        currentOrCompetingOffer: currentOrCompeting,
+        hrStyleDesc,
+      });
+      rawLlmOutput = await safeChat(
+        "evaluate",
+        { feature: LLM_FEATURES.negotiationStart },
+        SALARY_NEGOTIATION_OPENING_PROMPT,
+        messages,
+        { signal: req.signal, requireJson: "strict" }
+      );
+    } catch (err) {
+      const message = err instanceof LlmConfigError ? err.message : errorMessage(err);
+      return NextResponse.json({ error: message }, { status: err instanceof NegotiationBudgetError ? 400 : 502 });
+    }
 
-  const generated = validateGeneratedNegotiationOpening(parsed);
-  if (!generated) return NextResponse.json({ error: "AI 初始出招缺少必要字段，请重试" }, { status: 502 });
-  const { initial_offer: initialOffer, hr_response: hrResponse, hr_tactics: hrTactics, hr_mindset: hrMindset, mentor_analysis: mentorAnalysis } = generated;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawLlmOutput);
+    } catch (err) {
+      return NextResponse.json(
+        { error: `AI 初始出招格式解析失败：${errorMessage(err)}` },
+        { status: 502 }
+      );
+    }
 
-  const createdAt = now();
+    const generated = validateGeneratedNegotiationOpening(parsed);
+    if (!generated) return NextResponse.json({ error: "AI 初始出招缺少必要字段，请重试" }, { status: 502 });
+    const { initial_offer: initialOffer, hr_response: hrResponse, hr_tactics: hrTactics, hr_mindset: hrMindset, mentor_analysis: mentorAnalysis } = generated;
 
-  const newId = inTransaction(() => {
-    const db = getDb();
-    const negRes = db
-      .prepare(
-        `INSERT INTO salary_negotiations (
-          target_company_tier,
-          target_role,
-          expected_salary,
-          current_or_competing_offer,
-          hr_style,
-          status,
-          initial_offer,
-          final_package,
-          report,
+    const createdAt = now();
+
+    const newId = inTransaction(() => {
+      req.signal.throwIfAborted();
+      const db = getDb();
+      const negRes = db
+        .prepare(
+          `INSERT INTO salary_negotiations (
+            target_company_tier,
+            target_role,
+            expected_salary,
+            current_or_competing_offer,
+            hr_style,
+            status,
+            initial_offer,
+            final_package,
+            report,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, 'ongoing', ?, '', '', ?)`
+        )
+        .run(rawTier, targetRole, expectedSalary, currentOrCompeting, hrStyle, initialOffer, createdAt);
+
+      const negotiationId = Number(negRes.lastInsertRowid);
+
+      db.prepare(
+        `INSERT INTO salary_negotiation_turns (
+          negotiation_id,
+          turn_no,
+          user_message,
+          hr_response,
+          hr_tactics,
+          hr_mindset,
+          mentor_analysis,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, 'ongoing', ?, '', '', ?)`
-      )
-      .run(rawTier, targetRole, expectedSalary, currentOrCompeting, hrStyle, initialOffer, createdAt);
+        ) VALUES (?, 1, '', ?, ?, ?, ?, ?)`
+      ).run(
+        negotiationId,
+        hrResponse,
+        hrTactics,
+        JSON.stringify(hrMindset),
+        JSON.stringify(mentorAnalysis),
+        createdAt
+      );
 
-    const negotiationId = Number(negRes.lastInsertRowid);
+      if (requestId) completeSalaryCreationRequest(requestId, negotiationId);
+      return negotiationId;
+    });
 
-    db.prepare(
-      `INSERT INTO salary_negotiation_turns (
-        negotiation_id,
-        turn_no,
-        user_message,
-        hr_response,
-        hr_tactics,
-        hr_mindset,
-        mentor_analysis,
-        created_at
-      ) VALUES (?, 1, '', ?, ?, ?, ?, ?)`
-    ).run(
-      negotiationId,
-      hrResponse,
-      hrTactics,
-      JSON.stringify(hrMindset),
-      JSON.stringify(mentorAnalysis),
-      createdAt
-    );
-
-    return negotiationId;
-  });
-
-  return NextResponse.json({ id: newId }, { status: 201 });
+    completed = true;
+    return NextResponse.json({ id: newId }, { status: 201 });
+  } finally {
+    // 已成功的回执不变；故障不会让同一编号自动重调模型。恢复世代改变时不触碰新库。
+    if (requestId && !completed) failSalaryCreationRequest(requestId);
+  }
 }
 
 export const GET = withRouteErrorHandling("GET /api/tools/salary-negotiations", handleGet);

@@ -9,7 +9,7 @@ import {
 } from "@/lib/backup-container";
 import { BackupLimitError } from "@/lib/backup-limits";
 import { createEncryptedUploadSession } from "@/lib/backup-request";
-import { BackupStagingError, stageBackupRecordStream, type StagedBackup } from "@/lib/backup-staging";
+import { BackupStagingError, getBackupManifestStats, stageBackupRecordStream, type StagedBackup } from "@/lib/backup-staging";
 import { getDb } from "@/lib/db";
 import { logCleanupFailure, logServerError, requestIdFrom } from "@/lib/server-errors";
 import { createBackupOperation, backupOperationErrorResponse, type BackupOperation } from "@/lib/backup-operation";
@@ -85,11 +85,12 @@ async function handlePost(request: Request) {
         operation.retryCleanup,
       );
       operation.check();
+      const stats = getBackupManifestStats(staged);
       const result = restoreAllData(staged, preserveAiConfig, operation.check);
       restoreCommitted = true;
       return jsonResponse({
         ok: true,
-        stats: result.stats,
+        stats,
         snapshotCreated: result.snapshotCreated,
       }, 200);
     } catch (error) {

@@ -13,17 +13,18 @@ export type PreparedEntry = {
 };
 
 export type PreparedSection =
-  | { kind: "entries"; moduleKey: string; label: string; items: PreparedEntry[] }
-  | { kind: "skills"; moduleKey: string; label: string; items: string[] }
+  | { kind: "entries"; moduleKey: string; moduleType: ModuleData["type"]; label: string; items: PreparedEntry[] }
+  | { kind: "skills"; moduleKey: string; moduleType: ModuleData["type"]; label: string; items: string[] }
   | {
       kind: "text";
       moduleKey: string;
+      moduleType: ModuleData["type"];
       label: string;
       text: string;
       descriptionItems?: string[];
       descriptionStyle?: "unordered" | "ordered";
     }
-  | { kind: "contact"; moduleKey: string; label: string; lines: string[] };
+  | { kind: "contact"; moduleKey: string; moduleType: ModuleData["type"]; label: string; lines: string[] };
 
 export type Prepared = {
   title: string;
@@ -94,7 +95,7 @@ export function prepare(
         continue;
       }
       const lines = basicLines(c);
-      if (lines.length) sections.push({ kind: "contact", moduleKey: modKey, label: m.label, lines });
+      if (lines.length) sections.push({ kind: "contact", moduleKey: modKey, moduleType: m.type, label: m.label, lines });
       continue;
     }
     const entryKeys = ENTRY_KEYS[m.type as string];
@@ -137,12 +138,12 @@ export function prepare(
           descriptionStyle,
         };
       });
-      if (entries.length) sections.push({ kind: "entries", moduleKey: modKey, label: m.label, items: entries });
+      if (entries.length) sections.push({ kind: "entries", moduleKey: modKey, moduleType: m.type, label: m.label, items: entries });
       continue;
     }
     if (m.type === "skills") {
       const items = ((m.content ?? {}) as { items?: string[] }).items ?? [];
-      if (items.length) sections.push({ kind: "skills", moduleKey: modKey, label: m.label, items });
+      if (items.length) sections.push({ kind: "skills", moduleKey: modKey, moduleType: m.type, label: m.label, items });
       continue;
     }
     if (m.type === "summary") {
@@ -172,6 +173,7 @@ export function prepare(
         sections.push({
           kind: "text",
           moduleKey: modKey,
+          moduleType: m.type,
           label: m.label,
           text,
           descriptionItems: descriptionItems.length > 0 ? descriptionItems : undefined,

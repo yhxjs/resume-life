@@ -1,6 +1,9 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
-import { getDb, inTransaction, now } from "@/lib/db";
+import { loadProjectRow } from "@/lib/projects";
+import { createProjectMaterial } from "@/lib/project-materials";
+import type { DocumentTableProvenance } from "@/lib/document-table-provenance";
 import { extractContentFromPath, ParseBusyError } from "@/lib/parse-file";
 import { FileFormatError } from "@/lib/parse-sandbox";
 import {
@@ -19,20 +22,20 @@ import {
 
 async function handlePost(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const projectId = Number(id);
+  const projectId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(projectId)) {
     return NextResponse.json({ error: "无效的项目 ID" }, { status: 400 });
   }
-  const db = getDb();
-  if (!db.prepare("SELECT id FROM projects WHERE id = ?").get(projectId)) {
+  if (!loadProjectRow(projectId)) {
     return NextResponse.json({ error: "项目不存在" }, { status: 404 });
   }
 
   const isMultipart = isMultipartFormDataRequest(req);
   let title = "";
   let content = "";
-  let source = "paste";
+  let source: "paste" | "file" = "paste";
   let filename = "";
+  let tableProvenance: DocumentTableProvenance | undefined;
   let fileOcr: { engine: "vision" | "local"; pageCount: number } | undefined;
   let upload: Awaited<ReturnType<typeof parseMultipartUpload>> | undefined;
 
@@ -47,6 +50,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       source = "file";
       const extracted = await extractContentFromPath(file.filename, file.path, { signal: req.signal });
       content = extracted.text;
+      tableProvenance = extracted.tableProvenance;
       fileOcr = extracted.ocr;
       title = upload.fields.title?.trim() ?? "";
       if (!title) title = filename;
@@ -54,7 +58,19 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       const body = await readJsonBody<{
         title?: unknown;
         content?: unknown;
+        tableProvenance?: unknown;
+        provenance?: unknown;
       } | null>(req);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return NextResponse.json({ error: "项目材料请求必须是 JSON 对象" }, { status: 400 });
+      }
+      if (Object.hasOwn(body, "tableProvenance") || Object.hasOwn(body, "provenance")) {
+        return NextResponse.json({ error: "材料结构来源只能由文件提取生成" }, { status: 400 });
+      }
+      if ((body.title !== undefined && typeof body.title !== "string") ||
+        (body.content !== undefined && typeof body.content !== "string")) {
+        return NextResponse.json({ error: "材料标题和正文必须是字符串" }, { status: 400 });
+      }
       content = typeof body?.content === "string" ? body.content : "";
       title = typeof body?.title === "string" ? body.title.trim() : "";
     }
@@ -91,17 +107,10 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
   }
   if (!title) title = content.trim().slice(0, 20);
 
-  const result = inTransaction(() => {
-    const inserted = db
-      .prepare(
-        "INSERT INTO project_materials (project_id, title, source, filename, content, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-      )
-      .run(projectId, title, source, filename, content, now());
-    db.prepare("UPDATE projects SET updated_at = ? WHERE id = ?").run(now(), projectId);
-    return inserted;
-  });
+  const materialId = createProjectMaterial(projectId, { title, source, filename, content, tableProvenance });
+  if (materialId === null) return NextResponse.json({ error: "项目不存在" }, { status: 404 });
   return NextResponse.json(
-    { id: Number(result.lastInsertRowid), title, source, filename, ocr: fileOcr },
+    { id: materialId, title, source, filename, ocr: fileOcr },
     { status: 201 }
   );
 }

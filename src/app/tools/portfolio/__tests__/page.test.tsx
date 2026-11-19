@@ -16,14 +16,20 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); fetchMock.mockReset(); });
 
-it("以简历版本作为真实预览来源，不默认附加项目库档案", async () => {
+it("以简历版本作为真实预览来源，项目档案按需加入并同步预览", async () => {
   render(<PortfolioWorkspacePage />);
   await screen.findByText("个人作品集与静态主页工作台");
   expect((screen.getByLabelText("选择简历") as HTMLSelectElement).value).toBe("1");
   expect((screen.getByLabelText("选择版本快照") as HTMLSelectElement).value).toBe("2");
   const preview = JSON.parse(screen.getByTestId("real-preview").textContent!);
   expect(preview).toMatchObject({ resumeId: 1, versionId: 2, selectedProjects: [], themeMode: "dark" });
-  expect(screen.queryByText("技术档案")).toBeNull();
+  const project = screen.getByLabelText("加入作品集：技术档案") as HTMLInputElement;
+  expect(project.checked).toBe(false);
+  fireEvent.click(project);
+  expect(JSON.parse(screen.getByTestId("real-preview").textContent!).selectedProjects).toEqual([
+    { projectId: 3, featured: true, order: 0 },
+  ]);
+  expect(project.checked).toBe(true);
   expect(screen.getByRole("link", { name: /编辑简历内容/ }).getAttribute("href")).toBe("/resumes/1");
 });
 

@@ -17,7 +17,7 @@ test("重新总结逐段采纳并保留校正表达，刷新后可查看历史",
       summary = lastPatch.summary;
       revisionId += 1;
       history.unshift({ id: revisionId, source: "ai", createdAt: "2026-09-29T10:00:00.000Z", summary, aiBaseline: { overview: "AI 旧定位", architecture: "新架构" } });
-      await route.fulfill({ json: { ok: true, revisionId } });
+      await route.fulfill({ json: { ok: true, revisionId, summary } });
       return;
     }
     await route.fulfill({ json: {
@@ -26,7 +26,7 @@ test("重新总结逐段采纳并保留校正表达，刷新后可查看历史",
     } });
   });
   await page.route("**/api/projects/1/summary-history*", async (route) => {
-    await route.fulfill({ json: { items: history, nextCursor: null } });
+    await route.fulfill({ json: { projectId: 1, items: history, nextCursor: null } });
   });
   await page.route("**/api/projects/1/summarize", async (route) => {
     const generated = { ...empty, overview: "AI 新项目定位", architecture: "新架构", techStack: "React" };
@@ -72,7 +72,7 @@ test("首次草稿撤销采纳不会保存 AI 文案，手动改写仍可保存"
     if (route.request().method() === "PATCH") {
       saved = route.request().postDataJSON();
       savedCount += 1;
-      await route.fulfill({ json: { ok: true, revisionId: 1 } });
+      await route.fulfill({ json: { ok: true, revisionId: 1, summary: saved.summary } });
       return;
     }
     await route.fulfill({ json: {
@@ -81,7 +81,7 @@ test("首次草稿撤销采纳不会保存 AI 文案，手动改写仍可保存"
     } });
   });
   await page.route("**/api/projects/1/summary-history*", async (route) => {
-    await route.fulfill({ json: { items: [], nextCursor: null } });
+    await route.fulfill({ json: { projectId: 1, items: [], nextCursor: null } });
   });
   await page.route("**/api/projects/1/summarize", async (route) => {
     const generated = { ...empty, overview: "AI 项目定位", architecture: "AI 架构", achievements: ["AI 成果"] };
@@ -110,13 +110,13 @@ test("首次草稿撤销采纳不会保存 AI 文案，手动改写仍可保存"
   expect(saved.proposal.acceptedKeys).toEqual([]);
 });
 
-test("编辑一条成果不会取消其他成果的采纳", async ({ page }) => {
+test("编辑一条成果后保留其他可见成果，保存整份手动草稿而不复用旧采纳索引", async ({ page }) => {
   await mockApi(page);
   let saved: { summary: typeof empty; proposal: { acceptedKeys: string[] } } = { summary: empty, proposal: { acceptedKeys: [] } };
   await page.route("**/api/projects/1", async (route) => {
     if (route.request().method() === "PATCH") {
       saved = route.request().postDataJSON();
-      await route.fulfill({ json: { ok: true, revisionId: 1 } });
+      await route.fulfill({ json: { ok: true, revisionId: 1, summary: saved.summary } });
       return;
     }
     await route.fulfill({ json: {
@@ -125,7 +125,7 @@ test("编辑一条成果不会取消其他成果的采纳", async ({ page }) => 
     } });
   });
   await page.route("**/api/projects/1/summary-history*", async (route) => {
-    await route.fulfill({ json: { items: [], nextCursor: null } });
+    await route.fulfill({ json: { projectId: 1, items: [], nextCursor: null } });
   });
   await page.route("**/api/projects/1/summarize", async (route) => {
     const generated = { ...empty, achievements: ["AI 成果一", "AI 成果二"] };
@@ -142,5 +142,7 @@ test("编辑一条成果不会取消其他成果的采纳", async ({ page }) => 
   await expect(page.locator('textarea[placeholder^="成果 2"]')).toHaveValue("AI 成果二");
   await page.getByRole("button", { name: "确认采用入库", exact: true }).click();
   await expect.poll(() => saved.summary.achievements).toEqual(["用户改写成果一", "AI 成果二"]);
-  expect(saved.proposal.acceptedKeys).toEqual(["achievement:1"]);
+  // 手动编辑将可见成果整体固化为草稿，清掉旧索引，避免已采纳删除导致再次套用时错位。
+  expect(saved.proposal.acceptedKeys).toEqual([]);
+  expect(saved.proposal).toMatchObject({ generated: { achievements: ["AI 成果一", "AI 成果二"] } });
 });

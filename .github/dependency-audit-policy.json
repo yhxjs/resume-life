@@ -1,0 +1,246 @@
+{
+  "schemaVersion": 1,
+  "status": "approved",
+  "advisory": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+  "reason": "Reviewed install-time mitigation for wildcard-in-repeated-extglob ReDoS; upstream metadata remains unchanged",
+  "expiresAt": "2026-12-18T00:00:00Z",
+  "scope": "development dependencies only",
+  "lockfileSha256": "613776c19ff5e37b9c17f526b9fb555bd28a054ee8cace65f867f7941ff9eb60",
+  "package": {
+    "name": "picomatch",
+    "version": "4.0.7",
+    "upstreamParserSha256": "4e1e05447668aa1e94366c5516a2bcd8f5fff800cc92b1d0cd7d77703b8618c4",
+    "patchedParserSha256": "56ccaed8ecb6614dd22648a01c81f23ee77529cba7a55d1f32c1dbd6fa25c5bb"
+  },
+  "gates": {
+    "verifyEveryLockfileAndResolvedCopy": true,
+    "runBoundedBehaviorCheckEveryTime": true,
+    "requireExactReviewedNodesVersionsAndEdges": true,
+    "rejectUnknownSourcesCopiesOrGraphChanges": true,
+    "rejectExpiredPolicy": true,
+    "preserveRawAuditReports": true,
+    "productionAuditThreshold": "moderate",
+    "allDependencyAuditThreshold": "high"
+  },
+  "knownCycle": [
+    "vitest",
+    "@vitest/coverage-v8",
+    "vitest"
+  ],
+  "cycleRule": "Only exact reviewed edges apply; all reviewed nodes must reach this single advisory. Unreviewed cycles and dangling edges fail.",
+  "reviewedGraph": [
+    {
+      "name": "@typescript-eslint/eslint-plugin",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/@typescript-eslint/eslint-plugin",
+          "version": "8.73.0",
+          "dev": true
+        }
+      ],
+      "via": [
+        "@typescript-eslint/parser",
+        "@typescript-eslint/type-utils",
+        "@typescript-eslint/utils"
+      ]
+    },
+    {
+      "name": "@typescript-eslint/parser",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/@typescript-eslint/parser",
+          "version": "8.73.0",
+          "dev": true
+        }
+      ],
+      "via": [
+        "@typescript-eslint/typescript-estree"
+      ]
+    },
+    {
+      "name": "@typescript-eslint/type-utils",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/@typescript-eslint/type-utils",
+          "version": "8.73.0",
+          "dev": true
+        }
+      ],
+      "via": [
+        "@typescript-eslint/typescript-estree",
+        "@typescript-eslint/utils"
+      ]
+    },
+    {
+      "name": "@typescript-eslint/typescript-estree",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/@typescript-eslint/typescript-estree",
+          "version": "8.73.0",
+          "dev": true
+        }
+      ],
+      "via": [
+        "tinyglobby"
+      ]
+    },
+    {
+      "name": "@typescript-eslint/utils",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/@typescript-eslint/utils",
+          "version": "8.73.0",
+          "dev": true
+        }
+      ],
+      "via": [
+        "@typescript-eslint/typescript-estree"
+      ]
+    },
+    {
+      "name": "@vitest/coverage-v8",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/@vitest/coverage-v8",
+          "version": "4.1.12",
+          "dev": true
+        }
+      ],
+      "via": [
+        "vitest"
+      ]
+    },
+    {
+      "name": "eslint-config-next",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/eslint-config-next",
+          "version": "16.4.6",
+          "dev": true
+        }
+      ],
+      "via": [
+        "typescript-eslint"
+      ]
+    },
+    {
+      "name": "eslint-import-resolver-typescript",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/eslint-import-resolver-typescript",
+          "version": "3.10.1",
+          "dev": true
+        }
+      ],
+      "via": [
+        "tinyglobby"
+      ]
+    },
+    {
+      "name": "fdir",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/tinyglobby/node_modules/fdir",
+          "version": "6.5.0",
+          "dev": true
+        }
+      ],
+      "via": [
+        "picomatch"
+      ]
+    },
+    {
+      "name": "picomatch",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/picomatch",
+          "version": "4.0.7",
+          "dev": true
+        }
+      ],
+      "via": [
+        {
+          "url": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+          "name": "picomatch",
+          "dependency": "picomatch",
+          "range": "<=4.0.7",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "name": "tinyglobby",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/tinyglobby",
+          "version": "0.2.17",
+          "dev": true
+        }
+      ],
+      "via": [
+        "fdir",
+        "picomatch"
+      ]
+    },
+    {
+      "name": "typescript-eslint",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/typescript-eslint",
+          "version": "8.73.0",
+          "dev": true
+        }
+      ],
+      "via": [
+        "@typescript-eslint/eslint-plugin",
+        "@typescript-eslint/parser",
+        "@typescript-eslint/typescript-estree",
+        "@typescript-eslint/utils"
+      ]
+    },
+    {
+      "name": "vite",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/vite",
+          "version": "8.3.5",
+          "dev": true
+        }
+      ],
+      "via": [
+        "picomatch",
+        "tinyglobby"
+      ]
+    },
+    {
+      "name": "vitest",
+      "severity": "high",
+      "locations": [
+        {
+          "path": "node_modules/vitest",
+          "version": "4.1.12",
+          "dev": true
+        }
+      ],
+      "via": [
+        "@vitest/coverage-v8",
+        "picomatch",
+        "tinyglobby"
+      ]
+    }
+  ],
+  "approvedAt": "2026-11-18T05:40:54.641Z"
+}

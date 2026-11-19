@@ -1,6 +1,11 @@
 /** 复习进度，不代表真实记忆概率；此文件可由客户端安全导入。 */
 export type ReviewGrade = "again" | "hard" | "good" | "easy";
 export type ReviewMastery = "new" | "relearning" | "learning" | "familiar" | "mastered";
+export type ReviewLink = {
+  review_card_id: number;
+  review_mastery: ReviewMastery;
+  next_review_date: string;
+};
 export type ReviewSource = "notebook" | "remedial";
 export type ReviewSchedule = {
   interval_days: number;
@@ -43,7 +48,9 @@ export type ReviewSummary = {
   overdue: number;
   completed_today: number;
 };
-export type ReviewList = { items: ReviewCard[]; nextCursor: string | null; summary: ReviewSummary };
+/** 排序日期保留数据库值；新卡的展示日期仍为用户当地今日。 */
+export type ReviewListCard = ReviewCard & { sort_date: string };
+export type ReviewList = { items: ReviewListCard[]; nextCursor: string | null; summary: ReviewSummary };
 export const REVIEW_GRADE_LABELS: Record<ReviewGrade, string> = {
   again: "忘记了", hard: "有些吃力", good: "基本掌握", easy: "轻松答出",
 };

@@ -1,14 +1,15 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { clearEntityLlmLabels } from "@/lib/llm-label-cleanup";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction, now } from "@/lib/db";
 import { loadProjectRow } from "@/lib/projects";
-import { parseSummary, normalizeSummary, ProjectSummaryCorruptError, SUMMARY_SECTIONS, isGeneratedProjectSummary, isStoredProjectSummary } from "@/lib/summary";
-import { projectSummaryRevision, saveProjectSummary, ProjectSummaryHistoryError } from "@/lib/project-summary-history";
+import { normalizeSummary, ProjectSummaryCorruptError, isStoredProjectSummary } from "@/lib/summary";
+import { saveProjectSummary, ProjectSummaryHistoryError } from "@/lib/project-summary-history";
 import type { SummaryUnitKey } from "@/lib/project-summary-diff";
 import { parsePaginationParams } from "@/lib/cursor-pagination";
-import { listProjectMaterials } from "@/lib/project-materials";
+import { loadProjectDetail } from "@/lib/project-detail";
 
 function isSummaryUnitKey(value: unknown): value is SummaryUnitKey {
   return typeof value === "string" && (
@@ -19,44 +20,28 @@ function isSummaryUnitKey(value: unknown): value is SummaryUnitKey {
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的项目 ID" }, { status: 400 });
   }
-  const row = loadProjectRow(numericId);
-  if (!row) return NextResponse.json({ error: "项目不存在" }, { status: 404 });
+  if (!loadProjectRow(numericId)) return NextResponse.json({ error: "项目不存在" }, { status: 404 });
   const url = new URL(_req.url);
   const pagination = parsePaginationParams(url.searchParams, "id");
   if (!pagination.ok) return pagination.response;
   const { limit, idCursor } = pagination;
-  const materialsPage = listProjectMaterials(numericId, idCursor, limit);
-  let summary;
   try {
-    summary = parseSummary(row.summary);
+    const detail = loadProjectDetail(numericId, idCursor, limit);
+    if (!detail) return NextResponse.json({ error: "项目不存在" }, { status: 404 });
+    return NextResponse.json(detail);
   } catch (err) {
     if (err instanceof ProjectSummaryCorruptError) return NextResponse.json({ error: err.message }, { status: 422 });
     throw err;
   }
-  // 有更新时间但五个字段全空，说明存储的总结 JSON 已损坏（与"未生成过总结"区分开）
-  const summaryCorrupt =
-    row.summary_updated_at !== "" && SUMMARY_SECTIONS.every((s) => !summary[s.key].trim());
-  return NextResponse.json({
-    id: row.id,
-    name: row.name,
-    summary,
-    summary_updated_at: row.summary_updated_at,
-    summary_revision_id: projectSummaryRevision(numericId),
-    summary_corrupt: summaryCorrupt,
-    updated_at: row.updated_at,
-    materials: materialsPage.items,
-    materials_next_cursor: materialsPage.nextCursor,
-    materials_total: materialsPage.total,
-  });
 }
 
 async function handlePatch(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的项目 ID" }, { status: 400 });
   }
@@ -71,7 +56,6 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
   const exists = db.prepare("SELECT id FROM projects WHERE id = ?").get(numericId);
   if (!exists) return NextResponse.json({ error: "项目不存在" }, { status: 404 });
 
-  let revisionId: number | undefined;
   let summaryToSave: ReturnType<typeof normalizeSummary> | undefined;
   let expectedRevisionId: number | undefined;
   let proposalToSave: { generated: ReturnType<typeof normalizeSummary>; acceptedKeys: SummaryUnitKey[]; source: "ai" | "repo"; materialFingerprint: string } | undefined;
@@ -88,7 +72,7 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
         return NextResponse.json({ error: "总结草稿参数无效" }, { status: 400 });
       }
       const value = o.proposal as Record<string, unknown>;
-      if (!isGeneratedProjectSummary(value.generated) || !Array.isArray(value.acceptedKeys) ||
+      if (!isStoredProjectSummary(value.generated) || Object.keys(value.generated).length === 0 || !Array.isArray(value.acceptedKeys) ||
           !value.acceptedKeys.every(isSummaryUnitKey) || (value.source !== "ai" && value.source !== "repo") ||
           typeof value.materialFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.materialFingerprint)) {
         return NextResponse.json({ error: "总结草稿参数无效" }, { status: 400 });
@@ -100,24 +84,25 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
     proposalToSave = proposal;
   }
   try {
-    inTransaction(() => {
-      if (summaryToSave) {
-        revisionId = saveProjectSummary(numericId, { summary: summaryToSave, expectedRevisionId, proposal: proposalToSave }).id;
-      }
+    const savedSummary = inTransaction(() => {
+      const saved = summaryToSave
+        ? saveProjectSummary(numericId, { summary: summaryToSave, expectedRevisionId, proposal: proposalToSave })
+        : undefined;
       if (typeof o.name === "string" && o.name.trim()) {
         db.prepare("UPDATE projects SET name = ?, updated_at = ? WHERE id = ?").run(o.name.trim(), now(), numericId);
       }
+      return saved;
     });
+    return NextResponse.json({ ok: true, revisionId: savedSummary?.id, summary: savedSummary?.summary, summary_updated_at: savedSummary?.createdAt });
   } catch (error) {
     if (error instanceof ProjectSummaryHistoryError) return NextResponse.json({ error: error.message }, { status: error.status });
     throw error;
   }
-  return NextResponse.json({ ok: true, revisionId });
 }
 
 async function handleDelete(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const numericId = Number(id);
+  const numericId = parseCanonicalPositiveId(id);
   if (!Number.isInteger(numericId)) {
     return NextResponse.json({ error: "无效的项目 ID" }, { status: 400 });
   }

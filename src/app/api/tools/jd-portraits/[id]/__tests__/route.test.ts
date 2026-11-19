@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { JdPortraitResult } from "@/lib/jd-portrait";
 
 const TEMP_PREFIX = "resume-life-jd-portraits-id-route-test-";
 
@@ -49,28 +50,34 @@ const seedPortrait = (result: string): number => {
 
 describe("GET/DELETE /api/tools/jd-portraits/[id] JD 考点画像", () => {
   it("GET 返回记录并解析 result JSON", async () => {
-    const id = seedPortrait(JSON.stringify({ mustSkills: ["React", "ECharts"], followUps: ["渲染性能"] }));
+    const saved: JdPortraitResult = {
+      role: "可视化平台前端开发", mustSkills: [{ name: "React", weight: 8, why: "JD 要求维护平台，规模尚未说明" }],
+      followups: [{ topic: "渲染性能", questions: ["如果出现渲染延迟，你会如何定位？"] }],
+      companyStyle: { style: "协作方式信息不足", signals: ["维护数据可视化平台"] },
+    };
+    const id = seedPortrait(JSON.stringify(saved));
     const route = await import("../route");
     const res = await route.GET(request(), idContext(id));
     expect(res.status).toBe(200);
     const data = (await res.json()) as {
       id: number;
       jd: string;
-      result: { mustSkills: string[]; followUps: string[] } | null;
+      result: JdPortraitResult | null;
     };
     expect(data.id).toBe(id);
     expect(data.jd).toContain("数据可视化");
-    expect(data.result?.mustSkills).toEqual(["React", "ECharts"]);
-    expect(data.result?.followUps).toEqual(["渲染性能"]);
+    expect(data.result).toEqual(saved);
   });
 
-  it("GET result JSON 损坏时 result 为 null 而不是 500", async () => {
-    const id = seedPortrait("不是JSON");
+  it.each(["不是JSON", JSON.stringify({ mustSkills: ["React", "ECharts"], followUps: ["渲染性能"] })])("GET 损坏结构 %s 返回 null，原始记录不变", async (stored) => {
+    const id = seedPortrait(stored);
+    const before = db?.prepare("SELECT * FROM jd_portraits WHERE id=?").get(id);
     const route = await import("../route");
     const res = await route.GET(request(), idContext(id));
     expect(res.status).toBe(200);
     const data = (await res.json()) as { result: unknown };
     expect(data.result).toBeNull();
+    expect(db?.prepare("SELECT * FROM jd_portraits WHERE id=?").get(id)).toEqual(before);
   });
 
   it("GET 不存在的记录返回 404，非法 id 返回 400", async () => {

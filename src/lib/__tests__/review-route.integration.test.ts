@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readReviewDashboard } from "../review-dashboard";
 
 let tempDir: string;
 let db: DatabaseSync;
@@ -28,11 +29,16 @@ afterEach(() => {
 /** handleGet 不接 request，但 withRouteErrorHandling 的签名是 (request, context?)，故单参调用 */
 async function callReview() {
   const route = await import("@/app/api/review/route");
-  return route.GET(
+  const response = await route.GET(
     new Request("http://127.0.0.1/api/review", {
       headers: { origin: "http://127.0.0.1", host: "127.0.0.1" },
     }),
   );
+  if (response.ok) {
+    const data = await response.clone().json();
+    expect(readReviewDashboard(data)).toEqual(data);
+  }
+  return response;
 }
 
 const SCORES = '{"depth":8,"structure":8,"authenticity":8,"completeness":8}';
@@ -69,6 +75,18 @@ function insertInterviewAnswers(count: number): void {
 }
 
 describe("/api/review 聚合", () => {
+  it("历史零负场次／项目 ID 与原答舍入差异能通过客户端整页校验", async () => {
+    db.exec("INSERT INTO projects (id,name,created_at,updated_at) VALUES (-1,'旧项目','','')");
+    db.exec("INSERT INTO drills (id,project_id,created_at) VALUES (0,-1,''),(-1,-1,'')");
+    const insert = db.prepare("INSERT INTO drill_questions (drill_id,idx,question,scores,answered_at) VALUES (?,1,'旧题',?,'旧时间字面量')");
+    for (const [id, value] of [[0, 7.351], [-1, 7.451]]) {
+      insert.run(id!, JSON.stringify({ depth: value, structure: value, authenticity: value, completeness: value }));
+    }
+    const data = await (await callReview()).json();
+    expect(data.overallScore).toBe(7.4);
+    expect(data.sessions.map((session: { overall: number }) => session.overall).sort()).toEqual([7.4, 7.5]);
+    expect(data.projects).toEqual([{ id: -1, name: "旧项目", answers: 2, overall: 7.4 }]);
+  });
   it("练习作答超过 10000 条时只聚合最近作答并标记截断", async () => {
     db.exec("INSERT INTO projects (id, name, created_at, updated_at) VALUES (1, '测试项目', '', '')");
     db.exec(

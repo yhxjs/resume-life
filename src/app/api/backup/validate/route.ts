@@ -8,7 +8,7 @@ import {
 } from "@/lib/backup-container";
 import { BackupLimitError } from "@/lib/backup-limits";
 import { createEncryptedUploadSession } from "@/lib/backup-request";
-import { BackupStagingError, stageBackupRecordStream, type StagedBackup } from "@/lib/backup-staging";
+import { BackupStagingError, getBackupManifestStats, stageBackupRecordStream, type StagedBackup } from "@/lib/backup-staging";
 import { getDb } from "@/lib/db";
 import { logCleanupFailure, logServerError, requestIdFrom } from "@/lib/server-errors";
 import { createBackupOperation, backupOperationErrorResponse, type BackupOperation } from "@/lib/backup-operation";
@@ -76,7 +76,7 @@ async function handlePost(request: Request) {
       return jsonResponse({
         ok: true,
         manifest: staged.manifest,
-        stats: staged.stats,
+        stats: getBackupManifestStats(staged),
         totalRecords: staged.totalRecords,
       }, 200);
     } catch (error) {

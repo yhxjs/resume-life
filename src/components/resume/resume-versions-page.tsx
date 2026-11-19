@@ -10,6 +10,7 @@ import { prepare } from "@/components/resume/doc-data";
 import { PublishVersionButton } from "@/components/resume/publish-version-button";
 import { ResumeVersionDiff } from "@/components/resume/resume-version-diff";
 import type { ResumeSnapshot, ResumeVersion, ResumeVersionListItem } from "@/lib/resume-version-types";
+import { parseCanonicalStoredId } from "@/lib/id-parsing";
 import { jsonFetch } from "@/lib/fetcher";
 import { errorMessage } from "@/lib/error-message";
 import { getResumeSaveQueue } from "@/lib/resume-save-queue";
@@ -38,6 +39,7 @@ function treeOrder(versions: ResumeVersionListItem[]): { version: ResumeVersionL
 
 export function ResumeVersionsPage({ resumeId }: { resumeId: string }) {
   const router = useRouter();
+  const editable = parseCanonicalStoredId(resumeId) > 0;
   const [data, setData] = useState<VersionsResponse | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [compareId, setCompareId] = useState<number | null>(null);
@@ -45,12 +47,24 @@ export function ResumeVersionsPage({ resumeId }: { resumeId: string }) {
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   const [branching, setBranching] = useState(false);
+  const pageSessionRef = useRef<AbortController | null>(null);
+  const branchCommandRef = useRef<object | null>(null);
   const [snapshots, setSnapshots] = useState<Record<number, ResumeSnapshot>>({});
   const snapshotsRef = useRef(snapshots);
   const [snapshotErrors, setSnapshotErrors] = useState<Record<number, string>>({});
   const [snapshotAttempt, setSnapshotAttempt] = useState(0);
   const comparisonRef = useRef<HTMLDivElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    const session = new AbortController();
+    pageSessionRef.current = session;
+    return () => {
+      pageSessionRef.current = null;
+      branchCommandRef.current = null;
+      session.abort();
+    };
+  }, [resumeId]);
 
   useEffect(() => {
     const update = () => setFullscreen(document.fullscreenElement === comparisonRef.current);
@@ -72,12 +86,12 @@ export function ResumeVersionsPage({ resumeId }: { resumeId: string }) {
       const result = await jsonFetch<VersionsResponse>(`/api/resumes/${resumeId}/versions`, { signal: controller.signal });
       if (controller.signal.aborted) return;
       const query = new URLSearchParams(window.location.search);
-      const requested = Number(query.get("version") ?? query.get("versionId"));
+      const requested = parseCanonicalStoredId(query.get("version") ?? query.get("versionId"));
       const current = result.versions.find((version) => version.id === requested) ?? result.versions[0];
       setData(result);
       setSelectedId(current?.id ?? null);
       setCompareId(current?.parent_id ?? null);
-      setView(current?.parent_id ? "diff" : "preview");
+      setView(current?.parent_id != null ? "diff" : "preview");
       setError("");
     }
     void load().catch((reason) => { if (!controller.signal.aborted) setError(errorMessage(reason)); });
@@ -122,25 +136,43 @@ export function ResumeVersionsPage({ resumeId }: { resumeId: string }) {
     setError("");
     setSelectedId(version.id);
     setCompareId(version.parent_id);
-    setView(version.parent_id ? "diff" : "preview");
+    setView(version.parent_id != null ? "diff" : "preview");
     window.history.replaceState(null, "", `/resumes/${resumeId}/versions?version=${version.id}`);
   }
 
   async function branch() {
-    if (!selected || !data || branching) return;
-    const accepted = await confirmDialog({ title: `从 v${selected.version} 开始分支`,
-      message: "此版本的内容将替换当前草稿。尚未发布的草稿修改会被覆盖，请先发布需要保留的内容；已有发布版本和其他模块的版本绑定不会改变。",
-      confirmText: "替换草稿并开始编辑", danger: true });
-    if (!accepted) return;
-    setBranching(true);
-    setError("");
+    const session = pageSessionRef.current;
+    if (!editable || !selected || selected.id <= 0 || !data || !session || session.signal.aborted || branchCommandRef.current) return;
+    // 从确认开始同步占有命令；确认的目标与草稿基准不随之后的版本选择改变。
+    const command = {};
+    branchCommandRef.current = command;
+    const owns = () => pageSessionRef.current === session && !session.signal.aborted && branchCommandRef.current === command;
+    let navigating = false;
     try {
+      const accepted = await confirmDialog({ title: `从 v${selected.version} 开始分支`,
+        message: "此版本的内容将替换当前草稿。尚未发布的草稿修改会被覆盖，请先发布需要保留的内容；已有发布版本和其他模块的版本绑定不会改变。",
+        confirmText: "替换草稿并开始编辑", danger: true, signal: session.signal });
+      if (!accepted || !owns()) return;
+      setBranching(true);
+      setError("");
+      // 共享草稿保存继续执行；离页仅停止本页尚未发起的分支及结果应用。
       await getResumeSaveQueue(resumeId).drain();
+      if (!owns()) return;
       await jsonFetch(`/api/resumes/${resumeId}/versions/${selected.id}/branch`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft_revision: data.draft_revision }),
+        signal: session.signal,
       });
+      if (!owns()) return;
       router.push(`/resumes/${resumeId}`);
-    } catch (reason) { setError(errorMessage(reason)); setBranching(false); }
+      navigating = true;
+    } catch (reason) {
+      if (owns()) setError(errorMessage(reason));
+    } finally {
+      if (owns() && !navigating) {
+        branchCommandRef.current = null;
+        setBranching(false);
+      }
+    }
   }
 
   function published(version: ResumeVersion) {
@@ -158,8 +190,8 @@ export function ResumeVersionsPage({ resumeId }: { resumeId: string }) {
 
   return <div className="mx-auto max-w-[1600px] space-y-6">
     <header className="flex flex-wrap items-start justify-between gap-4 border-b border-line pb-5">
-      <div className="min-w-0"><Link className="text-sm text-primary underline underline-offset-4" href={`/resumes/${resumeId}`}>← 返回简历草稿</Link><h1 className="mt-3 font-serif text-2xl font-bold">简历版本树</h1><p className="mt-2 max-w-prose text-sm leading-relaxed text-muted">记录每一次发布，查看修改，也可以从任意历史版本继续打磨。</p></div>
-      <PublishVersionButton resumeId={resumeId} onPublished={published} />
+      <div className="min-w-0"><Link className="text-sm text-primary underline underline-offset-4" href={editable ? `/resumes/${resumeId}` : "/resumes"}>{editable ? "← 返回简历草稿" : "← 返回简历目录"}</Link><h1 className="mt-3 font-serif text-2xl font-bold">简历版本树</h1><p className="mt-2 max-w-prose text-sm leading-relaxed text-muted">查看已发布的内容和排版，对照版本之间的修改。</p></div>
+      {editable && <PublishVersionButton resumeId={resumeId} onPublished={published} />}
     </header>
     {(error || snapshotError) && <LoadError message={error || snapshotError} onRetry={() => {
       if (error) { setError(""); setRetry((value) => value + 1); }
@@ -174,13 +206,13 @@ export function ResumeVersionsPage({ resumeId }: { resumeId: string }) {
             {treeOrder(data.versions).map(({ version, depth }) => <li key={version.id} style={{ paddingLeft: `${Math.min(depth, 6) * 12}px` }}>
               <button className={`w-full rounded-lg border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-primary ${version.id === selectedId ? "border-primary/40 bg-primary-soft text-ink" : "border-transparent hover:bg-surface"}`} aria-current={version.id === selectedId ? "true" : undefined} onClick={() => select(version)}>
                 <span className="flex gap-2 text-sm"><span className="font-mono text-primary">{depth > 0 ? "↳ " : "● "}v{version.version}</span><span className="min-w-0 flex-1 break-words font-medium">{version.name}</span></span>
-                <span className="mt-1 block text-xs text-muted">{version.parent_id ? `来自 v${data.versions.find((item) => item.id === version.parent_id)?.version ?? "?"} · ` : "初始版本 · "}{new Date(version.created_at).toLocaleDateString("zh-CN")}</span>
+                <span className="mt-1 block text-xs text-muted">{version.parent_id != null ? `来自 v${data.versions.find((item) => item.id === version.parent_id)?.version ?? "?"} · ` : "初始版本 · "}{new Date(version.created_at).toLocaleDateString("zh-CN")}</span>
               </button>
             </li>)}
           </ol>
         </aside>
         <div className="min-w-0 space-y-5">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h2 className="break-words font-serif text-xl font-bold">{versionLabel(selected)}</h2><p className="mt-1 text-xs text-muted">{new Date(selected.created_at).toLocaleString("zh-CN")} 发布 · 已固定</p></div><button type="button" className={btnGhost} disabled={branching} onClick={() => void branch()}>{branching ? "正在准备草稿…" : "从此版本开始分支"}</button></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h2 className="break-words font-serif text-xl font-bold">{versionLabel(selected)}</h2><p className="mt-1 text-xs text-muted">{new Date(selected.created_at).toLocaleString("zh-CN")} 发布 · 已固定</p></div>{editable && selected.id > 0 && <button type="button" className={btnGhost} disabled={branching} onClick={() => void branch()}>{branching ? "正在准备草稿…" : "从此版本开始分支"}</button>}</div>
           <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-muted">{selected.description || "此版本未填写修改说明，可在下方查看具体变化。"}</p>
           <div ref={comparisonRef} className={`version-compare-viewport min-w-0 space-y-4 ${fullscreen ? "h-screen w-screen overflow-auto bg-bg p-4 sm:p-6" : ""}`}>
             <div className="flex flex-wrap items-end justify-between gap-4 border-b border-line pb-3">

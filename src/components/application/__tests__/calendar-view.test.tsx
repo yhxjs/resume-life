@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CalendarInterviewCard } from "../calendar-view/calendar-interview-card";
@@ -9,9 +9,12 @@ import { AgendaListView } from "../calendar-view/agenda-list-view";
 import { ApplicationCalendarView } from "../calendar-view/application-calendar-view";
 import { type Application, type CalendarInterviewEvent } from "@/lib/applications-types";
 
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+  else Reflect.deleteProperty(navigator, "clipboard");
 });
 
 describe("Calendar view components", () => {
@@ -38,6 +41,48 @@ describe("Calendar view components", () => {
       { id: 101, title: "复习系统设计高并发", done: false, due_time: "2026-09-23T12:00:00.000Z", created_at: "" },
     ],
   };
+
+  it("会议链接复制失败就近显示完整链接，清除旧成功，等待时禁用并可重试", async () => {
+    const copy = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
+    const event = { ...mockEvent, meeting_url: "https://meeting.example/join?token=A%2BB&mode=guest#room" };
+    render(<CalendarInterviewCard event={event} currentTime={0} />);
+    const button = screen.getByTitle("复制会议链接");
+    fireEvent.click(button);
+    await screen.findByRole("button", { name: "已复制 ✓" });
+    let reject!: (reason: Error) => void;
+    copy.mockReturnValueOnce(new Promise<void>((_resolve, no) => { reject = no; }));
+    fireEvent.click(button);
+    expect(screen.queryByRole("button", { name: "已复制 ✓" })).toBeNull();
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { reject(new Error("denied")); });
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(event.meeting_url).textContent).toBe(event.meeting_url);
+    expect(alert.textContent).toContain("手动复制");
+    fireEvent.click(button);
+    await screen.findByRole("button", { name: "已复制 ✓" });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(copy).toHaveBeenLastCalledWith(event.meeting_url);
+    expect(screen.getByRole("link", { name: /进入会议/ }).getAttribute("href")).toBe(event.meeting_url);
+  });
+
+  it("会议链接变化后不把旧成功或迟到失败显示到新链接旁", async () => {
+    const copy = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
+    const { rerender } = render(<CalendarInterviewCard event={mockEvent} currentTime={0} />);
+    fireEvent.click(screen.getByTitle("复制会议链接"));
+    await screen.findByRole("button", { name: "已复制 ✓" });
+    const updated = { ...mockEvent, meeting_url: "https://meeting.example/new" };
+    rerender(<CalendarInterviewCard event={updated} currentTime={0} />);
+    expect(screen.queryByRole("button", { name: "已复制 ✓" })).toBeNull();
+    let reject!: (reason: Error) => void;
+    copy.mockReturnValueOnce(new Promise<void>((_resolve, no) => { reject = no; }));
+    fireEvent.click(screen.getByTitle("复制会议链接"));
+    rerender(<CalendarInterviewCard event={{ ...updated, meeting_url: "" }} currentTime={0} />);
+    await act(async () => { reject(new Error("denied")); });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTitle("复制会议链接")).toBeNull();
+  });
 
   const mockApp: Application = {
     id: 10,

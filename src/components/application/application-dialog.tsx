@@ -1,11 +1,13 @@
 "use client";
 
-import { useId, useState } from "react";
+import Link from "next/link";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { InlineError } from "@/components/common/inline-error";
 import { LoadingOverlay } from "@/components/common/loading-overlay";
 import { modalOverlayCls, dialogCardCls, btnPrimary, btnGhost, inputCls, textareaCls, textareaShortCls, labelCls } from "@/lib/ui";
 import { STAGE_CONFIG, ROUND_STATUS_CONFIG, type Application, type ApplicationStage, type CreateApplicationInput } from "@/lib/applications-types";
-import { jsonFetch } from "@/lib/fetcher";
+import { HttpError, jsonFetch } from "@/lib/fetcher";
+import { readSavedApplication } from "@/lib/application-save-response";
 import { formatFriendlyDateTime, fromLocalDateTime, toLocalDateTime } from "@/lib/application-datetime";
 import { useModalFocus } from "@/hooks/use-modal-focus";
 import { useResumeOptions } from "@/hooks/use-resume-options";
@@ -41,7 +43,12 @@ interface ApplicationDialogProps {
   onSuccess: (saved: Application) => void;
 }
 
-export function ApplicationDialog({
+export function ApplicationDialog(props: ApplicationDialogProps) {
+  const key = JSON.stringify([props.initialData?.id ?? null, props.stageOverride ?? null, props.initialData ? null : props.defaultStage ?? "interested", props.initialData ? null : props.initialInterviewDate?.getTime() ?? null]);
+  return <ApplicationDialogContent key={key} {...props} />;
+}
+
+function ApplicationDialogContent({
   initialData,
   defaultStage = "interested",
   stageOverride,
@@ -51,7 +58,12 @@ export function ApplicationDialog({
 }: ApplicationDialogProps) {
   const isEdit = Boolean(initialData);
   const formId = useId();
-  const dialogRef = useModalFocus(true, onClose, '[data-initial-focus]');
+  const active = useRef(false);
+  const operation = useRef<AbortController | null>(null);
+  const unknownResult = useRef(false);
+  const pendingSave = useRef<{ payload: CreateApplicationInput; id: number | null } | null>(null);
+  const errorRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useModalFocus(true, close, '[data-initial-focus]');
 
   const [company, setCompany] = useState(initialData?.company ?? "");
   const [role, setRole] = useState(initialData?.role ?? "");
@@ -78,8 +90,20 @@ export function ApplicationDialog({
   const [notes, setNotes] = useState(initialData?.notes ?? "");
 
   const [saving, setSaving] = useState(false);
+  const [unconfirmed, setUnconfirmed] = useState(false);
   const [error, setError] = useState("");
   const [optionsReloadVersion, setOptionsReloadVersion] = useState(0);
+  const locked = saving || unconfirmed;
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; operation.current?.abort(); operation.current = null; };
+  }, []);
+  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
+
+  function close() { if (active.current && !operation.current) onClose(); }
+  function isCurrent(controller: AbortController) { return active.current && operation.current === controller && !controller.signal.aborted; }
+  function freezeInput(event: React.SyntheticEvent) { if (operation.current || unknownResult.current) event.stopPropagation(); }
 
   const interviewOptions = useCursorList<InterviewOption>({
     queryKey: "application-interview-options",
@@ -103,6 +127,7 @@ export function ApplicationDialog({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!active.current || operation.current || unknownResult.current) return;
     if (!company.trim()) {
       setError("公司名称不能为空");
       return;
@@ -120,11 +145,9 @@ export function ApplicationDialog({
       setError("请选择终止阶段并填写终止原因");
       return;
     }
-    setSaving(true);
-    setError("");
-
+    let payload: CreateApplicationInput;
     try {
-      const payload: CreateApplicationInput = {
+      payload = {
         company: company.trim(),
         role: role.trim(),
         salary_range: salaryRange.trim(),
@@ -140,38 +163,73 @@ export function ApplicationDialog({
         next_interview_at: fromLocalDateTime(nextInterviewAt, initialData?.next_interview_at),
         notes: notes.trim(),
       };
-
-      let saved: Application;
+    } catch (err) { setError(errorMessage(err)); return; }
+    const controller = new AbortController(); operation.current = controller;
+    pendingSave.current = { payload, id: initialData?.id ?? null };
+    setSaving(true); setError("");
+    let saved: Application | undefined;
+    try {
+      let response: unknown;
       if (isEdit && initialData) {
-        saved = await jsonFetch<Application>(`/api/applications/${initialData.id}`, {
+        response = await jsonFetch<unknown>(`/api/applications/${initialData.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
+          signal: controller.signal,
         });
       } else {
-        saved = await jsonFetch<Application>("/api/applications", {
+        response = await jsonFetch<unknown>("/api/applications", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
+          signal: controller.signal,
         });
       }
-      onSuccess(saved);
+      if (!isCurrent(controller)) return;
+      saved = readSavedApplication(response, initialData?.id ?? null, payload);
     } catch (err) {
-      setError(errorMessage(err));
-      setSaving(false);
+      if (!isCurrent(controller)) return;
+      if (err instanceof HttpError && err.status >= 400 && err.status < 500 && err.status !== 408) {
+        pendingSave.current = null; setError(errorMessage(err));
+      } else {
+        unknownResult.current = true; setUnconfirmed(true);
+        setError(`保存结果尚未确认：${errorMessage(err)}。可能已写入，请先核对投递记录，避免重复保存；草稿已保留。`);
+      }
+    } finally {
+      if (isCurrent(controller) && !saved) { operation.current = null; setSaving(false); }
     }
+    if (saved && isCurrent(controller)) onSuccess(saved);
+  }
+
+  async function checkSave() {
+    const pending = pendingSave.current;
+    if (!active.current || operation.current || !unknownResult.current || !pending?.id) return;
+    const controller = new AbortController(); operation.current = controller;
+    setSaving(true); setError("");
+    let saved: Application | undefined;
+    try {
+      const response = await jsonFetch<unknown>(`/api/applications/${pending.id}`, { signal: controller.signal, cache: "no-store" });
+      if (!isCurrent(controller)) return;
+      saved = readSavedApplication(response, pending.id, pending.payload);
+      unknownResult.current = false; setUnconfirmed(false);
+    } catch (err) {
+      if (isCurrent(controller)) setError(`核对失败：${errorMessage(err)}。保存结果仍未确认，草稿已保留，请核对记录后再决定下一步。`);
+    } finally {
+      if (isCurrent(controller) && !saved) { operation.current = null; setSaving(false); }
+    }
+    if (saved && isCurrent(controller)) onSuccess(saved);
   }
 
   return (
-    <div ref={dialogRef} tabIndex={-1} className={modalOverlayCls} onClick={onClose} role="dialog" aria-modal="true" aria-labelledby={`${formId}-title`}>
+    <div ref={dialogRef} tabIndex={-1} className={modalOverlayCls} onClick={close} role="dialog" aria-modal="true" aria-labelledby={`${formId}-title`}>
       <div
         className={`relative ${dialogCardCls} max-w-2xl w-full max-h-[90vh] overflow-y-auto`}
         onClick={(e) => e.stopPropagation()}
       >
         <LoadingOverlay
           show={saving}
-          message={isEdit ? "正在保存投递修改…" : "正在创建投递记录…"}
-          description="正在持久化投递档案与关联备战资料，请稍候…"
+          message={unconfirmed ? "正在核对保存状态…" : isEdit ? "正在保存投递修改…" : "正在创建投递记录…"}
+          description={unconfirmed ? "只读取当前投递，不会再次提交保存。" : "正在持久化投递档案与关联备战资料，请稍候…"}
         />
         <div className="flex items-center justify-between border-b border-line pb-3.5">
           <h2 id={`${formId}-title`} className="font-serif text-lg font-bold text-ink">
@@ -179,7 +237,8 @@ export function ApplicationDialog({
           </h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={close}
+            disabled={saving}
             className="text-muted hover:text-ink transition-colors p-1"
             aria-label="关闭弹窗"
           >
@@ -190,12 +249,18 @@ export function ApplicationDialog({
         </div>
 
         {error && (
-          <div className="mt-3 rounded-lg border border-danger/30 bg-danger-wash p-3 text-xs text-danger">
+          <div ref={errorRef} role="alert" tabIndex={-1} className="mt-3 space-y-3 rounded-lg border border-danger/30 bg-danger-wash p-3 text-xs text-danger outline-none focus-visible:ring-2 focus-visible:ring-danger/40">
             {error}
+            {unconfirmed && <div className="flex flex-wrap items-center gap-3">
+              {isEdit && <button type="button" className={btnGhost} disabled={saving} onClick={() => void checkSave()}>重新读取保存状态</button>}
+              <Link href={initialData ? `/applications/${initialData.id}/prepare` : "/applications"} target="_blank" rel="noopener noreferrer" className={btnGhost}>核对投递记录</Link>
+              <p>核对记录将在新窗口打开，当前草稿继续保留。</p>
+            </div>}
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4 text-sm">
+          <fieldset disabled={locked} className="min-w-0 space-y-4" onChangeCapture={freezeInput} onClickCapture={freezeInput}>
           {/* 公司名称与岗位 */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
@@ -488,11 +553,12 @@ export function ApplicationDialog({
           </div>
 
           {/* 操作按钮栏 */}
+          </fieldset>
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-line">
-            <button type="button" onClick={onClose} disabled={saving} className={btnGhost}>
+            <button type="button" onClick={close} disabled={saving} className={btnGhost}>
               取消
             </button>
-            <button type="submit" disabled={saving || Boolean(resumeId && !resumeVersionId)} className={btnPrimary}>
+            <button type="submit" disabled={locked || Boolean(resumeId && !resumeVersionId)} className={btnPrimary}>
               {saving ? "正在保存..." : isEdit ? "更新卡片" : "立即创建"}
             </button>
           </div>

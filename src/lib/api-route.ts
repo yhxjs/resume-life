@@ -4,6 +4,7 @@ import { assertDataGeneration, DataGenerationConflictError, withDataGenerationSc
 import { requestDataGeneration } from "./db";
 import { DATA_GENERATION_HEADER, INITIAL_DATA_GENERATION } from "./data-generation-contract";
 import { CorruptedTemplateError } from "./custom-templates";
+import { ResumeContextError } from "./resume-errors";
 import {
   renewSessionThrottled,
   resolveSession,
@@ -95,6 +96,9 @@ export function withRouteErrorHandling<Context extends RouteContext = RouteConte
       }
       return noStore(await invoke());
     } catch (error) {
+      if (error instanceof ResumeContextError) {
+        return noStore(NextResponse.json({ error: error.message }, { status: 422 }));
+      }
       if (error instanceof CorruptedTemplateError) {
         return noStore(NextResponse.json({ error: error.message, templateId: error.templateId }, { status: 422 }));
       }

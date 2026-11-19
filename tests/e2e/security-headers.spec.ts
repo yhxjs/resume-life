@@ -1,3 +1,4 @@
+import { listenForFetch } from "../support/http-server";
 import { createServer } from "node:http";
 import { expect, test } from "@playwright/test";
 
@@ -21,7 +22,7 @@ test("同站不同源 iframe 不能载入已登录设置页，顶层访问正常
     response.setHeader("Content-Type", "text/html");
     response.end(`<iframe src="${baseURL}/settings"></iframe>`);
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await listenForFetch(server);
   try {
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("测试服务器没有 TCP 端口");

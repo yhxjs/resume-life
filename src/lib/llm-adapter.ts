@@ -22,11 +22,30 @@ function finiteOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+/** 本地固定分类；不携带提供方的自由文本、拒绝正文或错误详情。 */
+export type LlmResponseFailureReason = "output_limit" | "content_filter" | "cancelled" | "pending"
+  | "paused" | "context_limit" | "refusal" | "tool_call";
+
 export class LlmResponseError extends Error {
-  constructor(message: string, readonly code: "provider" | "incomplete" | "protocol") {
+  /** 完整调用层填入已观测的累计用量，可能只覆盖部分尝试；直接解析时为 null。 */
+  usage: LlmUsage | null = null;
+
+  constructor(
+    message: string,
+    readonly code: "provider" | "incomplete" | "protocol",
+    readonly reason: LlmResponseFailureReason | null = null,
+  ) {
     super(message);
     this.name = "LlmResponseError";
   }
+}
+
+/** 校验提供方协议外壳；模型正文的业务 JSON 由调用方另行校验。 */
+function requireProtocolObject(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new LlmResponseError("LLM 协议数据必须是 JSON 对象", "protocol");
+  }
+  return value as Record<string, unknown>;
 }
 
 /**
@@ -213,6 +232,9 @@ export function buildRequestBody(args: {
 }
 
 function rejectFailedResponse(response: Record<string, unknown>, eventType?: unknown): void {
+  if (eventType === "response.cancelled" || response.status === "cancelled") {
+    throw new LlmResponseError("LLM 响应未完成：模型服务已取消生成，请核对服务状态后重试", "incomplete", "cancelled");
+  }
   const failed = eventType === "response.failed" || response.status === "failed";
   const incomplete = eventType === "response.incomplete" || response.status === "incomplete";
   if (!failed && !incomplete) return;
@@ -224,18 +246,111 @@ function rejectFailedResponse(response: Record<string, unknown>, eventType?: unk
       : outputLimit
         ? "LLM 响应未完成：已达到输出上限，可前往「设置」调大最大输出 token 限制后重试"
         : "LLM 响应未完成",
-    incomplete ? "incomplete" : "provider"
+    incomplete ? "incomplete" : "provider",
+    // 只给已识别的未完成原因分类；failed 的详情不能冒充输出上限。
+    !failed && incomplete && details?.reason === "max_output_tokens" ? "output_limit"
+      : !failed && incomplete && details?.reason === "content_filter" ? "content_filter" : null,
   );
+}
+
+/** 非流式回复和完成帧必须完成；流中的 queued / in_progress 事件仍可继续读取。 */
+function requireCompletedResponse(response: Record<string, unknown>): void {
+  rejectFailedResponse(response);
+  if (response.status === "queued" || response.status === "in_progress") {
+    throw new LlmResponseError("LLM 响应未完成：模型服务仍在排队或生成中，请稍后重试", "incomplete", "pending");
+  }
+  // 部分网关省略 status，保留既有兼容；显式错误类型或未知值不能确认完成。
+  if (response.status !== undefined && response.status !== "completed") {
+    throw new LlmResponseError("LLM 返回了无法确认完成的响应状态", "protocol");
+  }
 }
 
 function rejectOutputLimit(reason: unknown): void {
   if (reason === "length" || reason === "max_tokens") {
-    throw new LlmResponseError("LLM 响应未完成：已达到输出上限，可前往「设置」调大最大输出 token 限制后重试", "incomplete");
+    throw new LlmResponseError("LLM 响应未完成：已达到输出上限，可前往「设置」调大最大输出 token 限制后重试", "incomplete", "output_limit");
+  }
+}
+
+/** 这些终态都没有完成本应用请求的正文；不能靠正文恰好可解析为 JSON 放行。 */
+function rejectChatFinishReason(reason: unknown): void {
+  rejectOutputLimit(reason);
+  if (reason === "content_filter") {
+    throw new LlmResponseError("LLM 响应未完成：模型服务过滤了部分内容，请核对材料与服务返回状态", "incomplete", "content_filter");
+  }
+  if (reason === "tool_calls" || reason === "function_call") {
+    rejectToolCall();
+  }
+}
+
+/** 本应用请求最终正文，不执行工具循环，也不采纳暂停、拒绝或截断的部分结果。 */
+function rejectAnthropicStopReason(reason: unknown): void {
+  rejectOutputLimit(reason);
+  if (reason === "tool_use") {
+    rejectToolCall();
+  }
+  if (reason === "pause_turn") {
+    throw new LlmResponseError("LLM 响应未完成：模型服务暂停了生成，请核对服务状态后重试", "incomplete", "paused");
+  }
+  if (reason === "refusal") {
+    rejectModelRefusal();
+  }
+  if (reason === "model_context_window_exceeded") {
+    throw new LlmResponseError("LLM 响应未完成：已达到模型上下文窗口上限，请精简输入材料后重试", "incomplete", "context_limit");
+  }
+}
+
+function rejectToolCall(): never {
+  throw new LlmResponseError("LLM 返回了未请求的工具调用，未生成完整正文", "protocol", "tool_call");
+}
+
+/** 调用字段本身已表示请求工具；不能依赖网关随后提供正确的结束原因。 */
+function rejectChatToolCalls(value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  const message = value as Record<string, unknown>;
+  if (message.function_call !== undefined && message.function_call !== null) rejectToolCall();
+  const tools = message.tool_calls;
+  if (tools !== undefined && tools !== null && !(Array.isArray(tools) && tools.length === 0)) rejectToolCall();
+}
+
+function rejectResponseToolItem(value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  const type = (value as Record<string, unknown>).type;
+  if (type === "function_call" || type === "custom_tool_call") rejectToolCall();
+}
+
+function rejectResponseToolCalls(response: Record<string, unknown>): void {
+  if (Array.isArray(response.output)) response.output.forEach(rejectResponseToolItem);
+}
+
+function rejectAnthropicToolBlocks(content: unknown): void {
+  if (Array.isArray(content) && content.some(block => block && typeof block === "object" && block.type === "tool_use")) rejectToolCall();
+}
+
+function rejectModelRefusal(): never {
+  throw new LlmResponseError("LLM 响应未完成：模型服务拒绝生成，请核对材料与服务返回状态", "incomplete", "refusal");
+}
+
+function rejectRefusalText(value: unknown): void {
+  if (typeof value === "string" && value.trim()) rejectModelRefusal();
+}
+
+function rejectRefusalParts(content: unknown): void {
+  if (Array.isArray(content) && content.some(part => part && typeof part === "object" && part.type === "refusal")) {
+    rejectModelRefusal();
+  }
+}
+
+/** 只读提供方的 output/content 协议字段，不在业务正文里搜索拒绝关键字。 */
+function rejectResponseRefusals(response: Record<string, unknown>): void {
+  if (!Array.isArray(response.output)) return;
+  for (const item of response.output) {
+    if (item && typeof item === "object") rejectRefusalParts(item.content);
   }
 }
 
 function readTextParts(content: unknown, types: readonly string[]): string {
   if (!Array.isArray(content)) return "";
+  rejectRefusalParts(content);
   return content.filter((part) => part && types.includes(part.type) && typeof part.text === "string")
     .map((part) => part.text).join("");
 }
@@ -246,27 +361,33 @@ function requireReply(content: string): string {
 }
 
 function readChatReply(json: Record<string, unknown>): string {
-  const choices = json.choices as Array<{ finish_reason?: unknown; message?: { content?: unknown }; text?: unknown }> | undefined;
+  const choices = json.choices as Array<{ finish_reason?: unknown; message?: { content?: unknown; refusal?: unknown }; text?: unknown }> | undefined;
   const choice = choices?.[0];
-  rejectOutputLimit(choice?.finish_reason);
+  rejectChatFinishReason(choice?.finish_reason);
+  rejectRefusalText(choice?.message?.refusal);
+  rejectChatToolCalls(choice?.message);
   const content = choice?.message?.content;
   const text = typeof content === "string" ? content : readTextParts(content, ["text"]);
   return requireReply(text.trim() ? text : typeof choice?.text === "string" ? choice.text : "");
 }
 
 /** 解析非流式 JSON 响应；失败或未完成响应中的部分文本不能视为成功。 */
-export function parseNonStreamReply(format: ApiFormat, json: Record<string, unknown>): string {
+export function parseNonStreamReply(format: ApiFormat, value: unknown): string {
+  const json = requireProtocolObject(value);
   if (json.error) {
     throw new LlmResponseError("LLM 返回错误", "provider");
   }
 
   if (format === "anthropic_messages") {
-    rejectOutputLimit(json.stop_reason);
+    rejectAnthropicStopReason(json.stop_reason);
+    rejectAnthropicToolBlocks(json.content);
     return requireReply(readTextParts(json.content, ["text"]));
   }
 
   if (format === "openai_responses") {
-    rejectFailedResponse(json);
+    requireCompletedResponse(json);
+    rejectResponseRefusals(json);
+    rejectResponseToolCalls(json);
     if (typeof json.output_text === "string" && json.output_text.trim()) return json.output_text;
     if (Array.isArray(json.output)) {
       const parts: string[] = [];
@@ -342,7 +463,8 @@ function readUsage(format: ApiFormat, raw: unknown): Partial<LlmUsage> {
 }
 
 /** 非流式响应里的 usage；缺字段一律记 null，绝不折叠成 0。 */
-export function parseNonStreamUsage(format: ApiFormat, json: Record<string, unknown>): LlmUsage {
+export function parseNonStreamUsage(format: ApiFormat, value: unknown): LlmUsage {
+  const json = requireProtocolObject(value);
   const raw = format === "openai_responses" && json.usage === undefined
     ? (json.response as Record<string, unknown> | undefined)?.usage
     : json.usage;
@@ -350,7 +472,7 @@ export function parseNonStreamUsage(format: ApiFormat, json: Record<string, unkn
 }
 
 /**
- * 解析单行 SSE payload 并提取增量内容
+ * 解析一个 SSE 事件合并后的 payload 并提取增量内容
  */
 export function handleSsePayload(
   format: ApiFormat,
@@ -361,12 +483,13 @@ export function handleSsePayload(
   if (!payload.trim()) return; // 空 data 心跳不携带协议数据
   if (payload === "[DONE]") return "done";
 
-  let chunk: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    chunk = JSON.parse(payload) as Record<string, unknown>;
+    parsed = JSON.parse(payload);
   } catch {
     throw new LlmResponseError("LLM SSE 数据不是有效 JSON", "protocol");
   }
+  const chunk = requireProtocolObject(parsed);
 
   // 统一错误捕获
   if (chunk.type === "error" || chunk.error) {
@@ -377,13 +500,14 @@ export function handleSsePayload(
     if (chunk.type === "message_start") {
       const message = chunk.message as Record<string, unknown> | undefined;
       onUsage?.(readUsage(format, message?.usage));
+      rejectAnthropicToolBlocks(message?.content);
       return;
     }
     if (chunk.type === "message_delta") {
       onUsage?.(readUsage(format, chunk.usage));
       const stopReason = (chunk.delta as { stop_reason?: unknown } | undefined)?.stop_reason
         ?? (chunk as { stop_reason?: unknown }).stop_reason;
-      rejectOutputLimit(stopReason);
+      rejectAnthropicStopReason(stopReason);
       if (stopReason === "end_turn" || stopReason === "stop" || stopReason === "stop_sequence") {
         return "done";
       }
@@ -392,10 +516,12 @@ export function handleSsePayload(
     if (chunk.type === "message_stop") return "done";
     if (chunk.type === "content_block_start") {
       const block = chunk.content_block as { type?: string; text?: unknown } | undefined;
+      rejectAnthropicToolBlocks([block]);
       if (block?.type === "text" && typeof block.text === "string") onDelta(block.text);
     }
     if (chunk.type === "content_block_delta") {
       const delta = chunk.delta as { type?: string; text?: string } | undefined;
+      if (delta?.type === "input_json_delta") rejectToolCall();
       if (delta?.type === "text_delta" && typeof delta.text === "string") {
         onDelta(delta.text);
       }
@@ -407,12 +533,27 @@ export function handleSsePayload(
     const response = chunk.response && typeof chunk.response === "object"
       ? chunk.response as Record<string, unknown>
       : chunk;
+    if (response.usage !== undefined) onUsage?.(readUsage(format, response.usage));
     rejectFailedResponse(response, chunk.type);
+    rejectResponseRefusals(response);
+    rejectResponseToolCalls(response);
+    if (chunk.type === "response.function_call_arguments.delta" || chunk.type === "response.function_call_arguments.done"
+      || chunk.type === "response.custom_tool_call_input.delta" || chunk.type === "response.custom_tool_call_input.done") rejectToolCall();
+    if (chunk.type === "response.refusal.delta" || chunk.type === "response.refusal.done") rejectModelRefusal();
+    if (chunk.type === "response.content_part.added" || chunk.type === "response.content_part.done") rejectRefusalParts([chunk.part]);
+    if ((chunk.type === "response.output_item.added" || chunk.type === "response.output_item.done") && chunk.item && typeof chunk.item === "object") {
+      rejectResponseToolItem(chunk.item);
+      rejectRefusalParts((chunk.item as Record<string, unknown>).content);
+    }
     if (chunk.type === "response.done" || chunk.type === "response.completed") {
-      onUsage?.(readUsage(format, response.usage));
+      requireCompletedResponse(response);
       return "done";
     }
     if (chunk.type !== undefined && chunk.type !== "response.output_text.delta" && !chunk.choices) return;
+    const choices = chunk.choices as Array<{ finish_reason?: unknown; delta?: { content?: string; refusal?: unknown } }> | undefined;
+    rejectChatFinishReason(choices?.[0]?.finish_reason);
+    rejectRefusalText(choices?.[0]?.delta?.refusal);
+    rejectChatToolCalls(choices?.[0]?.delta);
     if (typeof chunk.delta === "string") {
       onDelta(chunk.delta);
       return;
@@ -427,8 +568,6 @@ export function handleSsePayload(
       return;
     }
     // 兼容部分代理使用 choices
-    const choices = chunk.choices as Array<{ finish_reason?: unknown; delta?: { content?: string } }> | undefined;
-    rejectOutputLimit(choices?.[0]?.finish_reason);
     if (typeof choices?.[0]?.delta?.content === "string") {
       onDelta(choices[0].delta.content);
     }
@@ -438,8 +577,10 @@ export function handleSsePayload(
   // 默认 openai_chat
   // 末块 usage 的 choices 为空数组，先读 usage 再取增量
   if (chunk.usage !== undefined) onUsage?.(readUsage(format, chunk.usage));
-  const choices = chunk.choices as Array<{ finish_reason?: unknown; delta?: { content?: string } }> | undefined;
-  rejectOutputLimit(choices?.[0]?.finish_reason);
+  const choices = chunk.choices as Array<{ finish_reason?: unknown; delta?: { content?: string; refusal?: unknown } }> | undefined;
+  rejectChatFinishReason(choices?.[0]?.finish_reason);
+  rejectRefusalText(choices?.[0]?.delta?.refusal);
+  rejectChatToolCalls(choices?.[0]?.delta);
   if (typeof choices?.[0]?.delta?.content === "string") {
     onDelta(choices[0].delta.content);
   }

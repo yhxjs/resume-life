@@ -53,4 +53,9 @@ describe("发布版本选择", () => {
     expect(html).toContain('href="/resumes/3"');
     expect(html).toContain("到简历编辑器发布版本");
   });
+
+  it("指定版本暂时不在列表时阻止提交，重新读取出现后恢复原指定版本", () => {
+    expect(RenderSelection({ ...resume, versions: [resume.versions[1]!] }, 31).resumeVersionId).toBe("");
+    expect(RenderSelection(resume, 31).resumeVersionId).toBe(31);
+  });
 });

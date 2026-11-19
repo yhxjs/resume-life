@@ -66,11 +66,44 @@ describe("LLM Retry-After", () => {
     const upstream = vi.fn().mockResolvedValueOnce(new Response(null, { status: 429, headers: { "Retry-After": "120" } })).mockResolvedValue(succeed());
     vi.stubGlobal("fetch", upstream);
     const controller = new AbortController();
-    const result = chat("parse", [], { signal: controller.signal }).then(() => null, (error: unknown) => error);
+    const statuses: number[] = [];
+    const result = chat("parse", [], { signal: controller.signal, onHttpStatus: status => { statuses.push(status); } }).then(() => null, (error: unknown) => error);
     await vi.advanceTimersByTimeAsync(1000);
     controller.abort();
     expect(await result).toBeInstanceOf(Error);
     expect(upstream).toHaveBeenCalledTimes(1);
+    expect(statuses).toEqual([429]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["throw", "reject", "pending"])("HTTP 观察器 %s 不改变恢复结果与重试次数", async mode => {
+    const statuses: number[] = [];
+    const upstream = vi.fn().mockResolvedValueOnce(new Response(null, { status: 429 })).mockResolvedValueOnce(succeed());
+    vi.stubGlobal("fetch", upstream);
+    const result = chat("parse", [], { onHttpStatus: status => {
+      statuses.push(status);
+      if (mode === "throw") throw new Error("observer-only");
+      if (mode === "reject") return Promise.reject(new Error("observer-only"));
+      return new Promise<void>(() => {});
+    } });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await result).toBe("ok");
+    expect(statuses).toEqual([429, 200]);
+    expect(upstream).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("并发调用的状态独立，恢复只覆盖本次调用的历史", async () => {
+    const upstream = vi.fn().mockResolvedValueOnce(new Response(null, { status: 429 }))
+      .mockResolvedValueOnce(succeed()).mockResolvedValueOnce(succeed());
+    vi.stubGlobal("fetch", upstream);
+    const first: number[] = [], second: number[] = [];
+    const a = chat("parse", [], { onHttpStatus: status => { first.push(status); } });
+    const b = chat("parse", [], { onHttpStatus: status => { second.push(status); } });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await Promise.all([a, b])).toEqual(["ok", "ok"]);
+    expect(first).toEqual([429, 200]);
+    expect(second).toEqual([200]);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

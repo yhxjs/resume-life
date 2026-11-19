@@ -4,6 +4,7 @@ import { BUILTIN_STYLES, RESUME_TEMPLATES } from "@/lib/templates";
 import { btnGhost, btnPrimary, cardCls, inputCls, textareaShortCls } from "@/lib/ui";
 import { StyleFieldGroups } from "./style-field-groups";
 import { LoadingOverlay } from "@/components/common/loading-overlay";
+import { ToolHistoryDeletionFeedback } from "@/components/common/tool-history-deletion-feedback";
 
 type StyleInspectorProps = {
   controller: TemplateLibraryController;
@@ -13,7 +14,7 @@ type StyleInspectorProps = {
 export function StyleInspector({ controller, className }: StyleInspectorProps) {
   const {
     customs, draft, draftName, setDraftName, editingId,
-    aiPrompt, setAiPrompt, aiLoading, saving, aiNote, loadError, reloadCustoms,
+    aiPrompt, setAiPrompt, aiLoading, saving, aiNote, loadError, reloadCustoms, deletion,
     commit, set, loadStyle, aiGenerate, saveNew, saveChanges, removeCustom,
   } = controller;
 
@@ -48,7 +49,8 @@ export function StyleInspector({ controller, className }: StyleInspectorProps) {
                   className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-surface"
                 >
                   <button
-                    className="truncate text-left text-sm text-ink"
+                    className="min-w-0 truncate text-left text-sm text-ink"
+                    disabled={template.corrupted && (saving || aiLoading || deletion.busy)}
                     onClick={() => loadStyle(template)}
                   >
                     {template.name}
@@ -59,6 +61,7 @@ export function StyleInspector({ controller, className }: StyleInspectorProps) {
                   </button>
                   <button
                     className="shrink-0 text-xs text-danger hover:underline"
+                    disabled={saving || aiLoading || (deletion.busy && deletion.phase !== "confirming")}
                     onClick={() => removeCustom(template)}
                   >
                     删除
@@ -73,6 +76,9 @@ export function StyleInspector({ controller, className }: StyleInspectorProps) {
             <InlineError message={`我的模板加载失败：${loadError}`} onRetry={reloadCustoms} />
           </div>
         )}
+        <div className="mt-2 space-y-2">
+          <ToolHistoryDeletionFeedback deletion={deletion} deletingLabel="正在删除模板…" />
+        </div>
       </section>
 
       <section className={`relative ${cardCls} p-4`}>
@@ -91,7 +97,7 @@ export function StyleInspector({ controller, className }: StyleInspectorProps) {
         />
         <div className="mt-2 flex items-center justify-between gap-2">
           <span className="text-xs text-faint">{aiNote || "生成结果只应用到检查器，确认满意后另存。"}</span>
-          <button className={btnPrimary} disabled={!aiPrompt.trim() || aiLoading || saving} onClick={aiGenerate}>
+          <button className={btnPrimary} disabled={!aiPrompt.trim() || aiLoading || saving || deletion.busy} onClick={aiGenerate}>
             {aiLoading ? "生成中…" : "AI 生成"}
           </button>
         </div>
@@ -113,11 +119,11 @@ export function StyleInspector({ controller, className }: StyleInspectorProps) {
         </label>
         <div className="mt-3 flex flex-wrap gap-2">
           {editingId !== null && (
-            <button className={btnPrimary} onClick={saveChanges} disabled={saving || aiLoading}>
+            <button className={btnPrimary} onClick={saveChanges} disabled={saving || aiLoading || deletion.busy}>
               保存修改
             </button>
           )}
-          <button className={editingId !== null ? btnGhost : btnPrimary} onClick={saveNew} disabled={saving || aiLoading}>
+          <button className={editingId !== null ? btnGhost : btnPrimary} onClick={saveNew} disabled={saving || aiLoading || deletion.busy}>
             另存为新模板
           </button>
         </div>

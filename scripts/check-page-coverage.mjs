@@ -57,14 +57,15 @@ const criticalPages = [
   "src/app/tools/decoder/page.tsx",
   "src/app/tools/jd/page.tsx",
   "src/app/tools/salary/page.tsx",
+  "src/app/login/page.tsx",
 ];
 console.log(`页面/布局单测覆盖：${covered}/${lines} 行，${coveredPages}/${pages.length} 个文件`);
-// 2026-10-05 实测 920/1831 行、33/38 文件；保留小幅波动余量，避免大幅退化仍通过。
+// 2026-11-03 实测 1928/2292 行、34/38 文件；留出余量，登录入口也须独立命中。
 if (
-  pages.length < 33 || lines < 1600 || covered < 900 || coveredPages < 32 ||
-  covered / lines < 0.49 ||
+  pages.length < 38 || lines < 2100 || covered < 1800 || coveredPages < 34 ||
+  covered / lines < 0.80 ||
   criticalPages.some((filename) => !pages.some((page) => page.filename === filename && page.covered > 0))
 ) {
-  console.error("页面/布局单测覆盖未达基线：至少 900 行、32 个文件、49% 行覆盖率，报告含至少 1600 行/33 个文件且关键入口页面需命中");
+  console.error("页面/布局单测覆盖未达基线：至少 1800 行、34 个文件、80% 行覆盖率，报告含至少 2100 行/38 个文件且关键入口页面需命中");
   process.exitCode = 1;
 }

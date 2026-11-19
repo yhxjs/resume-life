@@ -24,6 +24,35 @@ afterEach(() => {
 });
 
 describe("project summary history", () => {
+  it("历史 API 绑定当前项目，分页读取与错误响应不改写任何档案", async () => {
+    const { saveProjectSummary } = await import("../project-summary-history");
+    db.exec("INSERT INTO projects (id,name,created_at,updated_at) VALUES (2,'另一项目','','')");
+    saveProjectSummary(1, { summary: { ...emptySummary(), overview: "第一版 <T> &amp;\n内部  空格" } });
+    const other = saveProjectSummary(2, { summary: { ...emptySummary(), overview: "不能串项目的原文" } });
+    for (let index = 2; index <= 12; index++) saveProjectSummary(1, { summary: { ...emptySummary(), overview: `第 ${index} 版`, achievements: index === 12 ? ["", "原文成果"] : [] } });
+    const before = {
+      projects: db.prepare("SELECT * FROM projects ORDER BY id").all(),
+      history: db.prepare("SELECT * FROM project_summary_history ORDER BY id").all(),
+      changes: db.prepare("SELECT total_changes() AS count").get(),
+    };
+    const { GET } = await import("@/app/api/projects/[id]/summary-history/route");
+    const { readProjectSummaryHistoryPage } = await import("../project-summary-history-records");
+    const request = (id: string, query = "limit=10") => GET(new Request(`http://localhost/api/projects/${id}/summary-history?${query}`), { params: Promise.resolve({ id }) });
+    const response = await request("1"); expect(response.status).toBe(200); expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const first = readProjectSummaryHistoryPage(await response.json(), { projectId: 1, limit: 10 });
+    const next = readProjectSummaryHistoryPage(await (await request("1", `limit=10&cursor=${first.nextCursor}`)).json(), { projectId: 1, limit: 10, cursor: first.nextCursor! });
+    const ids = [...first.items, ...next.items].map(item => item.id);
+    expect(ids).toHaveLength(12); expect(new Set(ids).size).toBe(12); expect(ids).not.toContain(other.id); expect(next.nextCursor).toBeNull();
+    expect(next.items.at(-1)?.summary.overview).toBe("第一版 <T> &amp;\n内部  空格");
+    const otherPage = readProjectSummaryHistoryPage(await (await request("2")).json(), { projectId: 2, limit: 10 });
+    expect(otherPage.items.map(item => item.id)).toEqual([other.id]);
+    for (const [id, query, status] of [["0", "", 400], ["bad", "", 400], ["999", "", 404], ["1", "cursor=bad", 400], ["1", "limit=0", 400]] as const) {
+      const failure = await request(id, query); expect(failure.status).toBe(status); expect(failure.headers.get("Cache-Control")).toBe("no-store");
+    }
+    expect(db.prepare("SELECT * FROM projects ORDER BY id").all()).toEqual(before.projects);
+    expect(db.prepare("SELECT * FROM project_summary_history ORDER BY id").all()).toEqual(before.history);
+    expect(db.prepare("SELECT total_changes() AS count").get()).toEqual(before.changes);
+  });
   it.each(["T", "中", '"'])("rejects oversized material snapshots atomically (%s)", async (character) => {
     const history = await import("../project-summary-history");
     const insert = db.prepare("INSERT INTO project_materials (project_id,title,content,created_at) VALUES (1,?,'正文','')");

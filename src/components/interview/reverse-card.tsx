@@ -21,7 +21,7 @@ export function InterviewReverseCard({ data, styleName }: InterviewReverseCardPr
           <span className="font-medium text-ink">
             尾声反问环节（Reverse Interview）
           </span>
-          <span className={badgePrimary}>加分参考项</span>
+          <span className={badgePrimary}>模拟练习</span>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-muted">提问水平评级：</span>
@@ -39,6 +39,7 @@ export function InterviewReverseCard({ data, styleName }: InterviewReverseCardPr
       </div>
 
       <div className="p-5 space-y-4">
+        <p className="text-xs leading-relaxed text-muted">以下为 AI 根据已提供背景生成的模拟回应；真实公司的安排与承诺仍需向招聘方核实。</p>
         {/* 候选人的提问 */}
         <div>
           <div className="flex items-center gap-2 text-xs font-medium text-muted">
@@ -50,7 +51,7 @@ export function InterviewReverseCard({ data, styleName }: InterviewReverseCardPr
               </span>
             )}
           </div>
-          <div className="mt-1.5 rounded-xl rounded-tl-sm border border-line bg-card p-3.5 text-sm font-medium text-ink leading-relaxed">
+          <div className="mt-1.5 rounded-xl rounded-tl-sm border border-line bg-card p-3.5 text-sm font-medium text-ink leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
             {question}
           </div>
         </div>
@@ -59,9 +60,9 @@ export function InterviewReverseCard({ data, styleName }: InterviewReverseCardPr
         <div>
           <div className="flex items-center gap-2 text-xs font-medium text-muted">
             <span className="h-2 w-2 rounded-full bg-accent" />
-            <span>面试官作答{styleName ? `（${styleName}）` : ""}</span>
+            <span>面试官模拟回应{styleName ? `（${styleName}）` : ""}</span>
           </div>
-          <div className="mt-1.5 rounded-xl rounded-tl-sm bg-surface p-3.5 text-sm text-ink leading-relaxed whitespace-pre-wrap">
+          <div className="mt-1.5 rounded-xl rounded-tl-sm bg-surface p-3.5 text-sm text-ink leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
             {answer}
           </div>
         </div>

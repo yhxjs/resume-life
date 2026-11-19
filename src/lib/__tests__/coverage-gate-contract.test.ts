@@ -2,17 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const configSource = fs.readFileSync(path.join(process.cwd(), "vitest.config.ts"), "utf8");
+const configSource = fs.readFileSync(path.join(process.cwd(), "vitest.config.mts"), "utf8");
 
 /**
- * 最近一次全量覆盖率实测水位（2026-09-28，含页面和布局）。
+ * 最近一次全量覆盖率实测水位（2026-11-03，含页面和布局）。
  *
  * 门禁阈值必须留在这条线之下：一个永远失败的门禁等价于没有门禁，
  * 而且会训练所有人忽略 CI 红叉；扩大统计范围后需重测基线再调整阈值。
  *
- * 覆盖率真实提升后，请同步上调这里与 vitest.config.ts。
+ * 覆盖率真实提升后，请同步上调这里与 vitest.config.mts。
  */
-const MEASURED = { lines: 55.07, functions: 40.05, branches: 42.45 } as const;
+const MEASURED = { lines: 87.84, functions: 81.57, branches: 80.30 } as const;
 
 type ThresholdKey = "lines" | "functions" | "branches";
 
@@ -48,9 +48,9 @@ describe("覆盖率门禁契约", () => {
   });
 
   it("所有阈值都不低于下界，挡住「把门禁改回形同虚设」", () => {
-    expect(threshold(configSource, "lines")).toBeGreaterThanOrEqual(50);
-    expect(threshold(configSource, "functions")).toBeGreaterThanOrEqual(38);
-    expect(threshold(configSource, "branches")).toBeGreaterThanOrEqual(37);
+    expect(threshold(configSource, "lines")).toBeGreaterThanOrEqual(85);
+    expect(threshold(configSource, "functions")).toBeGreaterThanOrEqual(78);
+    expect(threshold(configSource, "branches")).toBeGreaterThanOrEqual(77);
   });
 
   it("所有阈值都不高于实测水位，保证门禁当下确实能过", () => {

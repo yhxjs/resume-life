@@ -2,6 +2,53 @@ import { describe, expect, it } from "vitest";
 import { collectProofingFields, findSourceMatches } from "../import-proofing";
 
 describe("简历导入字段校对", () => {
+  it("量化指标保留正负号、小数和分组数字，不把数值的一部分提取成另一项指标", () => {
+    const fields = collectProofingFields({ work: [{ description: "吞吐下降 -35%，金额 1,200.5 万元；延迟 0.5ms；区间 10–35 人。" }] });
+    expect(fields.map((field) => field.value)).toEqual(["-35%", "1,200.5 万元", "0.5ms", "10–35 人"]);
+  });
+
+  it("指标定位只命中完整数值，不把 135%、1.35% 或负值当作 35% 的依据", () => {
+    const source = "135%；1.35%；-35%；+35%；35%";
+    const field = { id: "work[0].metric[0]", category: "量化指标" as const, label: "工作 1 · 指标", value: "35%" };
+    expect(findSourceMatches(source, field)).toEqual([{ start: source.lastIndexOf("35%"), end: source.length }]);
+    const signedSource = "-135%；－３５％；-35%";
+    expect(findSourceMatches(signedSource, { ...field, value: "-35%" }))
+      .toEqual([{ start: signedSource.indexOf("－"), end: signedSource.indexOf("；", signedSource.indexOf("－")) },
+        { start: signedSource.lastIndexOf("-35%"), end: signedSource.length }]);
+  });
+
+  it("全角、比较符号与完整单位保持原字符，定位可容忍单位前空白但不丢条件", () => {
+    const text = "耗时 ≤０．５ｍｓ；规模 ３千万次；未确认 ≈１，２００．５ 万元；范围 -10--5%。";
+    const fields = collectProofingFields({ projects: [{ descriptionItems: [text] }] });
+    expect(fields.map((field) => field.value)).toEqual(["≤０．５ｍｓ", "３千万次", "≈１，２００．５ 万元", "-10--5%"]);
+    expect(findSourceMatches("前文 ≤ 0.5 ms 后文", fields[0]!)).toEqual([{ start: 3, end: 11 }]);
+    expect(findSourceMatches("耗时 0.5 ms", fields[0]!)).toEqual([]);
+    expect(findSourceMatches("规模 3千万次", { ...fields[1]!, value: "3千万" })).toEqual([]);
+    expect(findSourceMatches("范围 -10--5%", { ...fields[3]!, value: "-5%" })).toEqual([]);
+  });
+
+  it("指数数值不能被截成尾数或指数，英文单词与标识符不冒充指标", () => {
+    const fields = collectProofingFields({ work: [{ descriptionItems: ["误差 -1e-3s；延迟 1.2e+3ms；标识 v35% 与 120seconds 不作数值依据。"] }] });
+    expect(fields.map((field) => field.value)).toEqual(["-1e-3s", "1.2e+3ms"]);
+    expect(findSourceMatches("耗时 -1e-3s", { ...fields[0]!, value: "3s" })).toEqual([]);
+  });
+
+  it("副项按纯文本提取，不把实体或标签字面量解析成新的比较条件或指标", () => {
+    const fields = collectProofingFields({ projects: [{ description: "阈值 &lt;=35%",
+      subItems: [{ value: "原字符 &lt;=35%，字面 <span>12</span>ms，实际 ≤0.5ms" }] }] });
+    expect(fields.map((field) => field.value)).toEqual(["<=35%", "35%", "≤0.5ms"]);
+  });
+
+  it("自定义证书和奖项的日期与指标也能定位到原文", () => {
+    const fields = collectProofingFields({ custom: [{ title: "合成竞赛", start: "2024年6月", end: "",
+      descriptionItems: ["团队共 5 人"], subItems: [{ label: "奖金", value: "2000 元" }] }] });
+    expect(fields.map(({ id, category, value }) => [id, category, value])).toEqual([
+      ["custom[0].start", "日期", "2024年6月"],
+      ["custom[0].metric[0]", "量化指标", "5 人"],
+      ["custom[0].metric[1]", "量化指标", "2000 元"],
+    ]);
+    expect(findSourceMatches("2024年6月 团队共 5 人", fields[0]!)).toEqual([{ start: 0, end: 6 }]);
+  });
   it("按草稿路径收集联系方式、日期、学校、公司与量化指标", () => {
     const fields = collectProofingFields({
       basic: { phone: "13800138000", email: "A@EXAMPLE.COM", birthday: "1998-05" },

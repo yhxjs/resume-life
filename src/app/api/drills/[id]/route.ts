@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { clearEntityLlmLabels } from "@/lib/llm-label-cleanup";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
@@ -64,19 +65,19 @@ function loadDrill(id: number) {
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const drillId = Number(id);
-  if (!Number.isInteger(drillId)) {
+  const drillId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(drillId) || drillId <= 0) {
     return NextResponse.json({ error: "无效的练习 ID" }, { status: 400 });
   }
   const data = loadDrill(drillId);
-  if (!data) return NextResponse.json({ error: "练习不存在" }, { status: 404 });
-  return NextResponse.json(data);
+  if (!data) return NextResponse.json({ error: "练习不存在" }, { status: 404, headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } });
 }
 
 async function handleDelete(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const drillId = Number(id);
-  if (!Number.isInteger(drillId)) {
+  const drillId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(drillId) || drillId <= 0) {
     return NextResponse.json({ error: "无效的练习 ID" }, { status: 400 });
   }
   const db = getDb();

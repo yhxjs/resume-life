@@ -3,7 +3,7 @@ import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { ApplicationInputError } from "@/lib/applications";
-import { createResume } from "@/lib/resume-creation";
+import { createResume, createResumeRequest, ResumeCreationConflictError } from "@/lib/resume-creation";
 import type { ResumeVersionSummary } from "@/lib/resume-version-types";
 
 async function handleGet() {
@@ -25,9 +25,15 @@ async function handlePost(req: Request) {
   const parsedBody = await parseApiJson<unknown>(req);
   if (!parsedBody.ok) return parsedBody.response;
   try {
+    const requestId = req.headers.get("Idempotency-Key");
+    if (requestId !== null) {
+      const { result, replayed } = createResumeRequest(parsedBody.data, requestId);
+      return NextResponse.json({ ...result, request_id: requestId }, { status: replayed ? 200 : 201 });
+    }
     return NextResponse.json(createResume(parsedBody.data), { status: 201 });
   } catch (error) {
     if (error instanceof ApplicationInputError) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (error instanceof ResumeCreationConflictError) return NextResponse.json({ error: error.message }, { status: error.status });
     throw error;
   }
 }

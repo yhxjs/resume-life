@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ProjectSummary } from "@/lib/summary";
 import type { EntrySubItem } from "@/lib/modules";
 import { useModalFocus } from "@/hooks/use-modal-focus";
 import { btnGhost, btnPrimary, inputCls, labelCls, textareaCls, textErr } from "@/lib/ui";
 import { errorMessage } from "@/lib/error-message";
 import { jsonFetch } from "@/lib/fetcher";
+import { splitRichTextToLines, stripRichText } from "@/lib/rich-text";
+import { RichText } from "@/components/resume/rich-text";
 
 type ProjectBrief = { id: number; name: string };
 
@@ -16,7 +18,7 @@ type ProjectBrief = { id: number; name: string };
 export type ExtractPayload = {
   techStack?: string;      // 写入自定义副项 label: "技术栈"
   brief?: string;          // 写入无 key 自定义副项 label: ""
-  achievements?: string[]; // 写入多行独立描述项 descriptionItems
+  achievements?: string[]; // 纯文本草稿，由接收方转义后写入富文本 descriptionItems
   mode: "replace" | "append";
 };
 
@@ -24,21 +26,30 @@ type ResumeElementKey = "techStack" | "brief" | "achievements";
 
 /** 「从项目摘取」对话框：选项目 → 勾选三要素 → 精准写入对应位置 */
 export function ExtractDialog({
+  targetId = "",
   current = "",
   currentName = "",
+  currentSecondary,
+  currentStart = "",
+  currentEnd = "",
   currentSubItems,
   currentDescriptionItems,
   onWrite,
   onApply,
 }: {
+  targetId?: string;
   current?: string;
   currentName?: string;
+  currentSecondary?: { label: string; value: string };
+  currentStart?: string;
+  currentEnd?: string;
   currentSubItems?: EntrySubItem[];
   currentDescriptionItems?: string[];
   onWrite?: (description: string) => void;
   onApply?: (payload: ExtractPayload) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [openedTarget, setOpenedTarget] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectBrief[] | null>(null);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [summary, setSummary] = useState<ProjectSummary | null>(null);
@@ -56,26 +67,74 @@ export function ExtractDialog({
 
   const [mode, setMode] = useState<"replace" | "append">("replace");
   const [error, setError] = useState("");
-  const dialogRef = useModalFocus(open, () => setOpen(false), "input, textarea, select");
+  const requestRef = useRef<AbortController | null>(null);
+  const dialogRef = useModalFocus(open, handleClose, "input, textarea, select");
+  const targetDescription = currentDescriptionItems && currentDescriptionItems.length > 0
+    ? currentDescriptionItems : splitRichTextToLines(current);
+  const targetKey = JSON.stringify([
+    targetId, currentName, currentSecondary?.label ?? "", currentSecondary?.value ?? "", currentStart, currentEnd,
+    targetDescription.map(stripRichText),
+    (currentSubItems ?? []).map(({ id, label, value }) => [id, label, value]),
+    // 兼容文本回调会拼接 current 本身，因此该路径还须检查整段原文。
+    onWrite ? current : null,
+  ]);
+  const targetChanged = open && openedTarget !== targetKey;
+
+  useEffect(() => () => {
+    requestRef.current?.abort();
+    requestRef.current = null;
+  }, []);
+
+  function handleClose() {
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setOpen(false);
+  }
+
+  function startRead() {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    return controller;
+  }
+
+  function clearSummary() {
+    setSummary(null);
+    setDraftTechStack("");
+    setDraftBrief("");
+    setDraftAchievements([]);
+    setCheckedElements(new Set());
+    setCheckedAchievements(new Set());
+  }
 
   async function openDialog() {
+    const controller = startRead();
+    setOpenedTarget(targetKey);
     setOpen(true);
+    setProjects(null);
+    setProjectId(null);
+    clearSummary();
     setError("");
     try {
-      const list = await jsonFetch<ProjectBrief[]>("/api/projects");
+      const list = await jsonFetch<ProjectBrief[]>("/api/projects", { signal: controller.signal });
+      if (requestRef.current !== controller || controller.signal.aborted) return;
       setProjects(list);
       if (list.length > 0) await pickProject(list[0]!.id);
     } catch (err) {
-      setError(errorMessage(err));
+      if (requestRef.current === controller && !controller.signal.aborted) setError(errorMessage(err));
+    } finally {
+      if (requestRef.current === controller) requestRef.current = null;
     }
   }
 
   async function pickProject(id: number) {
+    const controller = startRead();
     setProjectId(id);
-    setSummary(null);
+    clearSummary();
     setError("");
     try {
-      const data = await jsonFetch<{ summary: ProjectSummary }>(`/api/projects/${id}`);
+      const data = await jsonFetch<{ summary: ProjectSummary }>(`/api/projects/${id}`, { signal: controller.signal });
+      if (requestRef.current !== controller || controller.signal.aborted) return;
       const sum = data.summary;
       setSummary(sum);
 
@@ -96,7 +155,9 @@ export function ExtractDialog({
       const initialAchs = new Set<number>(Array.from({ length: achs.length }, (_, i) => i));
       setCheckedAchievements(initialAchs);
     } catch (err) {
-      setError(errorMessage(err));
+      if (requestRef.current === controller && !controller.signal.aborted) setError(errorMessage(err));
+    } finally {
+      if (requestRef.current === controller) requestRef.current = null;
     }
   }
 
@@ -114,15 +175,19 @@ export function ExtractDialog({
     setCheckedAchievements(next);
   }
 
+  // 预览、按钮和写入共用当前勾选且非空的内容，避免清空草稿后仍提交空替换。
+  const selectedTech = checkedElements.has("techStack") ? draftTechStack.trim() || undefined : undefined;
+  const selectedBrief = checkedElements.has("brief") ? draftBrief.trim() || undefined : undefined;
+  const selectedAchs = checkedElements.has("achievements")
+    ? draftAchievements
+        .filter((_, idx) => checkedAchievements.has(idx))
+        .map((a) => a.trim())
+        .filter((a) => a.length > 0)
+    : undefined;
+  const canWrite = Boolean(!targetChanged && summary && (selectedTech || selectedBrief || selectedAchs?.length));
+
   function handleWrite() {
-    const selectedTech = checkedElements.has("techStack") && draftTechStack.trim() ? draftTechStack.trim() : undefined;
-    const selectedBrief = checkedElements.has("brief") && draftBrief.trim() ? draftBrief.trim() : undefined;
-    const selectedAchs = checkedElements.has("achievements")
-      ? draftAchievements
-          .filter((_, idx) => checkedAchievements.has(idx))
-          .map((a) => a.trim())
-          .filter((a) => a.length > 0)
-      : undefined;
+    if (!open || !canWrite) return;
 
     const payload: ExtractPayload = {
       techStack: selectedTech,
@@ -146,7 +211,7 @@ export function ExtractDialog({
       onWrite(mode === "append" && current.trim() ? `${current.trim()}\n\n${text}` : text);
     }
 
-    setOpen(false);
+    handleClose();
   }
 
   if (!open) {
@@ -164,60 +229,35 @@ export function ExtractDialog({
         (summary.achievements && summary.achievements.length > 0))
   );
 
-  const selectedProjectName = projects?.find((p) => p.id === projectId)?.name || "";
-  const previewProjectTitle = currentName?.trim() || selectedProjectName || "项目名称";
+  // 摘取不改动条目抬头，预览也不能借用知识库项目名或示例身份。
+  const previewProjectTitle = currentName.trim() || "未填写名称";
+  const previewPeriod = [currentStart.trim(), currentEnd.trim()].filter(Boolean).join(" — ");
 
-  const isNothingSelected =
-    !checkedElements.has("techStack") &&
-    !checkedElements.has("brief") &&
-    (!checkedElements.has("achievements") || checkedAchievements.size === 0);
+  const newTech = selectedTech ?? "";
+  const newBrief = selectedBrief ?? "";
 
-  const newTech = checkedElements.has("techStack") && draftTechStack.trim() ? draftTechStack.trim() : "";
-  const newBrief = checkedElements.has("brief") && draftBrief.trim() ? draftBrief.trim() : "";
-
-  let previewSubItems: { label: string; value: string; isNew?: boolean }[] = [];
-  if (mode === "replace") {
-    if (newTech) previewSubItems.push({ label: "技术栈", value: newTech, isNew: true });
-    if (newBrief) previewSubItems.push({ label: "", value: newBrief, isNew: true });
-  } else {
-    // 追加模式：合并已有副项与新副项
-    const existing = (currentSubItems ?? []).map((s) => ({ label: s.label, value: s.value, isNew: false }));
-    const merged = [...existing];
-
-    if (newTech) {
-      const techIdx = merged.findIndex((s) => s.label === "技术栈");
-      if (techIdx >= 0) {
-        merged[techIdx] = { label: "技术栈", value: newTech, isNew: true };
-      } else {
-        merged.push({ label: "技术栈", value: newTech, isNew: true });
-      }
+  // 两种模式均按标签更新选中的副项，其余副项及排序保留。
+  const previewSubItems = (currentSubItems ?? []).map((s) => ({ label: s.label, value: s.value, isNew: false }));
+  for (const update of [{ label: "技术栈", value: newTech }, { label: "", value: newBrief }]) {
+    if (!update.value) continue;
+    const index = previewSubItems.findIndex((s) => s.label === update.label);
+    const next = { ...update, isNew: true };
+    if (index >= 0) {
+      previewSubItems[index] = next;
+    } else {
+      previewSubItems.push(next);
     }
-
-    if (newBrief) {
-      const briefIdx = merged.findIndex((s) => s.label === "");
-      if (briefIdx >= 0) {
-        merged[briefIdx] = { label: "", value: newBrief, isNew: true };
-      } else {
-        merged.push({ label: "", value: newBrief, isNew: true });
-      }
-    }
-
-    previewSubItems = merged;
   }
 
-  const selectedNewAchs = checkedElements.has("achievements")
-    ? draftAchievements
-        .filter((_, idx) => checkedAchievements.has(idx))
-        .map((a) => a.trim())
-        .filter((a) => a.length > 0)
-    : [];
+  const selectedNewAchs = selectedAchs ?? [];
 
   let previewAchievements: { text: string; isNew?: boolean }[] = [];
-  if (mode === "replace") {
+  if (mode === "replace" && selectedNewAchs.length > 0) {
     previewAchievements = selectedNewAchs.map((text) => ({ text, isNew: true }));
   } else {
-    // 追加模式：原有成果排在前面，新增选中的成果追加在末尾
-    const existingAchs = (currentDescriptionItems ?? [])
+    // 没有选中非空成果时保留原描述；追加模式把新成果放在原文末尾。
+    const existingAchs = (currentDescriptionItems && currentDescriptionItems.length > 0
+      ? currentDescriptionItems : splitRichTextToLines(current))
       .map((d) => d.trim())
       .filter((d) => d.length > 0)
       .map((text) => ({ text, isNew: false }));
@@ -234,7 +274,7 @@ export function ExtractDialog({
       aria-modal="true"
       aria-label="从项目摘取到简历"
       className="overlay-in fixed inset-0 z-50 flex items-center justify-center bg-overlay p-3 sm:p-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-[2px]"
-      onClick={() => setOpen(false)}
+      onClick={handleClose}
     >
       <div
         ref={dialogRef}
@@ -253,7 +293,7 @@ export function ExtractDialog({
           </div>
           <button
             type="button"
-            onClick={() => setOpen(false)}
+            onClick={handleClose}
             className="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-ink"
             aria-label="关闭"
           >
@@ -263,6 +303,9 @@ export function ExtractDialog({
 
         <div className="flex-1 overflow-y-auto px-5 py-4 sm:px-6">
           {error && <p className={`text-sm mb-3 ${textErr}`}>{error}</p>}
+          {targetChanged && <p role="alert" className={`text-sm mb-3 ${textErr}`}>
+            目标条目信息已变化，摘取草稿已保留；请关闭并重新打开，核对最新内容后再写入。
+          </p>}
 
           {projects && projects.length === 0 ? (
             <p className="text-sm text-muted">
@@ -434,20 +477,22 @@ export function ExtractDialog({
                         : "bg-primary-soft text-primary border-primary/20"
                     }`}
                   >
-                    {mode === "replace" ? "⚡ 完全替换预览" : "➕ 追加合并预览"}
+                    {mode === "replace" ? "⚡ 选中内容替换预览" : "➕ 追加合并预览"}
                   </span>
                 </div>
 
-                <div className="rounded-2xl border border-line bg-surface/40 p-4.5 shadow-2xs space-y-3">
-                  {/* 项目标题与时间行模拟 */}
+                {targetChanged ? <p className="text-sm text-muted">目标已变化，合并预览已暂停。</p> : <div role="region" aria-label="摘取后内容预览" className="rounded-2xl border border-line bg-surface/40 p-4.5 shadow-2xs space-y-3">
+                  {/* 当前目标条目的真实抬头；缺失信息不补写。 */}
                   <div className="flex items-baseline justify-between border-b border-line pb-2.5">
                     <div>
                       <h3 className="font-serif text-sm sm:text-base font-bold text-ink">
                         {previewProjectTitle}
                       </h3>
-                      <p className="text-xs text-muted mt-0.5">担任角色：技术负责人 / 核心开发</p>
+                      {currentSecondary?.value.trim() && (
+                        <p className="text-xs text-muted mt-0.5">{currentSecondary.label}：{currentSecondary.value}</p>
+                      )}
                     </div>
-                    <span className="font-mono text-xs text-muted">至今</span>
+                    {previewPeriod && <span className="font-mono text-xs text-muted">{previewPeriod}</span>}
                   </div>
 
                   {/* 自定义副项预览区 */}
@@ -496,7 +541,9 @@ export function ExtractDialog({
                             }`}
                           >
                             <span className="text-primary font-bold shrink-0">•</span>
-                            <span className="flex-1">{ach.text}</span>
+                            <span className="flex-1 whitespace-pre-wrap">
+                              {ach.isNew ? ach.text : <RichText content={ach.text} />}
+                            </span>
                             {ach.isNew && mode === "append" && (
                               <span className="shrink-0 rounded bg-primary-soft text-[10px] text-primary px-1 font-medium border border-primary/20">
                                 新增追加
@@ -512,10 +559,10 @@ export function ExtractDialog({
 
                   <div className="mt-3 rounded-lg border border-primary/20 bg-primary-soft/30 p-2 text-[11px] text-primary leading-tight">
                     {mode === "replace"
-                      ? "💡 替换模式：点击写入后，本条项目经历的现有副项和描述行将被全部覆盖为上方新预览内容。"
-                      : "💡 追加模式：点击写入后，保留当前已有内容，并在其末尾追加上方带有 [新增追加] 标签的新条目。"}
+                      ? "💡 替换模式：仅替换勾选且非空的对应内容；未选择的副项与成果保留。"
+                      : "💡 追加模式：保留现有成果并追加勾选成果；勾选的技术栈和简述更新到对应副项。"}
                   </div>
-                </div>
+                </div>}
               </div>
             </div>
           ) : (
@@ -524,13 +571,13 @@ export function ExtractDialog({
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3 sm:px-6 bg-card">
-          <button className={btnGhost} onClick={() => setOpen(false)}>
+          <button className={btnGhost} onClick={handleClose}>
             取消
           </button>
           <button
             className={btnPrimary}
             onClick={handleWrite}
-            disabled={!hasResumeData || isNothingSelected}
+            disabled={!canWrite}
           >
             写入项目经历对应位置
           </button>

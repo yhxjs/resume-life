@@ -58,6 +58,58 @@ async function submit(id: number, body: Record<string, unknown> = {}) {
 }
 
 describe("复习闭环", () => {
+  it("新卡展示日期不同于真实排序日期，客户端严格校验仍可完整读取", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-29T09:00:00Z"));
+    for (let i = 0; i < 3; i++) await favorite(seedQuestion("bank").id);
+    const ids = (db.prepare("SELECT id FROM review_cards ORDER BY id").all() as { id: number }[]).map(row => row.id);
+    for (const [index, date] of ["2026-10-30", "2026-10-28", "2026-10-29"].entries()) db.prepare("UPDATE review_cards SET next_review_date=? WHERE id=?").run(date, ids[index]!);
+    const { readReviewList } = await import("../review-records");
+    const query = { date: "2026-10-29", scope: "due" as const, source: "all" as const, limit: 1 };
+    const first = readReviewList(await list("limit=1"), query);
+    const second = readReviewList(await list(`limit=1&cursor=${first.nextCursor}`), { ...query, cursor: first.nextCursor! });
+    const third = readReviewList(await list(`limit=1&cursor=${second.nextCursor}`), { ...query, cursor: second.nextCursor! });
+    expect([first, second, third].map(page => page.items[0]!.id)).toEqual([ids[1], ids[2], ids[0]]);
+    expect([first, second, third].map(page => page.items[0]!.sort_date)).toEqual(["2026-10-28", "2026-10-29", "2026-10-30"]);
+    expect([first, second, third].every(page => page.items[0]!.next_review_date === query.date)).toBe(true);
+    expect(third.nextCursor).toBeNull();
+  });
+  it("首屏卡被真实复习后在全部列表后页重现，合法更新移到新排序位置", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-29T09:00:00Z"));
+    for (let i = 0; i < 3; i++) await favorite(seedQuestion("bank").id);
+    const { readReviewList, appendReviewList } = await import("../review-records");
+    const query = { date: "2026-10-29", scope: "all" as const, source: "all" as const, limit: 2 };
+    const first = readReviewList(await list("scope=all&limit=2"), query);
+    const movedId = first.items[0]!.id;
+    expect((await submit(movedId)).status).toBe(200);
+    const next = readReviewList(await list(`scope=all&limit=2&cursor=${first.nextCursor}`), { ...query, cursor: first.nextCursor! });
+    const merged = appendReviewList(first, next);
+    expect(merged.items.map(item => item.id)).toEqual([first.items[1]!.id, next.items[0]!.id, movedId]);
+    expect(merged.items.at(-1)).toMatchObject({ review_count: 1, sort_date: "2026-10-30" });
+    expect(merged.summary).toMatchObject({ total: 3, due: 2, completed_today: 1 });
+  });
+  it("收藏返回实际复习关联，追练转收藏保留原卡和已学习排期", async () => {
+    const question = seedQuestion();
+    await enroll(question.id);
+    const card = (await list()).items[0]!;
+    expect((await submit(card.id)).status).toBe(200);
+    const before = await detail(card.id);
+    const route = await import("@/app/api/notebook/route");
+    const response = await route.POST(new Request("http://localhost/api/notebook", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: "drill", source_id: question.id }) }));
+    expect(response.status).toBe(201);
+    const saved = await response.json();
+    expect(saved.review).toEqual({ review_card_id: card.id, review_mastery: before.mastery, next_review_date: before.next_review_date });
+    expect((await list("scope=all")).items).toHaveLength(1);
+    expect((await detail(card.id)).attempts).toEqual(before.attempts);
+  });
+  it("收藏未能建立复习关联时整笔回滚，不返回假成功", async () => {
+    const question = seedQuestion("bank");
+    db.exec("CREATE TRIGGER remove_new_review AFTER INSERT ON review_cards BEGIN DELETE FROM review_cards WHERE id=NEW.id; END;");
+    const route = await import("@/app/api/notebook/route");
+    const response = await route.POST(new Request("http://localhost/api/notebook", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source: "drill", source_id: question.id }) }));
+    expect(response.status).toBe(500);
+    expect(db.prepare("SELECT COUNT(*) AS total FROM notebook_entries").get()).toEqual({ total: 0 });
+    expect((await list()).summary.total).toBe(0);
+  });
   it("服务器日期领先用户时，新收藏卡和追练卡仍在当地今日队列", async () => {
     vi.stubEnv("TZ", "UTC");
     vi.useFakeTimers({ toFake: ["Date"] });

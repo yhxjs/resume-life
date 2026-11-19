@@ -23,3 +23,4 @@ export type ApplicationPreparation = {
   resources: Record<PreparationKind, CursorPage<PreparationResource>>;
   tasks: PreparationTask[];
 };
+export type PreparationResourceMutationResult = { ok: true; preparation: ApplicationPreparation };

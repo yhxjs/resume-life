@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { jsonFetch } from "@/lib/fetcher";
 import { errorMessage } from "@/lib/error-message";
-import { REVIEW_GRADE_LABELS, type ReviewAttempt, type ReviewDetail } from "@/lib/spaced-repetition-card-types";
+import { readReviewDetail } from "@/lib/review-records";
+import { REVIEW_GRADE_LABELS, type ReviewAttempt } from "@/lib/spaced-repetition-card-types";
 import { badgeCls, btnGhost } from "@/lib/ui";
 
 export function ReviewHistory({ cardId, initialAttempts, initialCursor }: { cardId: number; initialAttempts: ReviewAttempt[]; initialCursor: string | null }) {
@@ -20,9 +21,10 @@ export function ReviewHistory({ cardId, initialAttempts, initialCursor }: { card
     request.current = controller;
     setLoading(true); setError("");
     try {
-      const data = await jsonFetch<ReviewDetail>(`/api/reviews/${cardId}?limit=20&cursor=${encodeURIComponent(cursor)}&time_zone=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`, { signal: controller.signal });
+      const raw = await jsonFetch<unknown>(`/api/reviews/${cardId}?limit=20&cursor=${encodeURIComponent(cursor)}&time_zone=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`, { signal: controller.signal, cache: "no-store" });
       if (controller.signal.aborted) return;
-      setAttempts((previous) => [...previous, ...data.attempts.filter((attempt) => !previous.some((item) => item.id === attempt.id))]);
+      const data = readReviewDetail(raw, cardId, cursor);
+      setAttempts((previous) => [...previous, ...data.attempts]);
       setCursor(data.nextCursor);
     } catch (reason) {
       if (!controller.signal.aborted) setError(errorMessage(reason));

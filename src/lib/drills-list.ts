@@ -2,11 +2,11 @@ import { escapeLike, getDb } from "@/lib/db";
 
 import { createCursorPage } from "@/lib/cursor-pagination";
 
-export function listDrills(projectId: number, q: string, cursor: number | null, limit: number) {
+export function listDrills(projectId: number | null, q: string, cursor: number | null, limit: number) {
 
   const conditions: string[] = [];
   const params: (string | number)[] = [];
-  if (Number.isInteger(projectId) && projectId > 0) {
+  if (projectId !== null) {
     conditions.push("d.project_id = ?");
     params.push(projectId);
   }

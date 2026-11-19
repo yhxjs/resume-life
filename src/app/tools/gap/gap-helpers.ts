@@ -33,5 +33,5 @@ export function scenarioLabel(scenario: ScenarioType): string {
 }
 
 export function remedyTitle(record: RemedyRecord): string {
-  return parseRemedyResult(record.result)?.title || record.raw_story.slice(0, 40) || "高情商重塑报告";
+  return parseRemedyResult(record.result)?.title || record.raw_story.slice(0, 40) || "离职与空窗沟通报告";
 }

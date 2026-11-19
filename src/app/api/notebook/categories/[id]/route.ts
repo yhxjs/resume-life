@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
@@ -8,10 +9,19 @@ function isUniqueError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("UNIQUE");
 }
 
+export const GET = withRouteErrorHandling("GET /api/notebook/categories/[id]", async (_req, { params }) => {
+  const id = parseCanonicalPositiveId((await params).id);
+  if (!Number.isSafeInteger(id) || id <= 0) return NextResponse.json({ error: "无效的分类 ID" }, { status: 400 });
+  const category = getDb().prepare(`SELECT c.id, c.name, COUNT(e.id) AS entry_count
+    FROM notebook_categories c LEFT JOIN notebook_entries e ON e.category_id = c.id WHERE c.id = ? GROUP BY c.id`).get(id);
+  return category ? NextResponse.json(category, { headers: { "Cache-Control": "no-store" } })
+    : NextResponse.json({ error: "分类不存在" }, { status: 404, headers: { "Cache-Control": "no-store" } });
+});
+
 async function handlePatch(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const categoryId = Number(id);
-  if (!Number.isInteger(categoryId)) {
+  const categoryId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(categoryId) || categoryId <= 0) {
     return NextResponse.json({ error: "无效的分类 ID" }, { status: 400 });
   }
   const parsedBody = await parseApiJson<unknown>(req);
@@ -41,8 +51,8 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
 
 async function handleDelete(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const categoryId = Number(id);
-  if (!Number.isInteger(categoryId)) {
+  const categoryId = parseCanonicalPositiveId(id);
+  if (!Number.isSafeInteger(categoryId) || categoryId <= 0) {
     return NextResponse.json({ error: "无效的分类 ID" }, { status: 400 });
   }
   const db = getDb();

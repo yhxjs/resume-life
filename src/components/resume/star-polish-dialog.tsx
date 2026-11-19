@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  resolvePolishSourceIndices,
   splitDraftToItems,
   type PolishContext,
   type PolishMode,
@@ -12,11 +13,30 @@ import { btnGhost, btnPrimary, inputCls, labelCls, textErr } from "@/lib/ui";
 import { errorMessage } from "@/lib/error-message";
 import { jsonFetch } from "@/lib/fetcher";
 import { RichTextEditor } from "@/components/resume/rich-text-editor";
-import { splitRichTextToLines, stripRichText } from "@/lib/rich-text";
+import { escapePlainTextToRichHtml, splitRichTextToLines, stripRichText } from "@/lib/rich-text";
 import { GripIcon } from "@/components/resume/project-sub-items";
 import type { DescriptionListStyle } from "@/lib/modules";
 import { LoadingOverlay } from "@/components/common/loading-overlay";
 import { motionSafeScrollBehavior } from "@/lib/reduced-motion";
+
+function CondenseIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="inline-block h-3.5 w-3.5 shrink-0 align-text-bottom"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="m4 17 13-13a2.1 2.1 0 0 1 3 3L7 20a2.1 2.1 0 0 1-3-3Z" />
+      <path d="m14 7 3 3M5 1v4M3 3h4M19 13v4M17 15h4" />
+    </svg>
+  );
+}
 
 type StarPolishDialogProps = {
   resumeId: string;
@@ -40,9 +60,9 @@ export function StarPolishDialog({
   triggerLabel,
 }: StarPolishDialogProps) {
   const [open, setOpen] = useState(false);
+  const [openedTarget, setOpenedTarget] = useState<string | null>(null);
   const [mode, setMode] = useState<PolishMode>(moduleType === "summary" ? "summary" : "star");
   const [targetRole, setTargetRole] = useState("");
-  const [inputText, setInputText] = useState("");
   const [inputItems, setInputItems] = useState<string[]>([]);
   const [inputDescStyle, setInputDescStyle] = useState<DescriptionListStyle>("unordered");
   const [armedInputDesc, setArmedInputDesc] = useState<number | null>(null);
@@ -65,6 +85,14 @@ export function StarPolishDialog({
   const quantifySectionRef = useRef<HTMLDivElement | null>(null);
   const draftSectionRef = useRef<HTMLDivElement | null>(null);
   const requestRef = useRef<{ version: number; controller: AbortController | null }>({ version: 0, controller: null });
+  // 分条为实际编辑内容；旧整段字段可能滞后，不能让它误判当前目标已变化。
+  const targetContent = currentItems && currentItems.length > 0
+    ? currentItems : splitRichTextToLines(currentText);
+  const targetKey = JSON.stringify([
+    resumeId, moduleType, targetContent.map((text) => stripRichText(text)),
+    context?.company ?? "", context?.title ?? "", context?.name ?? "", context?.role ?? "",
+  ]);
+  const targetChanged = open && openedTarget !== targetKey;
 
   useEffect(() => {
     if (!pendingScrollModeRef.current || !result) return;
@@ -115,6 +143,7 @@ export function StarPolishDialog({
 
   function handleOpen() {
     cancelRequest();
+    setOpenedTarget(targetKey);
     const initialInputItems =
       currentItems && currentItems.length > 0
         ? currentItems
@@ -124,7 +153,6 @@ export function StarPolishDialog({
     const finalInputItems = initialInputItems.length > 0 ? initialInputItems : [""];
     setInputItems(finalInputItems);
     setInputDescStyle(descriptionStyle ?? "unordered");
-    setInputText(currentText);
     setError("");
     setCondenseError("");
     setResult(null);
@@ -176,7 +204,7 @@ export function StarPolishDialog({
   }
 
   async function handleGenerate() {
-    if (requestRef.current.controller) return;
+    if (requestRef.current.controller || targetChanged) return;
     const version = ++requestRef.current.version;
     const controller = new AbortController();
     requestRef.current.controller = controller;
@@ -187,15 +215,10 @@ export function StarPolishDialog({
       const sourceParagraphs = inputItems
         .map((s) => stripRichText(s).trim())
         .filter(Boolean);
-      const textFromItems = sourceParagraphs
+      // 以当前可见草稿为唯一原文来源，清空后不恢复打开时的旧整段文本。
+      const textToGenerate = sourceParagraphs
         .map((s) => (s.startsWith("•") || s.startsWith("·") ? s : `• ${s}`))
         .join("\n");
-      const textToGenerate = textFromItems || stripRichText(inputText);
-
-      const resolvedSources = sourceParagraphs.length > 0
-        ? sourceParagraphs
-        : (textToGenerate ? [textToGenerate] : []);
-      setActiveSources(resolvedSources);
 
       const data = await jsonFetch<{ result?: PolishResult }>(`/api/resumes/${resumeId}/polish`, {
         method: "POST",
@@ -212,33 +235,25 @@ export function StarPolishDialog({
       });
       if (version !== requestRef.current.version) return;
       if (!data.result) throw new Error("润色结果为空，请重试");
+      // 来源与成功结果一起切换，失败或取消时继续保留旧结果的实际依据。
+      setActiveSources(sourceParagraphs);
       setResult(data.result);
       const draft = data.result.draft || "";
       const initialItems =
         data.result.draftItems && data.result.draftItems.length > 0
           ? data.result.draftItems
           : splitDraftToItems(draft);
-      const finalInitialItems = initialItems.length > 0 ? initialItems : (draft ? [draft] : []);
+      // 接口返回纯文本；进入可编辑富文本状态时转义，后续编辑和视图切换不再重复转义。
+      const finalInitialItems = (initialItems.length > 0 ? initialItems : (draft ? [draft] : []))
+        .map(escapePlainTextToRichHtml);
       setItems(finalInitialItems);
       setSelectedItems(new Set(finalInitialItems.map((_, i) => i)));
-      setEditedDraft(draft);
+      setEditedDraft(escapePlainTextToRichHtml(draft));
 
       const initialSourceIndices: Record<number, number[]> = {};
       const details = data.result.draftItemDetails;
       finalInitialItems.forEach((_, idx) => {
-        const itemDetail = details?.[idx];
-        if (itemDetail?.sourceIndices && itemDetail.sourceIndices.length > 0) {
-          const zeroBased = itemDetail.sourceIndices
-            .map((i) => i - 1)
-            .filter((i) => i >= 0 && i < resolvedSources.length);
-          initialSourceIndices[idx] = zeroBased.length > 0 ? zeroBased : [0];
-        } else if (resolvedSources.length === 1) {
-          initialSourceIndices[idx] = [0];
-        } else if (resolvedSources.length > 1 && resolvedSources.length === finalInitialItems.length) {
-          initialSourceIndices[idx] = [idx];
-        } else {
-          initialSourceIndices[idx] = resolvedSources.map((_, i) => i);
-        }
+        initialSourceIndices[idx] = resolvePolishSourceIndices(details?.[idx], sourceParagraphs.length);
       });
       setItemSourceIndices(initialSourceIndices);
       setExpandedSources(new Set());
@@ -255,7 +270,7 @@ export function StarPolishDialog({
   }
 
   async function handleCondenseItems() {
-    if (requestRef.current.controller || items.length === 0) return;
+    if (requestRef.current.controller || targetChanged || items.length === 0) return;
     // 本轮输入的位置与最初原文的位置不同，固定两者的映射供回包转换。
     const candidates = items.map((text, index) => ({
       text: stripRichText(text).trim(),
@@ -282,7 +297,8 @@ export function StarPolishDialog({
         signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          text: stripRichText(rawToCondense),
+          // 各条目已转成纯文本，不能再次解析其中的泛型、标签字面量或实体文本。
+          text: rawToCondense,
           sourceParagraphs: source.length > 1 ? source.map((item) => item.text) : undefined,
           moduleType,
           mode: "condense",
@@ -298,18 +314,16 @@ export function StarPolishDialog({
         data.result.draftItems && data.result.draftItems.length > 0
           ? data.result.draftItems
           : splitDraftToItems(draft);
-      const finalInitialItems = initialItems.length > 0 ? initialItems : (draft ? [draft] : []);
+      const finalInitialItems = (initialItems.length > 0 ? initialItems : (draft ? [draft] : []))
+        .map(escapePlainTextToRichHtml);
       setItems(finalInitialItems);
       setSelectedItems(new Set(finalInitialItems.map((_, i) => i)));
-      setEditedDraft(draft);
+      setEditedDraft(escapePlainTextToRichHtml(draft));
 
       const condenseIndices: Record<number, number[]> = {};
       const details = data.result.draftItemDetails;
       finalInitialItems.forEach((_, idx) => {
-        const itemDetail = details?.[idx];
-        const inputIndices = itemDetail?.sourceIndices?.length
-          ? itemDetail.sourceIndices.map((i) => i - 1)
-          : source.length === 1 ? [0] : [];
+        const inputIndices = resolvePolishSourceIndices(details?.[idx], source.length);
         condenseIndices[idx] = [...new Set(inputIndices
           .flatMap((index) => source[index]?.sourceIndices ?? [])
           .filter((index) => index >= 0 && index < activeSources.length))].sort((a, b) => a - b);
@@ -450,30 +464,34 @@ export function StarPolishDialog({
     const next = current.includes(sourceIdx)
       ? current.filter((i) => i !== sourceIdx)
       : [...current, sourceIdx].sort((a, b) => a - b);
-    const finalIndices = next.length > 0 ? next : [sourceIdx];
     setItemSourceIndices((prev) => ({
       ...prev,
-      [itemIdx]: finalIndices,
+      [itemIdx]: next,
     }));
   }
 
+  const selectedDraftItems = items
+    .filter((_, idx) => selectedItems.has(idx))
+    .map((item) => item.trim())
+    .filter((item) => stripRichText(item).trim().length > 0);
+  const canWrite = !loading && !targetChanged && (viewMode === "items"
+    ? selectedDraftItems.length > 0
+    : stripRichText(editedDraft).trim().length > 0);
+
   function handleSwitchView(newView: "items" | "raw") {
     if (newView === "raw" && viewMode === "items") {
-      const selected = items.filter((_, idx) => selectedItems.has(idx)).map((s) => s.trim()).filter(Boolean);
-      const source = selected.length > 0 ? selected : items.map((s) => s.trim()).filter(Boolean);
-      if (source.length > 0) {
-        setEditedDraft(source.map((s) => (s.startsWith("•") || s.startsWith("·") ? s : `• ${s}`)).join("\n"));
-      }
+      // 空选择也同步为空草稿，避免恢复已删除、清空或取消勾选的内容。
+      setEditedDraft(selectedDraftItems.map((s) => (s.startsWith("•") || s.startsWith("·") ? s : `• ${s}`)).join("\n"));
     } else if (newView === "items" && viewMode === "raw") {
       // 只保留唯一匹配的原条目来源；改写或重复文本无法可靠追踪来源。
       const sourcesByText = new Map<string, number[] | null>();
       items.forEach((text, idx) => {
-        const normalized = splitDraftToItems(text);
+        const normalized = splitRichTextToLines(text);
         if (normalized.length !== 1) return;
         const key = normalized[0]!;
         sourcesByText.set(key, sourcesByText.has(key) ? null : (itemSourceIndices[idx] ?? []));
       });
-      const parsed = splitDraftToItems(editedDraft);
+      const parsed = splitRichTextToLines(editedDraft).filter((item) => stripRichText(item).trim().length > 0);
       const nextIndices: Record<number, number[]> = {};
       parsed.forEach((text, idx) => {
         nextIndices[idx] = sourcesByText.get(text) ?? [];
@@ -487,22 +505,17 @@ export function StarPolishDialog({
   }
 
   function handleWrite() {
+    if (requestRef.current.controller || !canWrite) return;
     if (viewMode === "items") {
-      const selected = items
-        .filter((_, idx) => selectedItems.has(idx))
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (selected.length === 0) return;
-      const combinedText = selected.map((s) => (s.startsWith("•") || s.startsWith("·") ? s : `• ${s}`)).join("\n");
+      const combinedText = selectedDraftItems.map((s) => (s.startsWith("•") || s.startsWith("·") ? s : `• ${s}`)).join("\n");
       if (writeMode === "append" && currentText.trim()) {
-        onApply(`${currentText.trim()}\n\n${combinedText}`, selected, "append");
+        onApply(`${currentText.trim()}\n\n${combinedText}`, selectedDraftItems, "append");
       } else {
-        onApply(combinedText, selected, "replace");
+        onApply(combinedText, selectedDraftItems, "replace");
       }
     } else {
       const finalDraft = editedDraft.trim();
-      if (!finalDraft) return;
-      const parsed = splitDraftToItems(finalDraft);
+      const parsed = splitRichTextToLines(finalDraft).filter((item) => stripRichText(item).trim().length > 0);
       if (writeMode === "append" && currentText.trim()) {
         onApply(`${currentText.trim()}\n\n${finalDraft}`, parsed, "append");
       } else {
@@ -622,7 +635,7 @@ export function StarPolishDialog({
                   }`}
                   onClick={() => setMode("condense")}
                 >
-                  🪄 智能精简合并（提纯聚合，去粗取精）
+                  <CondenseIcon /> 智能精简合并（提纯聚合，去粗取精）
                 </button>
               </div>
             </div>
@@ -797,7 +810,7 @@ export function StarPolishDialog({
               type="button"
               className={btnPrimary}
               onClick={handleGenerate}
-              disabled={loading}
+              disabled={loading || targetChanged}
             >
               {loading
                 ? mode === "condense"
@@ -810,6 +823,11 @@ export function StarPolishDialog({
           </div>
 
           {/* 报错信息提示 */}
+          {targetChanged && (
+            <p role="alert" className={`rounded-lg bg-danger-wash p-3 text-sm ${textErr}`}>
+              原内容或职责信息已变化，当前草稿已保留；请关闭并重新打开，载入最新内容后再润色
+            </p>
+          )}
           {error && (
             <div className={`rounded-lg bg-danger-wash p-3 text-sm ${textErr}`}>
               {error}
@@ -966,13 +984,13 @@ export function StarPolishDialog({
 
                 {moduleType === "summary" ? (
                   <div className="mt-1.5 mb-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs text-ink">
-                    💡 提示：自我评价已聚焦个人核心优势、技术深度与工程素养，无需具体数值，建议结合实际特长微调后采纳。
+                    💡 提示：自我评价应突出有依据的个人优势，不强求新增数字；已有的相关年限、范围或指标请核对口径与限定后保留。
                   </div>
                 ) : (
                   <div className="mt-1.5 mb-2 rounded-lg border border-accent/30 bg-accent-wash px-3 py-2 text-xs text-ink">
-                    ⚠️ 提示：大模型给出的量化模板包含中括号占位符（如{" "}
-                    <code>[请填入真实提升%，例如：30%]</code>
-                    ），建议直接在下方编辑框中改为您的真实经历数字，避免面试造假风险。
+                    💡 提示：若草稿包含待补充标记（如{" "}
+                    <code>[请填入真实数据：具体指标与统计口径]</code>
+                    ），请按可核实的记录填写；没有数据时保留准确的定性描述与未知项，不编造数字。
                   </div>
                 )}
 
@@ -1002,11 +1020,12 @@ export function StarPolishDialog({
                         <button
                           type="button"
                           onClick={handleCondenseItems}
-                          disabled={loading || items.length === 0}
+                          disabled={loading || targetChanged || items.length === 0}
                           title="将当前勾选条目（或全部条目）提纯并智能精简合并为最恰当的条目"
                           className="flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 cursor-pointer"
                         >
-                          <span>{loading ? "精简合并中…" : "🪄 智能精简合并"}</span>
+                          {!loading && <CondenseIcon />}
+                          <span>{loading ? "精简合并中…" : "智能精简合并"}</span>
                         </button>
                         <span className="text-[11px] text-muted hidden sm:inline">勾选采纳、独立微调或自由调序</span>
                       </div>
@@ -1261,11 +1280,7 @@ export function StarPolishDialog({
             type="button"
             className={btnPrimary}
             onClick={handleWrite}
-            disabled={
-              viewMode === "items"
-                ? !items.some((item, i) => selectedItems.has(i) && item.trim().length > 0)
-                : !editedDraft.trim()
-            }
+            disabled={!canWrite}
           >
             确认写入简历
           </button>

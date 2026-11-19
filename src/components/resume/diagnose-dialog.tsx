@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   DIMENSIONS,
@@ -10,7 +10,8 @@ import type {
   DiagnosisHistoryResponse,
   DiagnosisSuggestion,
 } from "@/lib/diagnosis";
-import { diagnosisValue } from "@/lib/diagnosis";
+import { diagnosisValue, diagnosisValuesEqual } from "@/lib/diagnosis";
+import { writeDiagnosisValue } from "@/lib/module-descriptions";
 import type { ModuleData } from "@/lib/modules";
 import { alertDialog, confirmDialog } from "@/components/common/confirm-dialog";
 import { DiagnosisChanges } from "@/components/resume/diagnosis-changes";
@@ -38,29 +39,51 @@ import { ResumeVersionSelect } from "@/components/resume/resume-version-select";
 import { ResumeVersionBadge } from "@/components/resume/resume-version-badge";
 import { RichText } from "@/components/resume/rich-text";
 import { RichTextEditor } from "@/components/resume/rich-text-editor";
-import { splitRichTextToLines, stripRichText } from "@/lib/rich-text";
+import { escapePlainTextToRichHtml, splitRichTextToLines, stripRichText } from "@/lib/rich-text";
 import { LoadingOverlay } from "@/components/common/loading-overlay";
+import { InlineError } from "@/components/common/inline-error";
+
+type PendingAdoption = { value: string | string[]; saved: boolean };
+type ResumeSession = { resumeId: string; active: boolean; controller: AbortController };
+
+function ensureAdoptionHasContent(modules: ModuleData[], moduleKey: string, suggestion: DiagnosisSuggestion, value: string | string[]) {
+  if (typeof value !== "string") return;
+  const mod = modules.find((entry) => entry.key === moduleKey);
+  if (!mod || (mod.type !== "work" && mod.type !== "projects" && mod.type !== "education" && mod.type !== "summary")) return;
+  const content = writeDiagnosisValue(mod.type, mod.content, suggestion.itemId, value);
+  const savedValue = content === null ? null : diagnosisValue([{ ...mod, content }], moduleKey, suggestion);
+  if (savedValue === null) throw new Error("目标模块或条目已被删除，无法写入");
+  if (typeof savedValue === "string" && !stripRichText(savedValue).trim()) {
+    throw new Error("草稿整理后为空，请补充正文后重新采纳");
+  }
+}
+
+function adoptionRecoveryMessage(saved: boolean, error: unknown): string {
+  return saved
+    ? `简历已保存，但采纳记录未同步：${errorMessage(error)}。请点击“重试记录”，无需再次写入。`
+    : `简历内容已写入，但尚未确认保存成功：${errorMessage(error)}。请点击“重试保存并记录”，无需再次写入。`;
+}
 
 function valueText(value: string | string[] | null): string {
   return Array.isArray(value) ? value.join("\n") : value ?? "（目标不存在）";
 }
 
-function parseValueLines(value: string | string[] | null): string[] {
+function parseValueLines(value: string | string[] | null, richText: boolean): string[] {
   if (value === null) return [];
   if (Array.isArray(value)) return value;
-  return splitRichTextToLines(value);
+  return richText ? splitRichTextToLines(value) : value.split(/\r\n?|\n/);
 }
 
-function DiagnosisValueDisplay({ value, emptyText }: { value: string | string[] | null; emptyText: string }) {
+function DiagnosisValueDisplay({ value, emptyText, richText }: { value: string | string[] | null; emptyText: string; richText: boolean }) {
   if (value === null) {
     return <span>{emptyText}</span>;
   }
-  const lines = parseValueLines(value);
-  if (lines.length === 0 || (lines.length === 1 && !stripRichText(lines[0] ?? "").trim())) {
+  const lines = parseValueLines(value, richText);
+  if (!lines.some((line) => (richText ? stripRichText(line) : line).trim())) {
     return <span>{emptyText}</span>;
   }
   if (lines.length === 1) {
-    return <RichText content={lines[0]} />;
+    return richText ? <RichText content={lines[0]} /> : <span>{lines[0]}</span>;
   }
   return (
     <div className="space-y-1">
@@ -68,7 +91,7 @@ function DiagnosisValueDisplay({ value, emptyText }: { value: string | string[] 
         <div key={idx} className="flex items-start gap-1.5">
           <span className="text-primary font-bold select-none shrink-0">•</span>
           <span className="flex-1 min-w-0">
-            <RichText content={item} />
+            {richText ? <RichText content={item} /> : item}
           </span>
         </div>
       ))}
@@ -99,15 +122,42 @@ export function DiagnoseDialog({
   const [data, setData] = useState<DiagnosisHistoryResponse | null>(null);
   const [editing, setEditing] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [activity, setActivity] = useState<"reading" | "generating" | "adopting">("reading");
   const [error, setError] = useState("");
   const [drafts, setDrafts] = useState<Record<string, string | string[]>>({});
   const [preparationError, setPreparationError] = useState("");
+  const [pendingAdoptions, setPendingAdoptions] = useState<Record<string, PendingAdoption>>({});
+  const [confirmingKey, setConfirmingKey] = useState<string | null>(null);
+  const operationRef = useRef(false);
+  const sessionRef = useRef<ResumeSession>({ resumeId, active: false, controller: new AbortController() });
+  useLayoutEffect(() => {
+    const changed = sessionRef.current.resumeId !== resumeId;
+    const session = { resumeId, active: true, controller: new AbortController() };
+    sessionRef.current = session;
+    if (changed) {
+      operationRef.current = false;
+      // 简历变化时清除页面和岗位绑定；带简历标识的草稿及待同步项保留。
+      setOpen(false); setData(null); setJd(""); setJobTitle(""); setJobId("");
+      setPreparation(null); setPreparationError(""); setEditing(true); setError(""); setBusy(false);
+      setActivity("reading");
+      setConfirmingKey(null);
+    }
+    return () => { session.active = false; session.controller.abort(); };
+  }, [resumeId]);
+  function isCurrentSession(session: ResumeSession) {
+    return session.active && session.resumeId === resumeId && sessionRef.current === session;
+  }
+  const currentResumeRef = useRef<{ resumeId: string; modules: ModuleData[]; onApply: typeof onApply } | null>(null);
+  useLayoutEffect(() => {
+    currentResumeRef.current = { resumeId, modules, onApply };
+    return () => { currentResumeRef.current = null; };
+  }, [resumeId, modules, onApply]);
   const record = data?.current ?? null;
   const report = editing ? null : record?.report ?? null;
   const history = data?.history ?? [];
   const jobs = [...new Set(history.map((entry) => entry.job_id))].map((id) => history.find((entry) => entry.job_id === id)!);
   const dialogRef = useModalFocus(open, () => { if (!busy) setOpen(false); }, "textarea");
-  const { resumes, resumesError } = useResumeOptions(open);
+  const { resumes, resumesError, reloadResumes } = useResumeOptions(open);
   const selectedResume = resumes?.find((resume) => resume.id === Number(resumeId));
   const boundPreparation = preparation?.jobId === jobId ? preparation : null;
   const { resumeVersionId, setResumeVersionId } = useResumeVersionSelection(selectedResume,
@@ -120,6 +170,8 @@ export function DiagnoseDialog({
     const applicationId = Number(query.get("applicationId"));
     if (!id || !/^\d+$/.test(id)) return;
     const controller = new AbortController();
+    let loading = true;
+    operationRef.current = true;
     const applicationRequest = Number.isSafeInteger(applicationId) && applicationId > 0
       ? jsonFetch<Application>(`/api/applications/${applicationId}`, { signal: controller.signal }) : Promise.resolve(null);
     Promise.all([jsonFetch<DiagnosisHistoryResponse>(`/api/resumes/${resumeId}/diagnose?diagnosis_id=${id}`, { signal: controller.signal }), applicationRequest])
@@ -135,8 +187,21 @@ export function DiagnoseDialog({
           setJd(application.jd);
         }
         setPreparationError("");
-      }).catch((reason) => { if (!controller.signal.aborted) { setPreparationError(errorMessage(reason)); setOpen(true); } });
-    return () => controller.abort();
+      }).catch((reason) => { if (!controller.signal.aborted) { setPreparationError(errorMessage(reason)); setOpen(true); } })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        loading = false;
+        operationRef.current = false;
+        setBusy(false);
+      });
+    return () => {
+      controller.abort();
+      if (loading) {
+        loading = false;
+        operationRef.current = false;
+        setBusy(false);
+      }
+    };
   }, [resumeId]);
 
   function showResult(result: DiagnosisHistoryResponse) {
@@ -145,24 +210,32 @@ export function DiagnoseDialog({
     setJobTitle(result.current?.job_title ?? "");
     setJobId(result.current?.job_id ?? "");
     setEditing(!result.current?.report);
-    setDrafts({});
     if (result.current && !result.current.report) setError("此历史报告已损坏，请重新诊断；历史记录仍保留");
   }
 
   async function loadHistory(query = "") {
+    if (operationRef.current) return;
+    const session = sessionRef.current;
+    if (!isCurrentSession(session)) return;
+    operationRef.current = true;
+    setActivity("reading");
     setBusy(true);
     setError("");
     try {
-      showResult(await jsonFetch<DiagnosisHistoryResponse>(`/api/resumes/${resumeId}/diagnose${query}`));
+      const result = await jsonFetch<DiagnosisHistoryResponse>(`/api/resumes/${resumeId}/diagnose${query}`);
+      if (isCurrentSession(session)) showResult(result);
     } catch (err) {
-      setError(errorMessage(err));
+      if (isCurrentSession(session)) setError(errorMessage(err));
     } finally {
-      setBusy(false);
+      if (isCurrentSession(session)) { operationRef.current = false; setBusy(false); }
     }
   }
 
   async function openDialog() {
+    if (!isCurrentSession(sessionRef.current)) return;
     setOpen(true);
+    setBusy(true);
+    setError("");
     await loadHistory();
   }
 
@@ -171,7 +244,6 @@ export function DiagnoseDialog({
     setJobTitle("");
     setJd("");
     setEditing(true);
-    setDrafts({});
     setError("");
     setData((previous) => previous ? { ...previous, current: null, previous: null } : null);
   }
@@ -183,7 +255,11 @@ export function DiagnoseDialog({
   }
 
   async function runDiagnose() {
-    if (busy || !canDiagnose) return;
+    if (operationRef.current || busy || !canDiagnose) return;
+    const session = sessionRef.current;
+    if (!isCurrentSession(session)) return;
+    operationRef.current = true;
+    setActivity("generating");
     setBusy(true);
     setError("");
     try {
@@ -192,12 +268,16 @@ export function DiagnoseDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jd, resume_version_id: resumeVersionId, job_title: jobTitle, ...(jobId ? { job_id: jobId } : { new_job: true }), ...(boundPreparation ? { application_id: boundPreparation.id } : {}) }),
       });
-      showResult(result);
+      if (isCurrentSession(session)) showResult(result);
     } catch (err) {
-      setError(errorMessage(err));
+      if (isCurrentSession(session)) setError(errorMessage(err));
     } finally {
-      setBusy(false);
+      if (isCurrentSession(session)) { operationRef.current = false; setBusy(false); }
     }
+  }
+
+  function renderReportText(text: string) {
+    return report?.textFormat === "plain-text" ? text : <RichText content={text} />;
   }
 
   function draftOf(key: string, s: DiagnosisSuggestion, saved?: string | string[]): string {
@@ -205,7 +285,10 @@ export function DiagnoseDialog({
     const draft = drafts[key];
     if (typeof draft === "string") return draft;
     if (Array.isArray(draft)) return draft.join("\n");
-    return valueText(s.draft);
+    const text = valueText(s.draft);
+    // 只转换新报告的模型纯文本；手动草稿和历史富文本已经是编辑器格式。
+    const plainText = report?.textFormat === "plain-text" || report?.draftFormat === "plain-text";
+    return s.field !== "items" && plainText ? escapePlainTextToRichHtml(text) : text;
   }
 
   function draftLinesOf(key: string, s: DiagnosisSuggestion): string[] {
@@ -215,29 +298,34 @@ export function DiagnoseDialog({
       const parsed = splitRichTextToLines(draft);
       return parsed.length > 0 ? parsed : [""];
     }
-    const fallback = Array.isArray(s.draft) ? s.draft : splitRichTextToLines(s.draft);
+    const fallback = Array.isArray(s.draft) ? s.draft : splitRichTextToLines(draftOf(key, s));
     return fallback.length > 0 ? fallback : [""];
+  }
+
+  function updateDraft(key: string, value: string | string[]) {
+    if (operationRef.current) return;
+    setDrafts((previous) => ({ ...previous, [key]: value }));
   }
 
   function updateDescLine(key: string, s: DiagnosisSuggestion, index: number, val: string) {
     const lines = [...draftLinesOf(key, s)];
     lines[index] = val;
-    setDrafts((prev) => ({ ...prev, [key]: lines }));
+    updateDraft(key, lines);
   }
 
   function addDescLine(key: string, s: DiagnosisSuggestion) {
     const lines = [...draftLinesOf(key, s), ""];
-    setDrafts((prev) => ({ ...prev, [key]: lines }));
+    updateDraft(key, lines);
   }
 
   function removeDescLine(key: string, s: DiagnosisSuggestion, index: number) {
     const lines = draftLinesOf(key, s);
     if (lines.length <= 1) {
-      setDrafts((prev) => ({ ...prev, [key]: [""] }));
+      updateDraft(key, [""]);
       return;
     }
     const next = lines.filter((_, i) => i !== index);
-    setDrafts((prev) => ({ ...prev, [key]: next }));
+    updateDraft(key, next);
   }
 
   function moveDescLine(key: string, s: DiagnosisSuggestion, index: number, delta: -1 | 1) {
@@ -247,11 +335,89 @@ export function DiagnoseDialog({
     const [moved] = lines.splice(index, 1);
     if (moved === undefined) return;
     lines.splice(target, 0, moved);
-    setDrafts((prev) => ({ ...prev, [key]: lines }));
+    updateDraft(key, lines);
+  }
+
+  async function syncAdoption(diagnosisId: number, moduleKey: string, index: number, pendingKey: string, value: string | string[]) {
+    const session = sessionRef.current;
+    const activeResume = currentResumeRef.current;
+    if (!activeResume) return;
+    setPendingAdoptions((previous) => ({ ...previous, [pendingKey]: { value, saved: true } }));
+    // 保存期间可能卸载弹窗或切换简历；已保存的待同步状态可恢复，但不能继续写旧报告。
+    if (activeResume.resumeId !== resumeId) return;
+    const result = await jsonFetch<DiagnosisHistoryResponse>(`/api/resumes/${resumeId}/diagnose`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ diagnosis_id: diagnosisId, module_key: moduleKey, suggestion_index: index, value }),
+    });
+    const latestResume = currentResumeRef.current;
+    // 响应期间切换简历时保留待同步项；返回原简历后可幂等重试并刷新报告。
+    if (!latestResume || latestResume.resumeId !== resumeId || !isCurrentSession(session)) return;
+    setData(result);
+    setPendingAdoptions((previous) => {
+      const next = { ...previous };
+      delete next[pendingKey];
+      return next;
+    });
+  }
+
+  async function retryAdoption(moduleKey: string, index: number, pendingKey: string) {
+    if (operationRef.current || busy || !record) return;
+    const pending = pendingAdoptions[pendingKey];
+    if (!pending) return;
+    const session = sessionRef.current;
+    if (!isCurrentSession(session)) return;
+    operationRef.current = true;
+    setActivity("adopting");
+    setBusy(true);
+    setError("");
+    let saved = pending.saved;
+    try {
+      await ensureSaved();
+      saved = true;
+      if (!isCurrentSession(session)) return;
+      // 继续保存并补记；服务端核对当前内容，重试不再次写入简历。
+      await syncAdoption(record.id, moduleKey, index, pendingKey, pending.value);
+    } catch (err) {
+      if (isCurrentSession(session)) setError(adoptionRecoveryMessage(saved, err));
+    } finally {
+      if (isCurrentSession(session)) { operationRef.current = false; setBusy(false); }
+    }
+  }
+
+  async function continueEditing(key: string) {
+    if (operationRef.current || busy || !record) return;
+    const pending = pendingAdoptions[key];
+    if (!pending) return;
+    const session = sessionRef.current;
+    if (!isCurrentSession(session)) return;
+    operationRef.current = true;
+    setActivity("reading");
+    setBusy(true);
+    setError("");
+    try {
+      // 写请求响应丢失时，服务端可能已记下采纳；先确认，避免重新编辑已采纳建议。
+      const result = await jsonFetch<DiagnosisHistoryResponse>(`/api/resumes/${resumeId}/diagnose?diagnosis_id=${record.id}`);
+      if (!isCurrentSession(session)) return;
+      if (result.current?.id !== record.id || !result.current.report) throw new Error("无法读取有效的诊断报告，请重试");
+      setData(result);
+      setDrafts((previous) => ({ ...previous, [key]: previous[key] ?? pending.value }));
+      setPendingAdoptions((previous) => {
+        const next = { ...previous };
+        delete next[key];
+        return next;
+      });
+    } catch (err) {
+      if (isCurrentSession(session)) setError(`无法恢复草稿编辑：${errorMessage(err)}`);
+    } finally {
+      if (isCurrentSession(session)) { operationRef.current = false; setBusy(false); }
+    }
   }
 
   async function apply(moduleKey: string, index: number, key: string, s: DiagnosisSuggestion) {
-    if (busy || !record) return;
+    if (operationRef.current || busy || !record) return;
+    if (pendingAdoptions[key] !== undefined) return;
+    const session = sessionRef.current;
+    if (!isCurrentSession(session)) return;
     let value: string | string[];
     if (s.field === "items") {
       const text = draftOf(key, s);
@@ -265,29 +431,58 @@ export function DiagnoseDialog({
     }
     const isEmpty =
       typeof value === "string" ? !stripRichText(value).trim() : value.length === 0;
+    operationRef.current = true;
     if (isEmpty) {
-      await alertDialog({ title: "无法采纳", message: "草稿内容为空。" });
+      try {
+        await alertDialog({ title: "无法采纳", message: "草稿内容为空。", signal: session.controller.signal });
+      } finally {
+        if (isCurrentSession(session)) operationRef.current = false;
+      }
       return;
     }
+    setActivity("adopting");
     setBusy(true);
     setError("");
+    let phase: "applying" | "saving" | "recording" = "applying";
     try {
       await ensureSaved();
+      const activeResume = currentResumeRef.current;
+      if (!isCurrentSession(session) || !activeResume || activeResume.resumeId !== resumeId) return;
       const original = diagnosisValue(record.resume_snapshot.modules, moduleKey, s);
-      const current = diagnosisValue(modules, moduleKey, s);
+      const current = diagnosisValue(activeResume.modules, moduleKey, s);
       if (current === null) throw new Error("目标模块或条目已被删除，无法写入");
-      if (JSON.stringify(original) !== JSON.stringify(current) &&
-          !await confirmDialog({ title: "确认替换当前内容", message: "当前内容与诊断时不同，采纳会整段替换当前内容。请确认已查看内容变化。", confirmText: "确认采纳" })) return;
-      if (!onApply(moduleKey, s.itemId, s.field, value)) throw new Error("目标模块或条目已被删除或移动，无法写入");
+      ensureAdoptionHasContent(activeResume.modules, moduleKey, s, value);
+      const confirmedValue = JSON.stringify(current);
+      if (JSON.stringify(original) !== confirmedValue) {
+        setConfirmingKey(key);
+        const target = activeResume.modules.find(entry => entry.key === moduleKey);
+        const confirmed = await confirmDialog({ title: "确认替换当前内容",
+          message: `简历 #${resumeId} 的诊断 #${record.id}「${record.job_title}」，保存于 ${record.created_at}。目标：${target?.label ?? moduleKey}${s.itemId ? `，条目 #${s.itemId}` : ""}。当前内容与诊断时不同，采纳会整段替换${s.field === "items" ? "全部技能" : "目标正文"}，其他模块保留。请确认已查看内容变化及改写草稿。`,
+          confirmText: "确认采纳", signal: session.controller.signal });
+        if (!isCurrentSession(session) || !confirmed) return;
+        setConfirmingKey(null);
+      }
+      // 保存与确认都可能等待用户操作，写入前重新核对最新目标及回调。
+      const latestResume = currentResumeRef.current;
+      if (!isCurrentSession(session) || !latestResume || latestResume.resumeId !== resumeId) return;
+      const latestValue = diagnosisValue(latestResume.modules, moduleKey, s);
+      if (latestValue === null) throw new Error("目标模块或条目已被删除，无法写入");
+      if (JSON.stringify(latestValue) !== confirmedValue) throw new Error("确认期间目标内容已变化，请重新采纳并核对");
+      ensureAdoptionHasContent(latestResume.modules, moduleKey, s, value);
+      if (!latestResume.onApply(moduleKey, s.itemId, s.field, value)) throw new Error("目标模块或条目已被删除或移动，无法写入");
+      phase = "saving";
+      setPendingAdoptions((previous) => ({ ...previous, [key]: { value, saved: false } }));
       await ensureSaved();
-      setData(await jsonFetch<DiagnosisHistoryResponse>(`/api/resumes/${resumeId}/diagnose`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ diagnosis_id: record.id, module_key: moduleKey, suggestion_index: index, value }),
-      }));
+      phase = "recording";
+      if (!isCurrentSession(session)) {
+        if (currentResumeRef.current) setPendingAdoptions((previous) => ({ ...previous, [key]: { value, saved: true } }));
+        return;
+      }
+      await syncAdoption(record.id, moduleKey, index, key, value);
     } catch (err) {
-      setError(errorMessage(err));
+      if (isCurrentSession(session)) setError(phase === "applying" ? errorMessage(err) : adoptionRecoveryMessage(phase === "recording", err));
     } finally {
-      setBusy(false);
+      if (isCurrentSession(session)) { operationRef.current = false; setBusy(false); setConfirmingKey(null); }
     }
   }
 
@@ -330,9 +525,9 @@ export function DiagnoseDialog({
         className="dialog-in relative flex flex-col max-h-[90dvh] w-full max-w-3xl overflow-hidden rounded-2xl border border-line bg-card shadow-card-float outline-none"
       >
         <LoadingOverlay
-          show={busy}
-          message="AI 简历诊断中…"
-          description="正在结合目标岗位 JD 逐模块评分、比对差距并构思改写建议，请稍候…"
+          show={busy && confirmingKey === null}
+          message={activity === "adopting" ? "正在保存并同步诊断记录…" : activity === "generating" ? "AI 简历诊断中…" : "正在读取诊断记录…"}
+          description={activity === "generating" ? "正在结合目标岗位 JD 与所选发布版本评分并生成建议，请稍候…" : "请等待本次操作完成。"}
         />
 
         {/* 固定顶栏 */}
@@ -351,10 +546,7 @@ export function DiagnoseDialog({
             {report && (
               <button
                 className={`${btnGhost} text-xs px-2.5 py-1 min-h-[32px]`}
-                onClick={() => {
-                  setEditing(true);
-                  setDrafts({});
-                }}
+                onClick={() => setEditing(true)}
                 disabled={busy}
               >
                 修改岗位 JD
@@ -382,8 +574,9 @@ export function DiagnoseDialog({
           )}
           {busy && <p role="status" className="text-sm text-muted">正在处理，请稍候…</p>}
           {error && <p role="alert" className={`text-sm ${textErr}`}>{error}</p>}
-          {(resumesError || preparationError) && <p role="alert" className={`text-sm ${textErr}`}>{resumesError || preparationError}</p>}
-          {resumes === null && <p role="status" className="text-sm text-muted">正在读取已发布版本…</p>}
+          {resumesError && <InlineError message={`简历列表加载失败：${resumesError}`} onRetry={reloadResumes} />}
+          {preparationError && <p role="alert" className={`text-sm ${textErr}`}>{preparationError}</p>}
+          {resumes === null && !resumesError && <p role="status" className="text-sm text-muted">正在读取已发布版本…</p>}
           <ResumeVersionSelect resume={selectedResume} value={resumeVersionId} onChange={setResumeVersionId} disabled={busy || Boolean(boundPreparation)} />
           {boundPreparation && <p className="text-xs text-muted">已固定本次投递的简历版本与 JD；调整关联资料请返回投递准备页。</p>}
           {report && record && <ResumeVersionBadge resume_version_id={record.resume_version_id} resume_version={selectedResume?.versions.find((version) => version.id === record.resume_version_id)?.version} resume_version_name={selectedResume?.versions.find((version) => version.id === record.resume_version_id)?.name} />}
@@ -403,7 +596,7 @@ export function DiagnoseDialog({
                   </div>
                 </div>
                 {report.summary && (
-                  <RichText as="p" className="mt-3 text-sm leading-relaxed text-muted" content={report.summary} />
+                  <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted">{renderReportText(report.summary)}</p>
                 )}
               </div>
 
@@ -424,28 +617,30 @@ export function DiagnoseDialog({
                       ))}
                     </div>
                     {md.gaps && (
-                      <RichText as="p" className="mt-2 text-sm leading-relaxed text-muted" content={md.gaps} />
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted">{renderReportText(md.gaps)}</p>
                     )}
                     {md.suggestions.map((s, i) => {
-                      const key = `${md.moduleKey}|${s.itemId}|${s.field}|${i}`;
+                      const key = JSON.stringify([resumeId, record?.id, md.moduleKey, s.itemId, s.field, i]);
                       const adoption = record?.adoptions.find((entry) => entry.moduleKey === md.moduleKey && entry.suggestionIndex === i);
                       const done = Boolean(adoption);
+                      const pendingAdoption = pendingAdoptions[key];
+                      const pending = Boolean(pendingAdoption);
                       const current = diagnosisValue(modules, md.moduleKey, s);
                       const original = record ? diagnosisValue(record.resume_snapshot.modules, md.moduleKey, s) : null;
                       return (
                         <div key={key} className="mt-3 rounded-lg border border-line bg-bg p-3">
                           {s.reason && (
-                            <p className="text-xs leading-relaxed text-muted">建议：<RichText content={s.reason} /></p>
+                            <p className="whitespace-pre-wrap text-xs leading-relaxed text-muted">建议：{renderReportText(s.reason)}</p>
                           )}
                           <p className="mt-2 text-xs font-medium text-muted">诊断时原文</p>
                           <div className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-surface/60 px-3 py-2 text-xs leading-relaxed text-muted">
-                            <DiagnosisValueDisplay value={original} emptyText="（当时内容为空）" />
+                            <DiagnosisValueDisplay value={original} emptyText="（当时内容为空）" richText={s.field !== "items"} />
                           </div>
                           {JSON.stringify(original) !== JSON.stringify(current) && (
                             <details className="mt-2">
                               <summary className="cursor-pointer text-xs text-accent">查看当前内容（诊断后有变化）</summary>
                               <div className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-surface/60 px-3 py-2 text-xs leading-relaxed text-muted">
-                                <DiagnosisValueDisplay value={current} emptyText="（当前内容为空）" />
+                                <DiagnosisValueDisplay value={current} emptyText="（当前内容为空）" richText={s.field !== "items"} />
                               </div>
                             </details>
                           )}
@@ -453,13 +648,15 @@ export function DiagnoseDialog({
                             <span className={labelCls}>
                               {done
                                 ? "改写草稿（已采纳，显示当时写入内容）"
-                                : s.field === "description"
-                                  ? "改写草稿（可分行编辑，支持富文本排版，采纳后整段替换原文）"
-                                  : `改写草稿（可编辑${s.field === "items" ? "，每行一项技能" : "，支持富文本排版"}，采纳后整段替换${s.field === "items" ? "全部技能" : "原文"}）`}
+                                : pending
+                                  ? pendingAdoption?.saved ? "改写草稿（已保存，待同步采纳记录）" : "改写草稿（已写入，待保存并记录）"
+                                  : s.field === "description"
+                                    ? "改写草稿（可分行编辑，支持富文本排版，采纳后整段替换原文）"
+                                    : `改写草稿（可编辑${s.field === "items" ? "，每行一项技能" : "，支持富文本排版"}，采纳后整段替换${s.field === "items" ? "全部技能" : "原文"}）`}
                             </span>
-                            {done ? (
+                            {done || pending ? (
                               <div className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-surface/60 px-3 py-2 text-xs leading-relaxed text-muted">
-                                <DiagnosisValueDisplay value={adoption?.value ?? s.draft} emptyText="（采纳内容为空）" />
+                                <DiagnosisValueDisplay value={adoption?.value ?? pendingAdoption?.value ?? s.draft} emptyText="（采纳内容为空）" richText={s.field !== "items"} />
                               </div>
                             ) : s.field === "description" ? (
                               <div className="mt-1 space-y-2">
@@ -500,6 +697,7 @@ export function DiagnoseDialog({
                                     <div className="flex-1 min-w-0">
                                       <RichTextEditor
                                         value={desc}
+                                        disabled={busy}
                                         onChange={(val) => updateDescLine(key, s, descIndex, val)}
                                         placeholder="描述此项经历的具体内容，支持加粗与颜色…"
                                         minHeightClass="min-h-[56px]"
@@ -537,17 +735,14 @@ export function DiagnoseDialog({
                                 value={draftOf(key, s)}
                                 disabled={busy}
                                 aria-label="改写草稿"
-                                onChange={(e) =>
-                                  setDrafts((prev) => ({ ...prev, [key]: e.target.value }))
-                                }
+                                onChange={(e) => updateDraft(key, e.target.value)}
                               />
                             ) : (
                               <div className="mt-1">
                                 <RichTextEditor
                                   value={draftOf(key, s)}
-                                  onChange={(val) =>
-                                    setDrafts((prev) => ({ ...prev, [key]: val }))
-                                  }
+                                  disabled={busy}
+                                  onChange={(val) => updateDraft(key, val)}
                                   placeholder="可编辑改写草稿，支持加粗与颜色…"
                                   minHeightClass="min-h-[72px]"
                                   ariaLabel="改写草稿"
@@ -557,11 +752,21 @@ export function DiagnoseDialog({
                           </div>
                           <div className="mt-2 flex justify-end">
                             {done ? (
-                              <span className="text-xs font-medium text-primary">已采纳写入 · {current === null ? "目标已删除" : JSON.stringify(current) === JSON.stringify(adoption?.value) ? "当前保留" : "后续已修改"} · {new Date(adoption!.applied_at).toLocaleString()}</span>
+                              <span className="text-xs font-medium text-primary">已采纳写入 · {current === null ? "目标已删除" : diagnosisValuesEqual(s.field, current, adoption!.value) ? "当前保留" : "后续已修改"} · {new Date(adoption!.applied_at).toLocaleString()}</span>
+                            ) : pending ? (
+                              <div className="flex flex-wrap items-center justify-end gap-2">
+                                <span className="text-xs text-muted">{pendingAdoption?.saved ? "简历已保存，采纳记录待同步。" : "内容已写入，等待保存并记录采纳。"}</span>
+                                <button className={btnGhost} disabled={busy} onClick={() => void continueEditing(key)}>
+                                  继续编辑草稿
+                                </button>
+                                <button className={btnPrimary} disabled={busy} onClick={() => void retryAdoption(md.moduleKey, i, key)}>
+                                  {pendingAdoption?.saved ? "重试记录" : "重试保存并记录"}
+                                </button>
+                              </div>
                             ) : (
                               <button
                                 className={btnPrimary}
-                                disabled={busy}
+                                disabled={busy && confirmingKey !== key}
                                 onClick={() => void apply(md.moduleKey, i, key, s)}
                               >
                                 采纳写入

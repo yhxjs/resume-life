@@ -1,0 +1,246 @@
+{
+  "renderer": "Microsoft Word 16.0.19127, printHiddenText=false, hidden read-only COM, PDF export",
+  "note": "Synthetic DOCX XML. Visible/hidden source strings were independently checked against Word-exported PDF pages; no model output supplies these expectations. Paragraph spacing and table conditional styles are outside this oracle.",
+  "cases": [
+    {
+      "name": "character-style-inheritance",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">VISIBLE CONTROL char styles</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rStyle w:val=\"HiddenBase\"/></w:rPr><w:t xml:space=\"preserve\">HIDDEN_CHAR_BASE: led launch achieved 50%.</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rStyle w:val=\"HiddenDerived\"/></w:rPr><w:t xml:space=\"preserve\">HIDDEN_CHAR_DERIVED: owner of all work.</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rStyle w:val=\"ToggleAgain\"/></w:rPr><w:t xml:space=\"preserve\">STYLE_TOGGLE_TRUE: tested only.</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rStyle w:val=\"StyleFalse\"/></w:rPr><w:t xml:space=\"preserve\">STYLE_FALSE_CHILD: benefit unknown.</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rStyle w:val=\"HiddenDerived\"/><w:vanish w:val=\"false\"/></w:rPr><w:t xml:space=\"preserve\">DIRECT_FALSE_OVERRIDE: not deployed.</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\"/></w:sectPr></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"HiddenBase\"><w:name w:val=\"HiddenBase\"/><w:basedOn w:val=\"DefaultParagraphFont\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"HiddenDerived\"><w:name w:val=\"HiddenDerived\"/><w:basedOn w:val=\"HiddenBase\"/><w:rPr><w:b/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"ToggleAgain\"><w:name w:val=\"ToggleAgain\"/><w:basedOn w:val=\"HiddenBase\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"StyleFalse\"><w:name w:val=\"StyleFalse\"/><w:basedOn w:val=\"HiddenBase\"/><w:rPr><w:vanish w:val=\"false\"/></w:rPr></w:style></w:styles>"
+      },
+      "visible": [
+        "VISIBLE CONTROL char styles",
+        "STYLE_FALSE_CHILD: benefit unknown.",
+        "DIRECT_FALSE_OVERRIDE: not deployed."
+      ],
+      "hidden": [
+        "HIDDEN_CHAR_BASE: led launch achieved 50%.",
+        "HIDDEN_CHAR_DERIVED: owner of all work.",
+        "STYLE_TOGGLE_TRUE: tested only."
+      ]
+    },
+    {
+      "name": "paragraph-style-inheritance",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">VISIBLE CONTROL paragraph styles</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"HiddenParagraph\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">HIDDEN_PARAGRAPH: led launch.</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"HiddenParagraphChild\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">HIDDEN_PARAGRAPH_DERIVED: achieved 50%.</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"ParagraphToggleAgain\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">PARAGRAPH_TOGGLE_TRUE: tested only.</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"ParagraphStyleFalse\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">PARAGRAPH_STYLE_FALSE: unknown results.</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"HiddenParagraphChild\"/></w:pPr><w:r><w:rPr><w:vanish w:val=\"0\"/></w:rPr><w:t xml:space=\"preserve\">PARAGRAPH_DIRECT_FALSE: not deployed.</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\"/></w:sectPr></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"HiddenParagraph\"><w:name w:val=\"HiddenParagraph\"/><w:basedOn w:val=\"Normal\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"HiddenParagraphChild\"><w:name w:val=\"HiddenParagraphChild\"/><w:basedOn w:val=\"HiddenParagraph\"/><w:rPr><w:i/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"ParagraphToggleAgain\"><w:name w:val=\"ParagraphToggleAgain\"/><w:basedOn w:val=\"HiddenParagraph\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"ParagraphStyleFalse\"><w:name w:val=\"ParagraphStyleFalse\"/><w:basedOn w:val=\"HiddenParagraph\"/><w:rPr><w:vanish w:val=\"0\"/></w:rPr></w:style></w:styles>"
+      },
+      "visible": [
+        "VISIBLE CONTROL paragraph styles",
+        "PARAGRAPH_STYLE_FALSE: unknown results.",
+        "PARAGRAPH_DIRECT_FALSE: not deployed."
+      ],
+      "hidden": [
+        "HIDDEN_PARAGRAPH: led launch.",
+        "HIDDEN_PARAGRAPH_DERIVED: achieved 50%.",
+        "PARAGRAPH_TOGGLE_TRUE: tested only."
+      ]
+    },
+    {
+      "name": "document-default-hidden",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">HIDDEN_DOC_DEFAULT: old achievement.</w:t></w:r></w:p><w:p><w:r><w:rPr><w:vanish w:val=\"off\"/></w:rPr><w:t xml:space=\"preserve\">DOC_DEFAULT_DIRECT_OFF: only tested.</w:t></w:r></w:p><w:p><w:r><w:rPr><w:vanish w:val=\"true\"/></w:rPr><w:t xml:space=\"preserve\">DOC_DEFAULT_EXPLICIT_ON: old launch.</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\"/></w:sectPr></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:docDefaults><w:rPrDefault><w:rPr><w:vanish/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr></w:style></w:styles>"
+      },
+      "visible": [
+        "DOC_DEFAULT_DIRECT_OFF: only tested."
+      ],
+      "hidden": [
+        "HIDDEN_DOC_DEFAULT: old achievement.",
+        "DOC_DEFAULT_EXPLICIT_ON: old launch."
+      ]
+    },
+    {
+      "name": "default-normal-and-controls",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">HIDDEN_DEFAULT_NORMAL: managed all launches.</w:t></w:r></w:p><w:p><w:r><w:rPr><w:vanish w:val=\"false\"/></w:rPr><w:t xml:space=\"preserve\">NORMAL_DIRECT_FALSE: only reviewed docs.</w:t></w:r></w:p><w:p><w:r><w:rPr><w:vanish w:val=\"false\"/><w:b/><w:i/><w:strike/></w:rPr><w:t xml:space=\"preserve\">FONT_BOLD_ITALIC_STRIKE: current scope.</w:t></w:r></w:p><w:p><w:del w:id=\"1\" w:author=\"Synthetic\" w:date=\"2026-01-01T00:00:00Z\"><w:r><w:rPr><w:vanish w:val=\"false\"/></w:rPr><w:delText>DELETED_CONTROL: former claim.</w:delText></w:r></w:del></w:p><w:p><w:r><w:rPr><w:vanish/></w:rPr><w:t xml:space=\"preserve\">DIRECT_TRUE_CONTROL: explicitly hidden.</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\"/></w:sectPr></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr></w:style></w:styles>"
+      },
+      "visible": [
+        "NORMAL_DIRECT_FALSE: only reviewed docs.",
+        "FONT_BOLD_ITALIC_STRIKE: current scope."
+      ],
+      "hidden": [
+        "HIDDEN_DEFAULT_NORMAL: managed all launches.",
+        "DELETED_CONTROL: former claim.",
+        "DIRECT_TRUE_CONTROL: explicitly hidden."
+      ]
+    },
+    {
+      "name": "defaults-false-overrides",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><w:body><w:p><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">D1 DEFAULT HIDDEN</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PFalse\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">D2 PARAGRAPH FALSE</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rStyle w:val=\"CFalse\"/></w:rPr><w:t xml:space=\"preserve\">D3 CHARACTER FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PAbsent\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CAbsent\"/></w:rPr><w:t xml:space=\"preserve\">D4 STYLES ABSENT</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CAbsent\"/></w:rPr><w:t xml:space=\"preserve\">D5 PARAGRAPH FALSE CHARACTER ABSENT</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PFalse\"/></w:pPr><w:r><w:rPr><w:vanish/></w:rPr><w:t xml:space=\"preserve\">D6 DIRECT TRUE</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\"/></w:sectPr></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:docDefaults><w:rPrDefault><w:rPr><w:vanish w:val=\"true\"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PFalse\"><w:name w:val=\"PFalse\"/><w:rPr><w:vanish w:val=\"false\"/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PAbsent\"><w:name w:val=\"PAbsent\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"CFalse\"><w:name w:val=\"CFalse\"/><w:rPr><w:vanish w:val=\"0\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"CAbsent\"><w:name w:val=\"CAbsent\"/><w:rPr></w:rPr></w:style></w:styles>"
+      },
+      "visible": [
+        "D2 PARAGRAPH FALSE",
+        "D3 CHARACTER FALSE",
+        "D5 PARAGRAPH FALSE CHARACTER ABSENT"
+      ],
+      "hidden": [
+        "D1 DEFAULT HIDDEN",
+        "D4 STYLES ABSENT",
+        "D6 DIRECT TRUE"
+      ]
+    },
+    {
+      "name": "paragraph-character-priority",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><w:body><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CAbsent\"/></w:rPr><w:t xml:space=\"preserve\">P1 PARAGRAPH HIDDEN CHARACTER ABSENT</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CAbsentChild\"/></w:rPr><w:t xml:space=\"preserve\">P2 PARAGRAPH HIDDEN CHARACTER INHERITS ABSENT</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CFalse\"/></w:rPr><w:t xml:space=\"preserve\">P3 CHARACTER FALSE OVERRIDES</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CFalseChild\"/></w:rPr><w:t xml:space=\"preserve\">P4 CHARACTER INHERITED FALSE OVERRIDES</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CHidden\"/></w:rPr><w:t xml:space=\"preserve\">P5 CHARACTER TRUE OVERRIDES</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CFalse\"/><w:vanish/></w:rPr><w:t xml:space=\"preserve\">P6 DIRECT TRUE OVERRIDES CHARACTER FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CHidden\"/><w:vanish w:val=\"false\"/></w:rPr><w:t xml:space=\"preserve\">P7 DIRECT FALSE OVERRIDES CHARACTER TRUE</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\"/></w:sectPr></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PHidden\"><w:name w:val=\"PHidden\"/><w:basedOn w:val=\"Normal\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PFalse\"><w:name w:val=\"PFalse\"/><w:basedOn w:val=\"Normal\"/><w:rPr><w:vanish w:val=\"false\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"CAbsent\"><w:name w:val=\"CAbsent\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"CAbsentChild\"><w:name w:val=\"CAbsentChild\"/><w:basedOn w:val=\"CAbsent\"/><w:rPr><w:b/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"CFalse\"><w:name w:val=\"CFalse\"/><w:rPr><w:vanish w:val=\"off\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"CFalseChild\"><w:name w:val=\"CFalseChild\"/><w:basedOn w:val=\"CFalse\"/><w:rPr><w:i/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"CHidden\"><w:name w:val=\"CHidden\"/><w:rPr><w:vanish/></w:rPr></w:style></w:styles>"
+      },
+      "visible": [
+        "P7 DIRECT FALSE OVERRIDES CHARACTER TRUE"
+      ],
+      "hidden": [
+        "P1 PARAGRAPH HIDDEN CHARACTER ABSENT",
+        "P2 PARAGRAPH HIDDEN CHARACTER INHERITS ABSENT",
+        "P3 CHARACTER FALSE OVERRIDES",
+        "P4 CHARACTER INHERITED FALSE OVERRIDES",
+        "P5 CHARACTER TRUE OVERRIDES",
+        "P6 DIRECT TRUE OVERRIDES CHARACTER FALSE"
+      ]
+    },
+    {
+      "name": "normal-versus-no-basedon",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><w:body><w:p><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">N1 DEFAULT NORMAL HIDDEN</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"NoBase\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">N2 EXPLICIT STYLE WITHOUT BASE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"ExplicitNormal\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">N3 EXPLICIT BASE NORMAL</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"DerivedNoBase\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">N4 CHILD OF NO BASE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"UnknownStyle\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">N5 UNKNOWN PARAGRAPH STYLE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"MissingBase\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">N6 UNKNOWN BASED ON</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rStyle w:val=\"NoCharacterBase\"/></w:rPr><w:t xml:space=\"preserve\">N7 NORMAL HIDDEN CHARACTER NO BASE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"UnknownStyle\"/></w:pPr><w:r><w:rPr><w:vanish w:val=\"false\"/></w:rPr><w:t xml:space=\"preserve\">N8 UNKNOWN STYLE DIRECT FALSE</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\"/></w:sectPr></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"NoBase\"><w:name w:val=\"NoBase\"/><w:rPr></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"ExplicitNormal\"><w:name w:val=\"ExplicitNormal\"/><w:basedOn w:val=\"Normal\"/><w:rPr></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"DerivedNoBase\"><w:name w:val=\"DerivedNoBase\"/><w:basedOn w:val=\"NoBase\"/><w:rPr></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"MissingBase\"><w:name w:val=\"MissingBase\"/><w:basedOn w:val=\"UnknownParent\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"NoCharacterBase\"><w:name w:val=\"NoCharacterBase\"/><w:rPr></w:rPr></w:style></w:styles>"
+      },
+      "visible": [
+        "N2 EXPLICIT STYLE WITHOUT BASE",
+        "N4 CHILD OF NO BASE",
+        "N6 UNKNOWN BASED ON",
+        "N8 UNKNOWN STYLE DIRECT FALSE"
+      ],
+      "hidden": [
+        "N1 DEFAULT NORMAL HIDDEN",
+        "N3 EXPLICIT BASE NORMAL",
+        "N5 UNKNOWN PARAGRAPH STYLE",
+        "N7 NORMAL HIDDEN CHARACTER NO BASE"
+      ]
+    },
+    {
+      "name": "shared-styles-body-header-note",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/><Override PartName=\"/word/header.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml\"/><Override PartName=\"/word/footnotes.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/header.xml": "<w:hdr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:p><w:r><w:rPr><w:rStyle w:val=\"SharedHidden\"/></w:rPr><w:t xml:space=\"preserve\">S3 HEADER SHARED HIDDEN</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rStyle w:val=\"SharedVisible\"/></w:rPr><w:t xml:space=\"preserve\">S4 HEADER SHARED FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"SharedParagraphHidden\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">S5 HEADER PARAGRAPH HIDDEN</w:t></w:r></w:p></w:hdr>",
+        "word/footnotes.xml": "<w:footnotes xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:footnote w:id=\"1\"><w:p><w:r><w:rPr><w:rStyle w:val=\"SharedHidden\"/></w:rPr><w:t xml:space=\"preserve\">S6 NOTE SHARED HIDDEN</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rStyle w:val=\"SharedVisible\"/></w:rPr><w:t xml:space=\"preserve\">S7 NOTE SHARED FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"SharedParagraphHidden\"/></w:pPr><w:r><w:rPr></w:rPr><w:t xml:space=\"preserve\">S8 NOTE PARAGRAPH HIDDEN</w:t></w:r></w:p></w:footnote></w:footnotes>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/><Relationship Id=\"header\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/header\" Target=\"header.xml\"/><Relationship Id=\"footnote\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes\" Target=\"footnotes.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><w:body><w:p><w:r><w:rPr><w:rStyle w:val=\"SharedHidden\"/></w:rPr><w:t xml:space=\"preserve\">S1 BODY SHARED HIDDEN</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rStyle w:val=\"SharedVisible\"/></w:rPr><w:t xml:space=\"preserve\">S2 BODY SHARED FALSE</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p><w:sectPr><w:headerReference w:type=\"default\" r:id=\"header\"/><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\"/></w:sectPr></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"SharedHidden\"><w:name w:val=\"SharedHidden\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"SharedVisible\"><w:name w:val=\"SharedVisible\"/><w:basedOn w:val=\"SharedHidden\"/><w:rPr><w:vanish w:val=\"false\"/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"SharedParagraphHidden\"><w:name w:val=\"SharedParagraphHidden\"/><w:basedOn w:val=\"Normal\"/><w:rPr><w:vanish/></w:rPr></w:style></w:styles>"
+      },
+      "visible": [
+        "S2 BODY SHARED FALSE",
+        "S4 HEADER SHARED FALSE",
+        "S7 NOTE SHARED FALSE"
+      ],
+      "hidden": [
+        "S1 BODY SHARED HIDDEN",
+        "S3 HEADER SHARED HIDDEN",
+        "S5 HEADER PARAGRAPH HIDDEN",
+        "S6 NOTE SHARED HIDDEN",
+        "S8 NOTE PARAGRAPH HIDDEN"
+      ]
+    },
+    {
+      "name": "paragraph-character-boolean-matrix-extended",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Cfalse\"/></w:rPr><w:t>M1 PARA HIDDEN CHAR FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"C0\"/></w:rPr><w:t>M2 PARA HIDDEN CHAR 0</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Coff\"/></w:rPr><w:t>M3 PARA HIDDEN CHAR OFF</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Ctrue\"/></w:rPr><w:t>M4 PARA HIDDEN CHAR TRUE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"C1\"/></w:rPr><w:t>M5 PARA HIDDEN CHAR 1</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Con\"/></w:rPr><w:t>M6 PARA HIDDEN CHAR ON</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Derivedfalse\"/></w:rPr><w:t>M7 PARA HIDDEN INHERITED CHAR FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Derived0\"/></w:rPr><w:t>M8 PARA HIDDEN INHERITED CHAR 0</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Derivedoff\"/></w:rPr><w:t>M9 PARA HIDDEN INHERITED CHAR OFF</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Ctrue\"/></w:rPr><w:t>M10 PARA FALSE CHAR TRUE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Ctrue\"/><w:vanish w:val=\"false\"/></w:rPr><w:t>M11 DIRECT FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHidden\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Cfalse\"/><w:vanish w:val=\"0\"/></w:rPr><w:t>M12 DIRECT ZERO</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHiddenChildFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Ctrue\"/></w:rPr><w:t>M13 PARA INHERITED FALSE CHAR TRUE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHiddenChildFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Cfalse\"/></w:rPr><w:t>M14 PARA INHERITED FALSE CHAR FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHiddenChildFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"DefaultParagraphFont\"/></w:rPr><w:t>M15 PARA INHERITED FALSE CHAR ABSENT</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PHiddenChildTrue\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Ctrue\"/></w:rPr><w:t>M16 PARA INHERITED TRUE CHAR TRUE</w:t></w:r></w:p><w:sectPr/></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PHidden\"><w:name w:val=\"PHidden\"/><w:basedOn w:val=\"Normal\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PFalse\"><w:name w:val=\"PFalse\"/><w:basedOn w:val=\"Normal\"/><w:rPr><w:vanish w:val=\"false\"/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PHiddenChildFalse\"><w:name w:val=\"PHiddenChildFalse\"/><w:basedOn w:val=\"PHidden\"/><w:rPr><w:vanish w:val=\"false\"/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PHiddenChildTrue\"><w:name w:val=\"PHiddenChildTrue\"/><w:basedOn w:val=\"PHidden\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Cfalse\"><w:name w:val=\"Cfalse\"/><w:rPr><w:vanish w:val=\"false\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Derivedfalse\"><w:name w:val=\"Derivedfalse\"/><w:basedOn w:val=\"Cfalse\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"C0\"><w:name w:val=\"C0\"/><w:rPr><w:vanish w:val=\"0\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Derived0\"><w:name w:val=\"Derived0\"/><w:basedOn w:val=\"C0\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Coff\"><w:name w:val=\"Coff\"/><w:rPr><w:vanish w:val=\"off\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Derivedoff\"><w:name w:val=\"Derivedoff\"/><w:basedOn w:val=\"Coff\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Ctrue\"><w:name w:val=\"Ctrue\"/><w:rPr><w:vanish w:val=\"true\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Derivedtrue\"><w:name w:val=\"Derivedtrue\"/><w:basedOn w:val=\"Ctrue\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"C1\"><w:name w:val=\"C1\"/><w:rPr><w:vanish w:val=\"1\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Derived1\"><w:name w:val=\"Derived1\"/><w:basedOn w:val=\"C1\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Con\"><w:name w:val=\"Con\"/><w:rPr><w:vanish w:val=\"on\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"Derivedon\"><w:name w:val=\"Derivedon\"/><w:basedOn w:val=\"Con\"/><w:rPr></w:rPr></w:style></w:styles>"
+      },
+      "visible": [
+        "M4 PARA HIDDEN CHAR TRUE",
+        "M5 PARA HIDDEN CHAR 1",
+        "M6 PARA HIDDEN CHAR ON",
+        "M11 DIRECT FALSE",
+        "M12 DIRECT ZERO",
+        "M14 PARA INHERITED FALSE CHAR FALSE",
+        "M15 PARA INHERITED FALSE CHAR ABSENT",
+        "M16 PARA INHERITED TRUE CHAR TRUE"
+      ],
+      "hidden": [
+        "M1 PARA HIDDEN CHAR FALSE",
+        "M2 PARA HIDDEN CHAR 0",
+        "M3 PARA HIDDEN CHAR OFF",
+        "M7 PARA HIDDEN INHERITED CHAR FALSE",
+        "M8 PARA HIDDEN INHERITED CHAR 0",
+        "M9 PARA HIDDEN INHERITED CHAR OFF",
+        "M10 PARA FALSE CHAR TRUE",
+        "M13 PARA INHERITED FALSE CHAR TRUE"
+      ]
+    },
+    {
+      "name": "defaults-paragraph-character-matrix",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:pPr><w:pStyle w:val=\"PAbsent\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CAbsent\"/></w:rPr><w:t>X1 DEFAULT TRUE PARA ABSENT CHAR ABSENT</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PAbsent\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CFalse\"/></w:rPr><w:t>X2 DEFAULT TRUE PARA ABSENT CHAR FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PAbsent\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CTrue\"/></w:rPr><w:t>X3 DEFAULT TRUE PARA ABSENT CHAR TRUE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CAbsent\"/></w:rPr><w:t>X4 DEFAULT TRUE PARA FALSE CHAR ABSENT</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CFalse\"/></w:rPr><w:t>X5 DEFAULT TRUE PARA FALSE CHAR FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CTrue\"/></w:rPr><w:t>X6 DEFAULT TRUE PARA FALSE CHAR TRUE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PTrue\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CAbsent\"/></w:rPr><w:t>X7 DEFAULT TRUE PARA TRUE CHAR ABSENT</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PTrue\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CFalse\"/></w:rPr><w:t>X8 DEFAULT TRUE PARA TRUE CHAR FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PTrue\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CTrue\"/></w:rPr><w:t>X9 DEFAULT TRUE PARA TRUE CHAR TRUE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PChildFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CTrue\"/></w:rPr><w:t>X10 DEFAULT TRUE PARA CHILD FALSE CHAR TRUE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PChildFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CFalse\"/></w:rPr><w:t>X11 DEFAULT TRUE PARA CHILD FALSE CHAR FALSE</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"PChildFalse\"/></w:pPr><w:r><w:rPr><w:rStyle w:val=\"CAbsent\"/></w:rPr><w:t>X12 DEFAULT TRUE PARA CHILD FALSE CHAR ABSENT</w:t></w:r></w:p><w:sectPr/></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:docDefaults><w:rPrDefault><w:rPr><w:vanish/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PAbsent\"><w:name w:val=\"PAbsent\"/><w:rPr></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PFalse\"><w:name w:val=\"PFalse\"/><w:rPr><w:vanish w:val=\"false\"/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PTrue\"><w:name w:val=\"PTrue\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"CAbsent\"><w:name w:val=\"CAbsent\"/><w:rPr></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"CFalse\"><w:name w:val=\"CFalse\"/><w:rPr><w:vanish w:val=\"false\"/></w:rPr></w:style><w:style w:type=\"character\" w:styleId=\"CTrue\"><w:name w:val=\"CTrue\"/><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type=\"paragraph\" w:styleId=\"PChildFalse\"><w:name w:val=\"PChildFalse\"/><w:basedOn w:val=\"PTrue\"/><w:rPr><w:vanish w:val=\"false\"/></w:rPr></w:style></w:styles>"
+      },
+      "visible": [
+        "X2 DEFAULT TRUE PARA ABSENT CHAR FALSE",
+        "X4 DEFAULT TRUE PARA FALSE CHAR ABSENT",
+        "X6 DEFAULT TRUE PARA FALSE CHAR TRUE",
+        "X8 DEFAULT TRUE PARA TRUE CHAR FALSE",
+        "X10 DEFAULT TRUE PARA CHILD FALSE CHAR TRUE",
+        "X12 DEFAULT TRUE PARA CHILD FALSE CHAR ABSENT"
+      ],
+      "hidden": [
+        "X1 DEFAULT TRUE PARA ABSENT CHAR ABSENT",
+        "X3 DEFAULT TRUE PARA ABSENT CHAR TRUE",
+        "X5 DEFAULT TRUE PARA FALSE CHAR FALSE",
+        "X7 DEFAULT TRUE PARA TRUE CHAR ABSENT",
+        "X9 DEFAULT TRUE PARA TRUE CHAR TRUE",
+        "X11 DEFAULT TRUE PARA CHILD FALSE CHAR FALSE"
+      ]
+    },
+    {
+      "name": "default-character",
+      "parts": {
+        "[Content_Types].xml": "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/></Types>",
+        "_rels/.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"main\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>",
+        "word/_rels/document.xml.rels": "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"styles\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>",
+        "word/document.xml": "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:pPr></w:pPr><w:r><w:rPr></w:rPr><w:t>A1 absent</w:t></w:r></w:p><w:p><w:pPr></w:pPr><w:r><w:rPr><w:rStyle w:val=\"DefaultParagraphFont\"/></w:rPr><w:t>A2 explicit default</w:t></w:r></w:p><w:p><w:pPr></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Missing\"/></w:rPr><w:t>A3 unknown character</w:t></w:r></w:p><w:p><w:pPr></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Empty\"/></w:rPr><w:t>A4 empty independent</w:t></w:r></w:p><w:p><w:pPr></w:pPr><w:r><w:rPr><w:rStyle w:val=\"Child\"/></w:rPr><w:t>A5 child of default</w:t></w:r></w:p><w:p><w:pPr></w:pPr><w:r><w:rPr><w:rStyle w:val=\"UnknownBase\"/></w:rPr><w:t>A6 unknown base</w:t></w:r></w:p><w:p><w:pPr></w:pPr><w:r><w:rPr><w:vanish w:val=\"false\"/></w:rPr><w:t>A7 direct false</w:t></w:r></w:p><w:sectPr/></w:body></w:document>",
+        "word/styles.xml": "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:rPr></w:rPr><w:pPr></w:pPr></w:style><w:style w:type=\"character\" w:styleId=\"DefaultParagraphFont\" w:default=\"1\"><w:name w:val=\"DefaultParagraphFont\"/><w:rPr><w:vanish/></w:rPr><w:pPr></w:pPr></w:style><w:style w:type=\"character\" w:styleId=\"Empty\"><w:name w:val=\"Empty\"/><w:rPr></w:rPr><w:pPr></w:pPr></w:style><w:style w:type=\"character\" w:styleId=\"Child\"><w:name w:val=\"Child\"/><w:basedOn w:val=\"DefaultParagraphFont\"/><w:rPr></w:rPr><w:pPr></w:pPr></w:style><w:style w:type=\"character\" w:styleId=\"UnknownBase\"><w:name w:val=\"UnknownBase\"/><w:basedOn w:val=\"Missing\"/><w:rPr></w:rPr><w:pPr></w:pPr></w:style></w:styles>"
+      },
+      "visible": [
+        "A1 absent",
+        "A3 unknown character",
+        "A4 empty independent",
+        "A6 unknown base",
+        "A7 direct false"
+      ],
+      "hidden": [
+        "A2 explicit default",
+        "A5 child of default"
+      ]
+    }
+  ]
+}

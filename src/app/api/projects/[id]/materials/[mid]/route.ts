@@ -1,3 +1,4 @@
+import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction } from "@/lib/db";
@@ -16,8 +17,8 @@ async function handleGet(
   { params }: { params: Promise<{ id: string; mid: string }> }
 ) {
   const { id, mid } = await params;
-  const projectId = Number(id);
-  const materialId = Number(mid);
+  const projectId = parseCanonicalPositiveId(id);
+  const materialId = parseCanonicalPositiveId(mid);
   if (!Number.isInteger(projectId) || !Number.isInteger(materialId)) return NextResponse.json({ error: "无效的 ID" }, { status: 400 });
   const row = loadProjectMaterial(projectId, materialId);
   if (!row) return NextResponse.json({ error: "材料不存在" }, { status: 404 });
@@ -30,8 +31,8 @@ async function handlePatch(
   { params }: { params: Promise<{ id: string; mid: string }> }
 ) {
   const { id, mid } = await params;
-  const projectId = Number(id);
-  const materialId = Number(mid);
+  const projectId = parseCanonicalPositiveId(id);
+  const materialId = parseCanonicalPositiveId(mid);
   if (!Number.isInteger(projectId) || !Number.isInteger(materialId)) {
     return NextResponse.json({ error: "无效的 ID" }, { status: 400 });
   }
@@ -43,14 +44,23 @@ async function handlePatch(
       title?: unknown;
       content?: unknown;
       expectedRevision?: unknown;
+      tableProvenance?: unknown;
+      provenance?: unknown;
     } | null>(req);
-    if (!body || typeof body !== "object") {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
       return NextResponse.json({ error: "请求体无效" }, { status: 400 });
     }
-      title = typeof body.title === "string" ? body.title.trim() : "";
-      content = typeof body.content === "string" ? body.content : "";
-      expectedRevision = typeof body.expectedRevision === "string" ? body.expectedRevision : "";
-      if (!/^[a-f0-9]{64}$/.test(expectedRevision)) return NextResponse.json({ error: "材料版本参数无效" }, { status: 400 });
+    if (Object.hasOwn(body, "tableProvenance") || Object.hasOwn(body, "provenance")) {
+      return NextResponse.json({ error: "材料结构来源不能手工修改，请重新导入文件" }, { status: 400 });
+    }
+    if ((body.title !== undefined && typeof body.title !== "string") ||
+      (body.content !== undefined && typeof body.content !== "string")) {
+      return NextResponse.json({ error: "材料标题和正文必须是字符串" }, { status: 400 });
+    }
+    title = typeof body.title === "string" ? body.title.trim() : "";
+    content = typeof body.content === "string" ? body.content : "";
+    expectedRevision = typeof body.expectedRevision === "string" ? body.expectedRevision : "";
+    if (!/^[a-f0-9]{64}$/.test(expectedRevision)) return NextResponse.json({ error: "材料版本参数无效" }, { status: 400 });
     assertProjectMaterial(content);
     assertProjectMaterialTitle(title);
     if (!title || !content.trim()) {
@@ -83,8 +93,8 @@ async function handleDelete(
   { params }: { params: Promise<{ id: string; mid: string }> }
 ) {
   const { id, mid } = await params;
-  const projectId = Number(id);
-  const materialId = Number(mid);
+  const projectId = parseCanonicalPositiveId(id);
+  const materialId = parseCanonicalPositiveId(mid);
   if (!Number.isInteger(projectId) || !Number.isInteger(materialId)) {
     return NextResponse.json({ error: "无效的 ID" }, { status: 400 });
   }

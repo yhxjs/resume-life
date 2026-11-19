@@ -10,27 +10,45 @@ export type ConfirmOptions = {
   confirmText?: string;
   cancelText?: string;
   danger?: boolean;
+  /** 所属操作取消或离页时关闭／移除本项，并以 false 结算。 */
+  signal?: AbortSignal;
 };
 
 type Pending =
   | (ConfirmOptions & { kind: "confirm"; resolve: (ok: boolean) => void })
-  | { kind: "alert"; title?: string; message: string; confirmText?: string; resolve: () => void };
+  | { kind: "alert"; title?: string; message: string; confirmText?: string; signal?: AbortSignal; resolve: () => void };
 
 let push: ((p: Pending | null) => void) | null = null;
 /** 正在展示的那一条，与宿主的 pending state 同步 */
 let current: Pending | null = null;
 /** 同一 tick 内到达的后续请求排队等待，逐个呈现 */
 const waiting: Pending[] = [];
+const removeAbortListener = new WeakMap<Pending, () => void>();
 
 function settle(item: Pending, ok: boolean): void {
+  removeAbortListener.get(item)?.();
+  removeAbortListener.delete(item);
   if (item.kind === "confirm") item.resolve(ok);
   else item.resolve();
 }
 
 function enqueue(item: Pending): void {
-  if (!push) {
+  const signal = item.signal;
+  if (!push || signal?.aborted) {
     settle(item, false);
     return;
+  }
+  if (signal) {
+    const cancel = () => {
+      if (current === item) advance(false);
+      else {
+        const index = waiting.indexOf(item);
+        if (index !== -1) waiting.splice(index, 1);
+        settle(item, false);
+      }
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    removeAbortListener.set(item, () => signal.removeEventListener("abort", cancel));
   }
   if (current) {
     waiting.push(item);
@@ -56,7 +74,7 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
 }
 
 /** 自定义提示弹窗（替代 window.alert） */
-export function alertDialog(opts: { title?: string; message: string }): Promise<void> {
+export function alertDialog(opts: { title?: string; message: string; signal?: AbortSignal }): Promise<void> {
   return new Promise((resolve) => {
     enqueue({ kind: "alert", ...opts, resolve: () => resolve() });
   });
@@ -81,6 +99,8 @@ export function ConfirmDialogHost() {
   }, []);
 
   function close(result: boolean) {
+    // 取消可能先于 React 更新 DOM；旧按钮不能结算刚出队的另一项。
+    if (current !== pending) return;
     advance(result);
   }
 
@@ -101,7 +121,7 @@ export function ConfirmDialogHost() {
       onClick={() => close(false)}
     >
       <div
-        className="dialog-in w-full max-w-sm rounded-2xl border border-line bg-card p-5 sm:p-6 shadow-card-float max-h-[90dvh] overflow-y-auto"
+        className="dialog-in min-w-0 w-full max-w-sm rounded-2xl border border-line bg-card p-5 sm:p-6 shadow-card-float max-h-[90dvh] overflow-y-auto [overflow-wrap:anywhere]"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 id={`${dialogId}-title`} className={pending.title ? "font-serif text-base font-bold text-ink" : "sr-only"}>

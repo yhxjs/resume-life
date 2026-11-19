@@ -56,7 +56,7 @@ export function resolveResumeVersionId(resumeId: number, value?: unknown): numbe
   const db = getDb();
   if (!db.prepare("SELECT 1 FROM resumes WHERE id = ?").get(resumeId)) throw new ResumeVersionError("简历不存在", 404);
   if (value === undefined || value === null) {
-    const latest = db.prepare("SELECT id FROM resume_versions WHERE resume_id = ? ORDER BY version DESC LIMIT 1").get(resumeId) as { id: number } | undefined;
+    const latest = db.prepare("SELECT id FROM resume_versions WHERE resume_id = ? AND id > 0 ORDER BY version DESC LIMIT 1").get(resumeId) as { id: number } | undefined;
     if (!latest) throw new ResumeVersionError("请先发布一个简历版本");
     return latest.id;
   }
