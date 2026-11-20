@@ -80,6 +80,26 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) test.describe(
     await page.keyboard.press("Tab"); await expect(page.getByRole("button", { name: "题库复盘", exact: true })).toBeFocused();
   });
 
+  test("展开动画的起始帧即可通过 Tab 进入链接", async ({ page }) => {
+    await page.goto("/tools");
+    const trigger = page.getByRole("button", { name: "面试演练", exact: true });
+    await trigger.focus();
+    await trigger.press("Enter");
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const visibility = await trigger.evaluate(async button => {
+      const panel = document.getElementById(button.getAttribute("aria-controls")!)!;
+      // 停在展开动画的起始帧，稳定覆盖慢帧下的键盘操作。
+      const animations = panel.getAnimations();
+      for (const animation of animations) animation.pause();
+      await Promise.all(animations.map(animation => animation.ready));
+      for (const animation of animations) animation.currentTime = 0;
+      return getComputedStyle(panel).visibility;
+    });
+    expect(visibility).toBe("visible");
+    await page.keyboard.press("Tab");
+    await expect(group(page).getByRole("link", { name: /^模拟面试/ })).toBeFocused();
+  });
+
   test("从已点击的另一组移入并点击子链接，旧按钮失焦不会吞掉导航", async ({ page }) => {
     await page.goto("/tools"); const first = page.getByRole("button", { name: "简历中心", exact: true });
     await first.click(); await expect(first).toBeFocused();

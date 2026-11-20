@@ -302,7 +302,8 @@ export function SiteNav() {
                   <div
                     id={`nav-dropdown-${item.label}`}
                     aria-hidden={!isOpen}
-                    className={`absolute left-0 top-full z-40 pt-1.5 transition-all duration-200 ease-out ${
+                    // visibility 必须立即切换，避免展开动画的起始帧让 Tab 跳过链接。
+                    className={`absolute left-0 top-full z-40 pt-1.5 transition-[opacity,translate,scale] duration-200 ease-out ${
                       isOpen
                         ? "visible translate-y-0 opacity-100 scale-100 pointer-events-auto"
                         : "invisible -translate-y-1.5 opacity-0 scale-95 pointer-events-none"

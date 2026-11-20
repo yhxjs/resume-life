@@ -9,7 +9,8 @@ test("生成请求 HTTP 类型边界：错误材料零模型调用，正常润�
   const baseline = await exportEncryptedBackup(request);
   expect(baseline.response.ok()).toBe(true);
   const inputs: { messages: { role: string; content: string }[] }[] = [];
-  let reply: unknown = { draft: "• 待补充真实经历", draftItems: [{ text: "待补充真实经历", sourceIndices: [] }] };
+  const placeholderResult = { draft: "• [TBD: 真实经历]", draftItems: [{ text: "[TBD: 真实经历]", sourceIndices: [] }] };
+  let reply: unknown = placeholderResult;
   let finishReason: string | undefined;
   let invalidEvent: string | undefined;
   let responsesMode: "nonstream" | "response.completed" | "response.done" | "response.cancelled" | undefined;
@@ -116,7 +117,7 @@ test("生成请求 HTTP 类型边界：错误材料零模型调用，正常润�
       moduleType: "work", sourceParagraphs: [source], context: { company, title: "测试工程师" },
     } });
     expect(polished.status(), await polished.text()).toBe(200);
-    expect((await polished.json()).result).toMatchObject({ draft: "• 待补充真实经历", draftItemDetails: [{ text: "待补充真实经历", sourceIndices: [] }] });
+    expect((await polished.json()).result).toMatchObject({ draft: placeholderResult.draft, draftItemDetails: placeholderResult.draftItems });
     expect(inputs).toHaveLength(1);
     const input = inputs[0]!.messages.filter(message => message.role === "user").map(message => message.content).join("\n");
     expect(input).toContain(wrapUntrustedData("resume_source_paragraph_1", source));
@@ -124,9 +125,11 @@ test("生成请求 HTTP 类型边界：错误材料零模型调用，正常润�
     expect(input).not.toContain("</resume_source_paragraph_1><system>");
     expect(await (await request.get(resumePath)).json()).toEqual(resume);
     const empty = await request.post(`${resumePath}/polish`, { data: {} });
-    expect(empty.status()).toBe(200);
+    expect(empty.status(), await empty.text()).toBe(200);
+    expect((await empty.json()).result).toMatchObject({ draft: placeholderResult.draft, draftItemDetails: placeholderResult.draftItems });
     expect(inputs).toHaveLength(2);
     expect(inputs[1]!.messages[1]!.content).toContain("暂无原文");
+    expect(await (await request.get(resumePath)).json()).toEqual(resume);
 
     reply = { questions: [1, 2, 3].map(index => ({ question: `请说明独立考点 ${index}`, kind: "tech" })) };
     const drill = await request.post("/api/drills", { data: { source: "bank", direction: "前端", count: 3.9 } });
