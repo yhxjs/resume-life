@@ -7,7 +7,8 @@ concurrency:
 permissions:
   contents: read
 jobs:
-  check:
+  # Linux 完整覆盖率执行一次，替代 check:release 内的 npm test + test:coverage 双跑。
+  linux:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -45,16 +46,11 @@ jobs:
           path: artifacts/
       - run: npm run setup:ocr
       - run: npx playwright install --with-deps chromium
-      - run: npm run check:release
-      - name: Upload browser failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: browser-failure-diagnostics
-          path: |
-            test-results/**/trace.zip
-            test-results/**/error-context.md
-          retention-days: 7
+      - run: npm run check:public-assets
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run check:build-trace
       - name: Unit tests with coverage gate
         run: npm run test:coverage
       # 门禁失败时把 lcov 报告留成 artifact，免得只能在本地复现才能定位缺口
@@ -62,12 +58,118 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage-lcov
+          name: linux-coverage-lcov
           path: coverage/lcov.info
       - name: Page coverage metric
         run: npm run check:page-coverage
       # audit:dependencies keeps the raw production/all reports and preserves
       # moderate/high thresholds; only the reviewed, verified patch is excepted.
+
+  # 每组有独立的服务器和临时数据库；组内仍使用 playwright.config.ts 的单 worker。
+  e2e:
+    name: Browser tests (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - run: npm run setup:ocr
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
+      - name: Upload browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-failure-diagnostics-${{ matrix.shard }}
+          path: |
+            test-results/**/trace.zip
+            test-results/**/error-context.md
+          retention-days: 7
+
+  # 保留 Windows 的两个 worker 上限，通过独立机器分片减少磁盘/子进程争用。
+  windows-unit:
+    name: Windows unit tests (${{ matrix.shard }}/4)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - run: npm run setup:ocr
+      - run: npx playwright install chromium
+      - run: npm run test:coverage -- --config vitest.shard.config.mts --shard=${{ matrix.shard }}/4 --reporter=default --reporter=blob
+      - name: Upload unit test and coverage blob
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-unit-blob-${{ matrix.shard }}
+          path: .vitest-reports/blob-${{ matrix.shard }}-4.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-coverage:
+    needs: windows-unit
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: windows-unit-blob-*
+          path: .vitest-reports
+          merge-multiple: true
+      - name: Require every shard before applying the coverage gates
+        run: node --input-type=module -e 'import { readdirSync } from "node:fs"; import assert from "node:assert/strict"; assert.deepEqual(readdirSync(".vitest-reports").sort(), [1, 2, 3, 4].map(i => `blob-${i}-4.json`));'
+      # 使用原始配置合并完整覆盖率，行/函数/分支阈值及页面门禁均保持不变。
+      - run: npm run test:coverage -- --merge-reports=.vitest-reports
+      - run: npm run check:page-coverage
+      - name: Upload coverage report on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-coverage-lcov
+          path: coverage/lcov.info
+
+  # 稳定的总门禁：任意分片失败/取消/跳过，都不能让 check 或制品证明误报成功。
+  check:
+    if: always()
+    needs: [linux, e2e, windows, windows-coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every release check to succeed
+        env:
+          CHECK_RESULTS: ${{ toJSON(needs) }}
+        run: node -e 'const results = JSON.parse(process.env.CHECK_RESULTS); if (Object.values(results).some(job => job.result !== "success")) { console.error(results); process.exit(1); }'
 
   # 制品证明只在受信任的默认分支推送中执行，普通 PR 只需要读权限即可完成检查。
   attest:
@@ -110,8 +212,6 @@ jobs:
           path: artifacts/dependency-audit/
       - run: npm run setup:ocr
       - run: npx playwright install chromium
-      - run: npm run test:coverage
-      - run: npm run check:page-coverage
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build

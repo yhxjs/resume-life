@@ -8,6 +8,7 @@
 /test-results/
 /playwright-report/
 /.test-artifacts/
+/.vitest-reports/
 
 # CI supply chain reports
 /artifacts/
