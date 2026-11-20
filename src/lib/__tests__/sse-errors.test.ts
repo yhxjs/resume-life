@@ -47,6 +47,27 @@ describe("createSseResponse 的异常兜底", () => {
     expect(text).not.toContain("event: error");
   });
 
+  it("只有显式声明的写入前失败携带未保存标志", async () => {
+    const known = await readAll(createSseResponse(async emitter => {
+      emitter.sendError("模型未完成", { outcome: "not_saved" });
+    }));
+    expect(known).toContain('"outcome":"not_saved"');
+    const unknown = await readAll(createSseResponse(async emitter => {
+      emitter.sendError("提交结果未知");
+    }));
+    expect(unknown).not.toContain("outcome");
+  });
+
+  it("数据恢复冲突优先于未保存声明，客户端仍须重新核对", async () => {
+    const generation = await import("../data-generation");
+    vi.spyOn(generation, "assertDataGeneration").mockImplementation(() => { throw new generation.DataGenerationConflictError(); });
+    const text = await readAll(createSseResponse(async emitter => {
+      emitter.sendError("模型未完成", { outcome: "not_saved" });
+    }));
+    expect(text).toContain(new generation.DataGenerationConflictError().message);
+    expect(text).not.toContain("outcome");
+  });
+
   it("传入的 requestId 同时出现在日志与错误事件里，客户端拿到的 ID 可被搜到", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const response = createSseResponse(async () => {

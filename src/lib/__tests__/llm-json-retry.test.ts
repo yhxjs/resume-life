@@ -299,15 +299,19 @@ describe("requireJson 无效 JSON 自动重试", () => {
     expect(recorded.calls[0]).toMatchObject({ status: "ok", attempts: 1 });
   });
 
-  it("上游缺少完成事件时，即使缓存内容是合法 JSON 也不发送", async () => {
+  it("上游缺少完成事件时安全重试，成功前不发送缓存 JSON", async () => {
     const body = 'data: {"choices":[{"delta":{"content":"{\\\"ok\\\":true}"}}]}\n\n';
-    const fetchMock = vi.fn().mockResolvedValue(new Response(body));
+    const fetchMock = vi.fn(async () => new Response(body));
     vi.stubGlobal("fetch", fetchMock);
     const onDelta = vi.fn();
-    await expect(chatStream("summary", [], onDelta, { source: SOURCE, requireJson: true })).rejects.toThrow("未收到完成事件");
+    vi.useFakeTimers();
+    const run = chatStream("summary", [], onDelta, { source: SOURCE, requireJson: "strict" });
+    const rejection = expect(run).rejects.toMatchObject({ code: "protocol", reason: "interrupted" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
     expect(onDelta).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(recorded.calls[0]).toMatchObject({ status: "failed", errorCode: "protocol", attempts: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(recorded.calls[0]).toMatchObject({ status: "failed", errorCode: "protocol", attempts: 2 });
   });
 
   it.each([false, true, "strict"] as const)("requireJson=%s 时按约定发送已收到但尚未完成的内容", async (requireJson) => {

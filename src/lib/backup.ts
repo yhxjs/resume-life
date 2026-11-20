@@ -22,6 +22,7 @@ export const TABLES_CLEAR_ORDER = [
   "review_cards",
   "application_preparation_resources",
   "application_preparation_tasks",
+  "application_preparation_plans",
   "llm_call_logs",
   "resume_defense_drills",
   "resume_defenses",
@@ -61,7 +62,8 @@ export const TABLES_INSERT_ORDER = [...TABLES_CLEAR_ORDER].reverse();
 /** 旧版本不能夹带后来新增的业务表；恢复时缺席的新表保持为空。 */
 export function backupTablesForDbVersion(version: number, tables: readonly string[] = TABLES_CLEAR_ORDER): readonly string[] {
   return tables.filter(table => !(version < 4 && table === "application_interview_recap_contexts") &&
-    !(version < 5 && table === "project_material_table_provenance"));
+    !(version < 5 && table === "project_material_table_provenance") &&
+    !(version < 7 && table === "application_preparation_plans"));
 }
 
 /** 拥有 AUTOINCREMENT 自增主键的表清单 */

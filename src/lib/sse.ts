@@ -4,7 +4,8 @@ import { assertDataGeneration, DataGenerationConflictError } from "@/lib/data-ge
 export type SseEmitter = {
   sendDelta: (text: string, extra?: Record<string, unknown>) => void;
   sendDone: (payload: unknown) => void;
-  sendError: (error: string | Error) => void;
+  /** 只有生产者能确认尚未写入时才声明 not_saved；默认不推断提交结果。 */
+  sendError: (error: string | Error, options?: { outcome: "not_saved" }) => void;
   signal: AbortSignal;
 };
 
@@ -58,16 +59,18 @@ export function createSseResponse(
             controller.close();
           } catch {}
         },
-        sendError(error) {
+        sendError(error, options) {
           if (isClosed) return;
           let message = errorMessage(error);
+          let outcome = options?.outcome;
           try {
             assertDataGeneration();
           } catch (conflict) {
             if (!(conflict instanceof DataGenerationConflictError)) throw conflict;
             message = conflict.message;
+            outcome = undefined;
           }
-          safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`);
+          safeEnqueue(`event: error\ndata: ${JSON.stringify({ error: message, ...(outcome ? { outcome } : {}) })}\n\n`);
           isClosed = true;
           try {
             controller.close();

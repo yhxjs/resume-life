@@ -339,9 +339,12 @@ it("超过旧传输预算后的正文仍须等待 DONE，EOF 不返回部分 JSO
   const chunks = [...paddedWire(": synthetic keep-alive\n\n", LLM_MAX_RESPONSE_BYTES + 4096, "")].slice(0, -1);
   const fetch = respond(chunks.join(""), 64 * 1024);
   const onDelta = vi.fn();
-  await expect(chatStream("parse", [], onDelta, { requireJson: "strict" })).rejects.toMatchObject({ code: "protocol", message: expect.stringMatching(/中断|完成/) });
+  const rejection = expect(chatStream("parse", [], onDelta, { requireJson: "strict" }))
+    .rejects.toMatchObject({ code: "protocol", reason: "interrupted", message: expect.stringMatching(/中断|完成/) });
+  await vi.advanceTimersByTimeAsync(4000);
+  await rejection;
   expect(onDelta).not.toHaveBeenCalled();
-  expect(fetch).toHaveBeenCalledOnce();
+  expect(fetch).toHaveBeenCalledTimes(3);
   expect(vi.getTimerCount()).toBe(0);
 });
 

@@ -36,6 +36,10 @@ afterEach(() => {
 async function payloadFor(version: number): Promise<BackupPayload> {
   const payload = (await import("./backup-fixture")).exportAllData();
   payload.meta.dbVersion = version;
+  if (version < 7) {
+    delete payload.data.application_preparation_plans;
+    delete payload.meta.stats.application_preparation_plans;
+  }
   if (version < 5) {
     delete payload.data.project_material_table_provenance;
     delete payload.meta.stats.project_material_table_provenance;

@@ -2,6 +2,13 @@ import Link from "next/link";
 
 const TOOLS = [
   {
+    href: "/tools/preparation",
+    title: "上场计划",
+    desc: "为本岗位生成准备清单，检查缺失资料、安排建议训练与预计耗时，逐项执行并记录准备进度。",
+    badge: "岗位准备清单",
+    actionText: "生成我的上场计划",
+  },
+  {
     href: "/tools/jd",
     title: "JD 考点画像",
     desc: "根据 JD 提炼有原文依据的准备重点与练习方向；信息不足时不凑考点，也不预测真实面试必问。",
@@ -62,7 +69,7 @@ export default function ToolsPage() {
             求职特战工具箱
           </h1>
           <p className="mt-1 max-w-prose text-sm text-muted leading-relaxed">
-            轻量实用外挂工具矩阵，随取随用，覆盖考点解码、简历审阅、敏感经历表达、薪酬谈判练习与 Offer 比较。
+            从岗位准备清单开始，随取随用，覆盖考点解码、简历审阅、敏感经历表达、薪酬谈判练习与 Offer 比较。
           </p>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { isStoredProjectSummary } from "./summary";
+import { isPreparationCompletion } from "./preparation-plan-types";
 import type { DatabaseSync } from "node:sqlite";
 import { BASIC_REORDERABLE_FIELD_KEYS } from "./modules";
 import { DocumentTableProvenanceError, parseDocumentTableProvenance } from "./document-table-provenance";
@@ -250,6 +251,10 @@ const fields: Record<string, Record<string, Check>> = {
   intro_versions: { sentences: json(list(object({ text: string, comment: string }))) },
   resume_templates: { style: json(style) },
   jd_portraits: { result: json(jdPortrait, true) },
+  application_preparation_plans: {
+    completed_steps: json(isPreparationCompletion),
+    context_key: value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
+  },
   jargon_decodings: { result: json(jargon, true) },
   salary_negotiations: { report: json(negotiationReport, true) },
   salary_negotiation_turns: { hr_mindset: json(orEmptyObject(hrMindset)), mentor_analysis: json(orEmptyObject(mentorAnalysis)) },

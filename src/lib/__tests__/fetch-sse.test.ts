@@ -77,6 +77,17 @@ describe("SSE 完成与错误边界", () => {
     expect(done).not.toHaveBeenCalled();
   });
 
+  it.each(["not_saved", undefined, null, false, "saved", {}])("只信任显式未保存标志：%j", async outcome => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(stream([
+      `event: error\ndata: ${JSON.stringify({ error: "模型生成失败", outcome })}\n\n`,
+    ])));
+    const done = vi.fn();
+    const failure = await fetchSse("/mock", { onDone: done }).catch(reason => reason);
+    expect(failure.name).toBe("SseServerError");
+    expect(failure.outcome).toBe(outcome === "not_saved" ? "not_saved" : null);
+    expect(done).not.toHaveBeenCalled();
+  });
+
   it.each([null, {}, [], "拒绝", { error: "" }, { error: "  " }, { error: 3 }].map(payload => ({ payload })))("损坏的服务端错误不是明确业务失败 %#", async ({ payload }) => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(stream([`event: error\ndata: ${JSON.stringify(payload)}\n\n`])));
     const error = vi.fn(); const done = vi.fn();

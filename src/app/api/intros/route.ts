@@ -5,10 +5,11 @@ import { parseApiJson } from "@/lib/api-request";
 import { checkModelField } from "@/lib/llm-input-budget";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction, now } from "@/lib/db";
-import { LlmConfigError } from "@/lib/llm";
+import { LlmConfigError, LlmTimeoutError } from "@/lib/llm";
+import { LlmResponseError } from "@/lib/llm-adapter";
 import { IntroResumeContextError, loadIntroResumeContext } from "@/lib/intro-resume-context";
 import { ResumeNotFoundError } from "@/lib/resume-errors";
-import { validateGeneratedIntroVersions } from "@/lib/intro";
+import { INTRO_KINDS, validateGeneratedIntroVersions, type IntroKind } from "@/lib/intro";
 import { INTRO_SYSTEM_PROMPT, buildGenerateUserMessage } from "@/lib/intro-llm";
 import {
   checkSafeModelInput,
@@ -19,7 +20,7 @@ import {
 } from "@/lib/safe-llm";
 import { createSseResponse } from "@/lib/sse";
 import { errorMessage } from "@/lib/error-message";
-import { logServerError, requestIdFrom } from "@/lib/server-errors";
+import { logServerError, logServerEvent, requestIdFrom } from "@/lib/server-errors";
 import { createCursorPage, parsePaginationParams } from "@/lib/cursor-pagination";
 
 async function handleGet(req: Request) {
@@ -97,35 +98,69 @@ async function handlePost(req: Request) {
   const requestId = requestIdFrom(req);
 
   return createSseResponse(async (emitter) => {
-    let raw: string;
-    try {
-      raw = await safeChatStream(
+    const generate = async (kinds: IntroKind[], input: SafeMessage[]) => {
+      emitter.signal.throwIfAborted();
+      const raw = await safeChatStream(
         "question",
         { feature: LLM_FEATURES.introGenerate, entity: { type: "resume", id: resumeId } },
         INTRO_SYSTEM_PROMPT,
-        messages,
+        input,
         // 生成协议是 JSON；完整校验并保存前不把临时正文或点评作为页面结果。
         () => {},
         { signal: emitter.signal, requestId, requireJson: "strict" }
       );
+      try {
+        return validateGeneratedIntroVersions(JSON.parse(raw), kinds);
+      } catch {
+        return null;
+      }
+    };
+
+    let versions: ReturnType<typeof validateGeneratedIntroVersions>;
+    try {
+      try {
+        versions = await generate([...INTRO_KINDS], messages);
+      } catch (error) {
+        // 仅输出上限触发一次分版恢复，沿用用户配置的预算与原始材料。
+        // 截断内容全部丢弃；两版都通过校验后才进入下面的保存事务。
+        if (!(error instanceof LlmResponseError) || error.code !== "incomplete" ||
+            error.reason !== "output_limit" || emitter.signal.aborted) throw error;
+        logServerEvent("info", "sse.intros.split", { requestId, context: { errorCode: "output_limit" } });
+        versions = [];
+        for (const kind of INTRO_KINDS) {
+          const single = await generate([kind], [{
+            role: "user", parts: buildGenerateUserMessage({ jd, resumeContext, kinds: [kind] }),
+          }]);
+          if (!single) { versions = null; break; }
+          versions.push(...single);
+        }
+      }
     } catch (err) {
       if (err instanceof LlmConfigError) {
-        emitter.sendError(err.message);
+        emitter.sendError(err.message, { outcome: "not_saved" });
       } else {
-        const loggedId = logServerError("sse.intros.create", err, { requestId, status: 500 });
-        emitter.sendError(`服务端处理失败（${loggedId}）`);
+        const loggedId = logServerError("sse.intros.create", err, {
+          requestId, status: 500,
+          ...(err instanceof LlmResponseError ? { context: { errorCode: err.reason ?? err.code } } : {}),
+        });
+        const message = err instanceof LlmResponseError
+          ? err.reason === "output_limit"
+            ? "分版生成仍达到模型输出上限，请前往「设置」调大最大输出 token 后重试"
+            : err.reason === "context_limit"
+              ? "材料超出模型上下文上限，请精简材料后重试"
+              : err.reason === "interrupted"
+                ? "模型服务连接中断，未收到完整响应，请检查模型网关后重试"
+              : err.reason === "content_filter" || err.reason === "refusal"
+                ? "模型服务拒绝生成自我介绍，请核对材料或更换模型后重试"
+                : "模型服务未返回完整有效的自我介绍，请重试或检查模型设置"
+          : err instanceof LlmTimeoutError ? "生成自我介绍超时，请重试或检查模型设置" : "服务端处理失败";
+        emitter.sendError(`${message}（${loggedId}）；本次未保存自我介绍。`, { outcome: "not_saved" });
       }
       return;
     }
 
-    let versions: ReturnType<typeof validateGeneratedIntroVersions> = null;
-    try {
-      versions = validateGeneratedIntroVersions(JSON.parse(raw));
-    } catch {
-      // 格式错误与残缺版本统一报生成异常，不保存部分内容。
-    }
     if (!versions) {
-      emitter.sendError("AI 生成结果异常：版本、句子或点评不完整，或内容超限，请重试");
+      emitter.sendError("AI 生成结果异常：版本、句子或点评不完整，或内容超限，本次未保存，请重试", { outcome: "not_saved" });
       return;
     }
 

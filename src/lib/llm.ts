@@ -409,7 +409,7 @@ async function readSseContent(
   } finally {
     await reader.cancel().catch(() => {});
   }
-  throw new LlmResponseError("LLM 流式响应意外中断，未收到完成事件", "protocol");
+  throw new LlmResponseError("LLM 流式响应意外中断，未收到完成事件", "protocol", "interrupted");
 }
 
 /** 调用 LLM 接口（SSE 流式传输，超时自动中断，失败自动重试），返回完整回复文本 */
@@ -614,11 +614,12 @@ async function runChatStream(
         logLlm({ status: "fallback", errorCode: "stream_unsupported", attempt });
         continue;
       }
-      // 仅网络、超时、限流、服务故障和 JSON 校验失败可重试；协议错误重复调用不会改变结果。
+      // 缺少完成事件可在未向客户端发送内容时重试；其他协议错误重试不会改变结果。
       const retryable =
         !tokenSent && !signal?.aborted && (
           err instanceof LlmTimeoutError || err instanceof TypeError ||
           err instanceof LlmInvalidJsonError ||
+          (err instanceof LlmResponseError && err.reason === "interrupted") ||
           (err instanceof LlmHttpError && RETRYABLE_STATUS.has(err.status))
         );
       if (!retryable || attempt >= (opts?.connectionTest ? 0 : LLM_MAX_RETRIES)) {

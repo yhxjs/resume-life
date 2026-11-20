@@ -24,7 +24,7 @@ function finiteOrNull(value: unknown): number | null {
 
 /** 本地固定分类；不携带提供方的自由文本、拒绝正文或错误详情。 */
 export type LlmResponseFailureReason = "output_limit" | "content_filter" | "cancelled" | "pending"
-  | "paused" | "context_limit" | "refusal" | "tool_call";
+  | "paused" | "context_limit" | "refusal" | "tool_call" | "interrupted";
 
 export class LlmResponseError extends Error {
   /** 完整调用层填入已观测的累计用量，可能只覆盖部分尝试；直接解析时为 null。 */

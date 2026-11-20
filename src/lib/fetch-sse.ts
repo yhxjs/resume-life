@@ -3,7 +3,7 @@ import { HttpError } from "./fetcher";
 
 /** 已收到格式完整的服务端失败事件；不把断流或完成回调失败冒充服务端拒绝。 */
 export class SseServerError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly outcome: "not_saved" | null = null) {
     super(message);
     this.name = "SseServerError";
   }
@@ -93,7 +93,7 @@ export async function fetchSse<TDone = unknown>(
       } else if (event === "error") {
         const data = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
         if (typeof data.error !== "string" || !data.error.trim()) throw new Error("流式响应错误事件格式无效");
-        throw new SseServerError(data.error);
+        throw new SseServerError(data.error, "outcome" in data && data.outcome === "not_saved" ? "not_saved" : null);
       }
       return false;
     };

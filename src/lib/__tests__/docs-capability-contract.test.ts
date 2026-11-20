@@ -19,6 +19,7 @@ const apiDoc = read("docs", "API.md");
 const troubleshooting = read("docs", "TROUBLESHOOTING.md");
 
 const tools = [
+  { requirement: "上场计划", page: "上场计划" },
   { requirement: "JD 考点画像", page: "JD 考点画像" },
   { requirement: "面试黑话与暗号解码器", page: "面试黑话与暗号解码器" },
   { requirement: "简历排雷与防御演练", page: "简历排雷与防御演练" },

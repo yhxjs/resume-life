@@ -141,9 +141,10 @@ describe("简历创建的持久请求回执", () => {
     expect(records[0].tables).not.toContain("resume_creation_requests");
     expect(records.some(record => record.table === "resume_creation_requests")).toBe(false);
     records[0].dbVersion = version;
-    records[0].tables = records[0].tables.filter((table: string) => table !== "application_interview_recap_contexts" && table !== "project_material_table_provenance");
+    records[0].tables = records[0].tables.filter((table: string) => table !== "application_interview_recap_contexts" && table !== "project_material_table_provenance" && table !== "application_preparation_plans");
     delete records.at(-1).stats.application_interview_recap_contexts;
     delete records.at(-1).stats.project_material_table_provenance;
+    delete records.at(-1).stats.application_preparation_plans;
     const { stageBackupRecordStream } = await import("../backup-staging");
     const bytes = Buffer.from(records.map(record => JSON.stringify(record)).join("\n") + "\n");
     const staged = await stageBackupRecordStream((async function* () { yield bytes; })(), db);

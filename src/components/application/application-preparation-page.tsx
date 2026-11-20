@@ -47,6 +47,7 @@ export function ApplicationPreparationPage({ id }: { id: string }) {
       <button className={btnGhost} onClick={() => setEditing(true)} disabled={mutationDisabled}>编辑投递</button>
       <ResumeVersionBadge {...app} />
       <button className={btnGhost} onClick={() => setVersions(true)}>查看投递版本</button>
+      <Link href={`/tools/preparation?applicationId=${app.id}`} className={btnGhost}>上场计划 · 准备清单</Link>
       {canGenerate && <Link href={mockHref} className={btnPrimary}>发起模拟面试 →</Link>}
     </div>
     {!canGenerate && <p className="rounded-lg bg-accent-wash p-3 text-sm text-accent">{!app.jd.trim() ? "请先补充岗位 JD" : "请先关联已发布的简历版本"}，即可使用本次投递资料生成准备内容。<button className="ml-2 rounded underline focus-visible:outline-2 focus-visible:outline-primary" disabled={mutationDisabled} onClick={() => setEditing(true)}>去补充</button></p>}

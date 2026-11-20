@@ -32,6 +32,7 @@ afterEach(() => {
   fs.rmSync(directory, { recursive: true, force: true });
 });
 function downgrade(db: DatabaseSync, version: number) {
+  db.exec("DROP TABLE application_preparation_plans");
   db.exec(`DROP TABLE ${table}`);
   if (version < 5) db.exec("DROP TABLE project_material_table_provenance");
   if (version < 4) db.exec("DROP TABLE application_interview_recap_contexts");
@@ -47,7 +48,7 @@ it.each([1, 2, 3, 4, 5])("v%s migrates real SQLite schema, filters new indexes, 
   const resumes = database.prepare("SELECT * FROM resumes").all();
   expect(() => validateDatabaseSchema(database, version)).not.toThrow();
   initializeDatabase(database);
-  expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+  expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: CURRENT_DB_VERSION });
   expect(database.prepare("SELECT * FROM auth_sessions").all()).toEqual(sessions);
   expect(database.prepare("SELECT * FROM resumes").all()).toEqual(resumes);
   expect(database.prepare(`SELECT * FROM ${table}`).all()).toEqual([]);

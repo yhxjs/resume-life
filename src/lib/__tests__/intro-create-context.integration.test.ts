@@ -82,7 +82,111 @@ async function pause(extra: Record<string, unknown> = {}) {
   return { text, release: () => completion.resolve(reply) };
 }
 
+async function outputLimit() {
+  const { LlmResponseError } = await import("../llm-adapter");
+  return new LlmResponseError("SYNTHETIC_PRIVATE_MARKER", "incomplete", "output_limit");
+}
+
+const singleReply = (kind: string) => JSON.stringify({ versions: [{ kind, sentences }] });
+
+describe("自我介绍输出上限恢复", () => {
+  it("合并生成被截断后按原材料分版生成，两版齐全才一次性存档和关联", async () => {
+    const before = state();
+    model.stream.mockRejectedValueOnce(await outputLimit());
+    for (const kind of ["30s", "2min"]) {
+      model.stream.mockImplementationOnce(async () => {
+        expect(state()).toEqual(before);
+        return singleReply(kind);
+      });
+    }
+    const response = await create({ application_id: applicationId });
+    const text = await response.text();
+    expect(text).toContain("event: done");
+    expect(text).not.toMatch(/event: (error|delta)/);
+    expect(model.stream).toHaveBeenCalledTimes(3);
+    const calls = model.stream.mock.calls;
+    expect(calls[1]![1][1].content).toContain("请只生成「30 秒版」");
+    expect(calls[2]![1][1].content).toContain("请只生成「2 分钟版」");
+    for (const [, messages, , options] of calls) {
+      expect(messages[1].content).toContain(wrapUntrustedData("job_description", "接口校验岗位"));
+      expect(messages[1].content).toContain("原发布经历");
+      expect(options).toMatchObject({ requireJson: "strict", requestId: calls[0]![3].requestId });
+      expect(options.maxTokens).toBeUndefined();
+    }
+    expect(state().intros).toHaveLength(before.intros!.length + 1);
+    expect(state().intro_versions).toHaveLength(before.intro_versions!.length + 2);
+    expect(state().application_preparation_resources).toHaveLength(1);
+  });
+
+  it.each(["30s", "2min"])("分版 %s 仍触顶时不循环重试、不落半份资料，并提示设置", async kind => {
+    const before = state();
+    model.stream.mockRejectedValueOnce(await outputLimit());
+    if (kind === "2min") model.stream.mockResolvedValueOnce(singleReply("30s"));
+    model.stream.mockRejectedValueOnce(await outputLimit());
+    const text = await (await create({ application_id: applicationId })).text();
+    expect(text).toContain("分版生成仍达到模型输出上限");
+    expect(text).toContain("设置");
+    expect(text).toContain('"outcome":"not_saved"');
+    expect(text).not.toContain("SYNTHETIC_PRIVATE_MARKER");
+    expect(text).not.toMatch(/event: (done|delta)/);
+    expect(model.stream).toHaveBeenCalledTimes(kind === "30s" ? 2 : 3);
+    expect(state()).toEqual(before);
+    expect(vi.mocked(console.error).mock.calls.flat().join(" ")).toContain('"errorCode":"output_limit"');
+  });
+
+  it.each(["content_filter", "refusal", "context_limit", null] as const)("非输出上限的未完成原因 %s 不触发分版重试", async reason => {
+    const before = state();
+    const { LlmResponseError } = await import("../llm-adapter");
+    model.stream.mockRejectedValueOnce(new LlmResponseError("SYNTHETIC_PRIVATE_MARKER", "incomplete", reason));
+    const text = await (await create()).text();
+    expect(text).toContain('"outcome":"not_saved"');
+    expect(text).not.toContain("SYNTHETIC_PRIVATE_MARKER");
+    expect(text).not.toContain("分版生成");
+    expect(model.stream).toHaveBeenCalledOnce();
+    expect(state()).toEqual(before);
+  });
+
+  it.each(["wrong-kind", "incomplete-json"])("分版返回 %s 时拒绝整组，也不继续请求长版", async mode => {
+    const before = state();
+    model.stream.mockRejectedValueOnce(await outputLimit())
+      .mockResolvedValueOnce(mode === "wrong-kind" ? singleReply("2min") : '{"versions":');
+    const text = await (await create()).text();
+    expect(text).toContain("AI 生成结果异常");
+    expect(text).toContain('"outcome":"not_saved"');
+    expect(model.stream).toHaveBeenCalledTimes(2);
+    expect(state()).toEqual(before);
+  });
+
+  it("分版期间岗位材料改变时，完整结果仍不能保存到旧岗位上下文", async () => {
+    model.stream.mockRejectedValueOnce(await outputLimit()).mockResolvedValueOnce(singleReply("30s"));
+    let afterChange: ReturnType<typeof state>;
+    model.stream.mockImplementationOnce(async () => {
+      afterChange = writerChange(writer => writer.prepare("UPDATE applications SET jd='新岗位要求' WHERE id=?").run(applicationId));
+      return singleReply("2min");
+    });
+    const text = await (await create({ application_id: applicationId })).text();
+    expect(text).toContain("投递 JD 已变更");
+    expect(text).not.toContain("event: done");
+    expect(text).not.toContain("not_saved");
+    expect(state()).toEqual(afterChange!);
+  });
+});
+
 describe("自我介绍创建的材料提交边界", () => {
+  it("模型流中断时给出可操作提示并保持未保存状态", async () => {
+    const before = state();
+    const { LlmResponseError } = await import("../llm-adapter");
+    model.stream.mockRejectedValueOnce(new LlmResponseError("SYNTHETIC_PRIVATE_MARKER", "protocol", "interrupted"));
+    const text = await (await create()).text();
+    expect(text).toContain("模型服务连接中断");
+    expect(text).toContain('"outcome":"not_saved"');
+    expect(text).not.toContain("SYNTHETIC_PRIVATE_MARKER");
+    expect(text).not.toMatch(/event: (done|delta)/);
+    expect(model.stream).toHaveBeenCalledOnce();
+    expect(state()).toEqual(before);
+    expect(vi.mocked(console.error).mock.calls.flat().join(" ")).toContain('"errorCode":"interrupted"');
+  });
+
   it("创建使用有效发布版时保留损坏草稿，仍可正常生成两版", async () => {
     db.prepare("UPDATE resume_modules SET content=? WHERE resume_id=1").run("{broken-draft");
     model.stream.mockResolvedValue(reply);
