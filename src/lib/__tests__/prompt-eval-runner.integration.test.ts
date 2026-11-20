@@ -502,7 +502,9 @@ afterEach(async () => {
   }
 });
 
-describe("显式提示词评估入口（本地合成服务，无真实模型）", () => {
+// 多个用例连续启动 snapshot/live 子进程并解析 DOCX；Linux 全量并行时也需要启动余量。
+// run() 仍对每个子进程执行 20 秒硬限制，不调整普通单元测试的默认预算。
+describe("显式提示词评估入口（本地合成服务，无真实模型）", { timeout: 30_000 }, () => {
   it("默认快照覆盖外部 live 标志，零请求、零数据库，保留注入材料转义", async () => {
     const local = await service();
     const result = await run([], { PROMPT_EVAL_LIVE: "1", PROMPT_EVAL_SUITE: "project", PROMPT_EVAL_BASE_URL: local.url, PROMPT_EVAL_API_KEY: syntheticKey, PROMPT_EVAL_MODEL: "synthetic-model" });
