@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import React from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StarPolishDialog } from "../star-polish-dialog";
 import { jsonFetch } from "@/lib/fetcher";
 import { normalizePolishResult } from "@/lib/polish";
@@ -78,8 +78,18 @@ describe("StarPolishDialog STAR 润色与量化扩写", () => {
         expect(screen.getByTestId("source-comparison-0").textContent).not.toContain("原始经历乙");
       }
       fireEvent.click(screen.getByRole("button", { name: "智能精简合并" }));
+      if (shape === "仅整段") {
+        expect(jsonFetch).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId("condense-error").textContent).toContain("当前草稿已保留");
+        for (let index = 0; index < texts.length; index++) {
+          fireEvent.click(within(screen.getByTestId(`source-comparison-${index}`))
+            .getByRole("button", { name: `点击关联段落 ${index + 1}` }));
+        }
+        fireEvent.click(screen.getByRole("button", { name: "智能精简合并" }));
+      }
       const body = JSON.parse(String(vi.mocked(jsonFetch).mock.calls[1]![1]?.body));
       expect(body.sourceParagraphs).toEqual(texts);
+      expect(body.originalSourceParagraphs).toEqual(["原始经历甲", "原始经历乙"]);
       expect(body.text).toBe(texts.map((text) => `• ${text}`).join("\n"));
       await waitFor(() => expect(screen.queryByLabelText(`${label}第 2 项`)).toBeNull());
       expect(screen.getByLabelText(`${label}第 1 项`).textContent).toBe(condensed);
@@ -267,6 +277,9 @@ describe("StarPolishDialog STAR 润色与量化扩写", () => {
       await waitFor(() => expect(screen.queryByLabelText("勾选采纳第 2 项")).toBeNull());
       expect(body.text).toBe(expected.map((text) => `• ${text}`).join("\n"));
       expect(body.sourceParagraphs).toEqual(selection === "单项" ? undefined : expected);
+      expect(body.originalSourceParagraphs).toEqual(
+        selection === "单项" ? ["原始经历甲"] : ["原始经历甲", "原始经历乙"],
+      );
       expect(body.mode).toBe("condense");
       fireEvent.click(screen.getByRole("button", { name: "展开第 1 项来源原文对比" }));
       const comparison = screen.getByTestId("source-comparison-0");
@@ -578,6 +591,8 @@ describe("StarPolishDialog STAR 润色与量化扩写", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "智能精简合并" }));
     await waitFor(() => expect(screen.getByLabelText("经历条目第 1 项").textContent).toBe("精简后的条目"));
+    expect(JSON.parse(String(vi.mocked(jsonFetch).mock.calls[2]![1]?.body)).originalSourceParagraphs)
+      .toEqual(["旧原文乙"]);
     fireEvent.click(screen.getByRole("button", { name: "展开第 1 项来源原文对比" }));
     expect(screen.getByTestId("source-comparison-0").textContent).toContain("旧原文乙");
     expect(screen.getByTestId("source-comparison-0").textContent).not.toContain("新原文");
@@ -709,6 +724,11 @@ describe("StarPolishDialog STAR 润色与量化扩写", () => {
       await waitFor(() => expect(jsonFetch).toHaveBeenCalledTimes(3));
       await waitFor(() => expect(screen.queryByText("AI 深度精简合并中…")).toBeNull());
     }
+    for (const call of vi.mocked(jsonFetch).mock.calls.slice(1)) {
+      expect(JSON.parse(String(call[1]?.body)).originalSourceParagraphs).toEqual(
+        scenario === "合并多个来源" ? ["原始经历甲", "原始经历乙"] : ["原始经历乙"],
+      );
+    }
     fireEvent.click(screen.getByRole("button", { name: "展开所有原文对比" }));
     const comparison = screen.getByTestId("source-comparison-0");
     expect(comparison.textContent).toContain("原始经历乙");
@@ -716,6 +736,80 @@ describe("StarPolishDialog STAR 润色与量化扩写", () => {
       expect(comparison.textContent).toContain("原始经历甲");
       expect(JSON.parse(String(vi.mocked(jsonFetch).mock.calls[1]![1]?.body)).sourceParagraphs).toEqual(["生成经历甲", "生成经历乙"]);
     } else expect(comparison.textContent).not.toContain("原始经历甲");
+  });
+
+  it.each(["仅未关联项", "混合已关联项"])("精简%s时保留草稿并等待恢复来源关联", async selection => {
+    vi.mocked(jsonFetch).mockResolvedValueOnce({ result: {
+      ...mockPolishResult,
+      draftItems: ["来源待确认的经历", "关联第二段的经历"],
+      draftItemDetails: [
+        { text: "来源待确认的经历", sourceIndices: [] },
+        { text: "关联第二段的经历", sourceIndices: [2] },
+      ],
+    } } as never);
+    render(<StarPolishDialog resumeId="1" moduleType="work" currentText="" currentItems={["原始经历甲", "原始经历乙"]} onApply={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "✨ STAR 润色与量化" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始 AI 智能润色" }));
+    await screen.findByLabelText("勾选采纳第 2 项");
+    if (selection === "仅未关联项") fireEvent.click(screen.getByLabelText("勾选采纳第 2 项"));
+    fireEvent.click(screen.getByRole("button", { name: "智能精简合并" }));
+
+    expect(jsonFetch).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("condense-error").textContent).toContain("当前草稿已保留");
+    expect(screen.getByLabelText("经历条目第 1 项").textContent).toBe("来源待确认的经历");
+    expect(screen.getByLabelText("经历条目第 2 项").textContent).toBe("关联第二段的经历");
+    fireEvent.click(within(screen.getByTestId("source-comparison-0")).getByRole("button", { name: "点击关联段落 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "智能精简合并" }));
+    await waitFor(() => expect(jsonFetch).toHaveBeenCalledTimes(2));
+    const body = JSON.parse(String(vi.mocked(jsonFetch).mock.calls[1]![1]?.body));
+    expect(body.text).toContain("来源待确认的经历");
+    expect(body.originalSourceParagraphs).toEqual(selection === "仅未关联项" ? ["原始经历甲"] : ["原始经历甲", "原始经历乙"]);
+    expect(screen.queryByTestId("condense-error")).toBeNull();
+  });
+
+  it("整段仅改标点后精简保留草稿，重新关联后带原始事实继续", async () => {
+    const original = "协助每周盘点并记录差异。";
+    const edited = "协助每周盘点，记录差异。";
+    vi.mocked(jsonFetch).mockResolvedValue({ result: {
+      ...mockPolishResult, draft: `• ${original}`, draftItems: [original],
+      draftItemDetails: [{ text: original, sourceIndices: [1] }],
+    } });
+    render(<StarPolishDialog resumeId="1" moduleType="work" currentText={original} onApply={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "✨ STAR 润色与量化" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始 AI 智能润色" }));
+    await screen.findByLabelText("经历条目第 1 项");
+    fireEvent.click(screen.getByRole("button", { name: "📄 整段编辑" }));
+    const editor = screen.getByLabelText("推荐排版草稿");
+    editor.textContent = `• ${edited}`;
+    fireEvent.input(editor);
+    fireEvent.click(screen.getByRole("button", { name: "• 多项列表（推荐）" }));
+    fireEvent.click(screen.getByRole("button", { name: "智能精简合并" }));
+    expect(jsonFetch).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("经历条目第 1 项").textContent).toBe(edited);
+    expect(screen.getByTestId("condense-error").textContent).toContain("关联后再精简");
+    fireEvent.click(screen.getByRole("button", { name: "点击关联段落 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "智能精简合并" }));
+    await waitFor(() => expect(jsonFetch).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(vi.mocked(jsonFetch).mock.calls[1]![1]?.body))).toMatchObject({
+      text: `• ${edited}`, originalSourceParagraphs: [original], mode: "condense",
+    });
+    await waitFor(() => expect(screen.getByLabelText("经历条目第 1 项").textContent).toBe(original));
+  });
+
+  it("真正没有原始资料时仍可精简待补框架", async () => {
+    const text = "待补充";
+    vi.mocked(jsonFetch).mockResolvedValue({ result: {
+      star: null, quantifiedTips: [], draft: `• ${text}`, draftItems: [text],
+      draftItemDetails: [{ text, sourceIndices: [] }], highlights: [],
+    } });
+    render(<StarPolishDialog resumeId="1" moduleType="work" currentText="" onApply={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "✨ STAR 润色与量化" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始 AI 智能润色" }));
+    await screen.findByLabelText("经历条目第 1 项");
+    fireEvent.click(screen.getByRole("button", { name: "智能精简合并" }));
+    await waitFor(() => expect(jsonFetch).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(vi.mocked(jsonFetch).mock.calls[1]![1]?.body)).originalSourceParagraphs).toEqual([]);
+    expect(screen.queryByTestId("condense-error")).toBeNull();
   });
 
   it.each(["Escape", "背景", "关闭", "取消"])("%s 关闭重开时，旧响应不能回填或被采纳", async (close) => {
@@ -1275,7 +1369,7 @@ describe("StarPolishDialog STAR 润色与量化扩写", () => {
     fireEvent.click(screen.getByRole("button", { name: "✨ STAR 润色与量化" }));
     fireEvent.click(
       screen.getByRole("button", {
-        name: "📊 深度量化扩写（挖掘度量指标与业务收益）",
+        name: "📊 量化建议（核对真实记录与统计口径）",
       })
     );
     fireEvent.click(screen.getByRole("button", { name: "开始 AI 智能润色" }));

@@ -366,8 +366,8 @@ describe("MetricBeautifyDialog AI 美化交互", () => {
   it("切换润色模式后重新生成，POST 请求体携带 quantify 模式", async () => {
     openDialog();
 
-    fireEvent.click(screen.getByRole("button", { name: /深度量化扩写/ }));
-    const quantify = screen.getByRole("button", { name: /深度量化扩写/ });
+    fireEvent.click(screen.getByRole("button", { name: /量化建议/ }));
+    const quantify = screen.getByRole("button", { name: /量化建议/ });
     expect(quantify.getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "开始美化" }));

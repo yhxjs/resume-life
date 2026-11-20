@@ -273,17 +273,30 @@ export function StarPolishDialog({
     if (requestRef.current.controller || targetChanged || items.length === 0) return;
     // 本轮输入的位置与最初原文的位置不同，固定两者的映射供回包转换。
     const candidates = items.map((text, index) => ({
+      index,
       text: stripRichText(text).trim(),
-      sourceIndices: itemSourceIndices[index] ?? [],
+      sourceIndices: (itemSourceIndices[index] ?? []).filter((sourceIndex) => sourceIndex >= 0 && sourceIndex < activeSources.length),
       selected: selectedItems.has(index),
     })).filter((item) => item.text);
     const selected = candidates.filter((item) => item.selected);
     const source = selected.length > 0 ? selected : candidates;
     if (source.length === 0) return;
 
+    // 有原始资料但关联未知，不等于没有事实依据；先保留草稿供用户恢复关联。
+    const unlinked = source.filter((item) => item.sourceIndices.length === 0);
+    if (activeSources.length > 0 && unlinked.length > 0) {
+      setCondenseError("部分条目尚未关联原始资料。请在来源原文对比中关联后再精简；当前草稿已保留。");
+      setExpandedSources(new Set(unlinked.map((item) => item.index)));
+      return;
+    }
+
     const rawToCondense = source
       .map(({ text }) => (text.startsWith("•") || text.startsWith("·") ? text : `• ${text}`))
       .join("\n");
+    const selectedSourceIndices = new Set(source
+      .flatMap((item) => item.sourceIndices)
+      .filter((index) => index >= 0 && index < activeSources.length));
+    const originalSourceParagraphs = activeSources.filter((_, index) => selectedSourceIndices.has(index));
 
     const version = ++requestRef.current.version;
     const controller = new AbortController();
@@ -300,6 +313,7 @@ export function StarPolishDialog({
           // 各条目已转成纯文本，不能再次解析其中的泛型、标签字面量或实体文本。
           text: rawToCondense,
           sourceParagraphs: source.length > 1 ? source.map((item) => item.text) : undefined,
+          originalSourceParagraphs,
           moduleType,
           mode: "condense",
           context,
@@ -567,10 +581,10 @@ export function StarPolishDialog({
             mode === "condense"
               ? "AI 深度精简合并中…"
               : mode === "quantify"
-                ? "AI 经历量化扩写分析中…"
+                ? "AI 量化建议分析中…"
                 : "AI STAR 原则深度润色中…"
           }
-          description="正在基于真实经历深入挖掘情境、行动与量化成效，请稍候…"
+          description="正在整理已有事实和需要核实的信息，请稍候…"
           onCancel={cancelRequest}
           cancelText="取消生成"
         />
@@ -581,7 +595,7 @@ export function StarPolishDialog({
             <h2 className="text-base sm:text-lg font-semibold tracking-tight text-ink">
               {moduleType === "summary"
                 ? "✨ 自我评价智能润色"
-                : "✨ STAR 原则润色与经历量化扩写"}
+                : "✨ 经历润色与量化建议"}
             </h2>
             {contextDesc && (
               <p className="mt-0.5 text-xs text-muted">{contextDesc}</p>
@@ -624,7 +638,7 @@ export function StarPolishDialog({
                   }`}
                   onClick={() => setMode("quantify")}
                 >
-                  📊 深度量化扩写（挖掘度量指标与业务收益）
+                  📊 量化建议（核对真实记录与统计口径）
                 </button>
                 <button
                   type="button"
@@ -649,8 +663,9 @@ export function StarPolishDialog({
                 className={`${inputCls} mt-1`}
                 value={targetRole}
                 onChange={(e) => setTargetRole(e.target.value)}
-                placeholder="如：前端架构师 / 资深后端"
+                placeholder="如：初级前端 / 英国数据分析，英语简历 / 香港客服，繁体中文"
               />
+              <span className="mt-1 block text-xs text-muted">可补充求职地区、级别和正文语言；未指定时沿用原文。</span>
             </label>
 
             {/* 描述与成果管理区（与简介编辑页一致） */}
@@ -993,6 +1008,8 @@ export function StarPolishDialog({
                     ），请按可核实的记录填写；没有数据时保留准确的定性描述与未知项，不编造数字。
                   </div>
                 )}
+
+                <p className="text-xs text-muted">二次精简会对照本轮原始资料。新增或更正事实，请先修改上方待润色内容，再重新生成；来源关联只辅助核对。</p>
 
                 {viewMode === "items" ? (
                   <div className="space-y-3">

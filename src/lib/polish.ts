@@ -1,6 +1,7 @@
 import { stripLeadingListMarker } from "@/lib/rich-text";
-import { METRIC_EVIDENCE_RULES } from "@/lib/prompt-guidelines";
+import { METRIC_EVIDENCE_RULES, RESUME_JOB_SEARCH_RULES, resolveResumeExampleLanguage, type ResumeExampleLanguage } from "@/lib/prompt-guidelines";
 import { hasQuestionContent } from "@/lib/question-normalization";
+import { isResumePlaceholder } from "@/lib/resume-placeholders";
 import type { PromptPart, SafeMessage } from "./safe-llm";
 
 export type PolishMode = "star" | "quantify" | "summary" | "condense";
@@ -73,7 +74,14 @@ export const POLISH_OUTPUT_LIMITS = {
   maxHighlights: 5,
 } as const;
 
+function isNoSourcePlaceholder(value: string): boolean {
+  const lines = normalizeNewlines(value).split("\n").map(line => stripLeadingListMarker(line.trim())).filter(Boolean);
+  return lines.length === 1 && isResumePlaceholder(lines[0]!);
+}
+
 const SYSTEM_PROMPT = `你是简历编辑。根据本次指定的模块与模式优化表达，保留原文事实和个人职责，输出单个 JSON。
+
+${RESUME_JOB_SEARCH_RULES}
 
 事实与编辑规则：
 - 目标岗位只用于选择强调重点，不能变成候选人已具备的能力；不新增技术栈、选型理由、成果，不把“参与”升级为“主导”。
@@ -81,6 +89,9 @@ const SYSTEM_PROMPT = `你是简历编辑。根据本次指定的模块与模式
 - 严禁输出抬头标题：draft 和 draftItems 不含公司/职位/项目名称及日期的标题行；具体正文可保留必要的业务名词。
 - 智能精简合并与动态合理条目数：聚合同类项，同一任务的行动和结果放在一起，独立贡献分别保留；删掉重复与无信息量表述，不按固定数量扩写，也不机械删除有实际价值的协作、文档或排障工作。
 - 来源段落编号只用于定位原文，不表示相邻段落属于同一项目、版本或任务。合并行动与结果前确认原文有明确对应关系，不把另一任务的技术、指标或团队结果接到个人行动上；自我评价可跨经历归纳，但不拼成一段不存在的经历，不合计口径不同或重复出现的指标。归属或关系不明时分开保留，不猜造因果关系。
+- STAR 用原文事实片段作拆解，保留每个动词、对象、工具的原有对应关系；未说明工具的行动不因同段另一行动提到工具而补上工具，不猜方法或因果。STAR extracts existing clauses: an action without a stated tool stays without a tool, even when another action names one. action 保留指导、协助等限定；highlights 保留基础、接触等技能程度，不把明确未使用的技能列为能力。
+- 正文和 STAR 都逐项保留原文的事实关系。分别陈述的语言能力、工具接触与工作行动仍是独立事实，不能合并成原文未说明的方法；例如“记录电话预约；会用广东话服务客人”应分别保留，不能改成“用广东话记录电话预约”。为缩短而无法保留对应关系时，保留原句。
+- “未统计/未测量”与“测量后没有变化/未改善”不同，不能将前者写成后者或反过来。否定范围或测量状态有歧义时保留原句，不替用户认定结果；只有允许的核实说明字段可提出补问，不编造测量过程或零效果结论。
 - draftItems 每条都可能被单独勾选采纳，必要的个人/团队分工、所属任务、版本、测试环境、计划中或未上线等限定须在本条说清，不依赖其他条目、star 或 quantifiedTips 补足。同一任务的行动与责任限制、发布状态优先合成一条，不把正面行动和否定限定拆为两条可分别采纳的内容；确需拆开独立任务时，每条携带适用于本条的限定。材料支持的维护、协作、验证和未达目标也可如实写入，不将行动本身改成已取得的收益；精简时先删重复背景，不删这些限定。
 - 仅在 star/quantify 模式且相关行动已有依据而指标缺失时，可使用 [请填入真实数据：具体指标与统计口径]；不附虚构示例数值，不暗示未证实的提升。quantifiedTips 推荐核实方式，不代填数据。
 ${METRIC_EVIDENCE_RULES}
@@ -89,7 +100,7 @@ ${METRIC_EVIDENCE_RULES}
 - star：整理背景、目标、行动、结果；star 中没有依据的字段为 ""，不强补 STAR。
 - quantify：围绕已有行动提出至多 3 个最有价值的度量建议，说明查什么、怎么算。
 - condense：以删重、合并和缩短为主，保留原有事实、数据与有效限定；不新增量化占位符，quantifiedTips 为 []。
-- summary（自我评价真实场景撰写逻辑）：只归纳原文支持的优势，通常 1-4 条。拒绝假大空套话，不强求覆盖所有能力维度。不强求新增数字；原文已有且与优势相关的年限、范围或指标保留原值、单位、口径与限定，不因是自我评价就删除，不自行累加年限或扩大数量。严禁输出 "[请填入真实数据...]" 这类量化占位符；star 为 null，quantifiedTips 为 []。
+- summary（经历归纳；自我评价真实场景撰写逻辑）：工作/项目模块归纳已有经历事实，自我评价模块才提炼有依据的优势，通常 1-4 条。拒绝假大空套话，不强求覆盖所有能力维度。不强求新增数字；原文已有且相关的年限、范围或指标保留原值、单位、口径与限定，不因归纳就删除，不自行累加年限或扩大数量。原文明确的未使用技能、未统计结果属于事实限定，不是应删除的能力短板，随相关行动保留，不改成未知。严禁输出 "[请填入真实数据...]" 这类量化占位符；star 为 null，quantifiedTips 为 []。
 
 输出约束：
 - draftItems 一律为对象数组，是正文条目的权威来源。每条 text 不带前缀符号，不使用 HTML 排版；draft 按相同条目及顺序生成，每项增加 • 前缀与换行，不额外写分析。若两者不一致，以 draftItems 为准并在输出前修正 draft。
@@ -97,17 +108,18 @@ ${METRIC_EVIDENCE_RULES}
 - 生成硬上限：draft 最多 ${POLISH_OUTPUT_LIMITS.draft} 字；draftItems 最多 ${POLISH_OUTPUT_LIMITS.maxDraftItems} 条、每条最多 ${POLISH_OUTPUT_LIMITS.draftItem} 字；star 各字段最多 ${POLISH_OUTPUT_LIMITS.starField} 字；quantifiedTips 最多 ${POLISH_OUTPUT_LIMITS.maxQuantifiedTips} 条，dimension/metric/tip/example 分别最多 ${POLISH_OUTPUT_LIMITS.dimension}/${POLISH_OUTPUT_LIMITS.metric}/${POLISH_OUTPUT_LIMITS.tip}/${POLISH_OUTPUT_LIMITS.example} 字；highlights 最多 ${POLISH_OUTPUT_LIMITS.maxHighlights} 条、每条最多 ${POLISH_OUTPUT_LIMITS.highlight} 字。超限、错误类型或残缺条目会整份拒绝，不截断、不丢条目后继续展示。
 - sourceIndices 是对应来源段落的 1-based 整数数组，去重升序，不能越界；有原文但未分段时为 [1]。没有原文时仅给一条明确“待补充”的填写框架，sourceIndices 与 highlights 为 []，不得凭名称补造经历。
 - 无法可靠确认某条内容的来源时，sourceIndices 也用 []，不能按条目位置或关联全部段落来猜测。
-- highlights 只列原文支持的关键词，至多 5 个。只输出示例中的字段，JSON 字符串换行使用标准转义，不附代码围栏。`;
+- highlights 只列原文支持的关键词，至多 5 个。技能词须连同原文的程度作为完整短语，例如“接触过 Excel 排班”“仅练习过基础 SQL 查询”，不能缩为“Excel 排班”“SQL”；翻译也保留程度，没有可靠的简短表达就不列该词。输出前逐项核对正文、STAR 和 highlights 的动作、方法与程度，不能靠其他字段补足限定。只输出示例中的字段，JSON 字符串换行使用标准转义，不附代码围栏。`;
 
 export function buildPolishPrompt(args: {
   text: string;
   sourceParagraphs?: string[];
+  originalSourceParagraphs?: string[];
   moduleType: "work" | "projects" | "summary";
   mode: PolishMode;
   context?: PolishContext;
   targetRole?: string;
-}): { system: string; user: string } {
-  const { text, sourceParagraphs, moduleType, mode, context, targetRole } = args;
+}, exampleLanguage: ResumeExampleLanguage | undefined = resolveResumeExampleLanguage(args.targetRole)): { system: string; user: string } {
+  const { text, sourceParagraphs, originalSourceParagraphs, moduleType, mode, context, targetRole } = args;
 
   const ctxParts: string[] = [];
   if (context?.company) ctxParts.push(`所属公司/组织：${context.company}`);
@@ -116,13 +128,16 @@ export function buildPolishPrompt(args: {
   if (context?.role) ctxParts.push(`担任角色：${context.role}`);
   if (targetRole?.trim()) ctxParts.push(`求职目标岗位/偏向：${targetRole.trim()}`);
 
-  const isSummary = moduleType === "summary" || mode === "summary";
+  const isSummaryModule = moduleType === "summary";
+  const isSummary = isSummaryModule || mode === "summary";
 
   // 自我评价仍沿用专属字段约定，但明确请求的二次精简优先于模块默认模式。
   const modeInstructions = isSummary && mode !== "condense"
-    ? "【润色模式】：summary。提炼有证据的个人优势，不强求新增数字，保留原文已有且相关的数据与限定，不新增量化占位符。一项工作及其职责限制写在同一条；不要另写能力短板或成长建议，也不把未负责改成缺乏经验。star 设为 null，quantifiedTips 设为 []。"
+    ? isSummaryModule
+      ? "【润色模式】：summary。提炼有证据的个人优势，不强求新增数字，保留原文已有且相关的数据与限定，不新增量化占位符。一项工作及其职责限制写在同一条；原文明确的技能程度、未使用技能、未统计结果作为事实限定保留，不另写成长建议，也不把未负责改成缺乏经验。star 设为 null，quantifiedTips 设为 []。"
+      : "【润色模式】：summary。归纳本模块已有的经历事实和相关行动，不把经历改成无背景的能力评价，不强求新增数字或覆盖所有技能。保留兼职、指导、协助等背景；原文明确的接触程度、未使用技能、未统计结果及分工以短语随相关行动保留，不将它们视为应删除的短板。star 设为 null，quantifiedTips 设为 []。"
     : mode === "star"
-      ? "【润色模式】：star。按已有事实整理 STAR，缺失要素留空。"
+      ? "【润色模式】：star。先按原文片段拆解 STAR，缺失要素留空；拆解不是再创作经历，不补动作未说明的工具、目的或结果。再编辑有来源依据的正文。"
       : mode === "quantify"
         ? "【润色模式】：quantify。识别可核实的指标与计算方法，保留已有数据。"
         : "【润色模式】：condense。删重、合并与缩短，保留原有事实和数据；不新增量化占位符，quantifiedTips 为 []。";
@@ -134,39 +149,55 @@ export function buildPolishPrompt(args: {
         .join("\n\n")
     : text.trim();
 
+  const originalParagraphs = originalSourceParagraphs?.map(paragraph => paragraph.trim()).filter(Boolean);
+  const hasEvidence = Boolean(rawSource) && (originalParagraphs === undefined || originalParagraphs.length > 0);
+  const revisionContext = originalParagraphs === undefined ? "" : `【二次编辑的原始事实】：
+${originalParagraphs.map((paragraph, index) => `[原始段落 ${index + 1}]：\n${paragraph}`).join("\n\n") || "（原始事实未提供）"}
+
+以下待精简草稿是尚未确认的编辑结果，不是新增事实的证据。对照原始事实，只修正本次草稿涉及的内容；发现无依据的职责、技能、数字或状态时删除或还原，不因它出现在草稿中而沿用。不恢复未选择的无关事项。新增事实须先补到原始资料并重新生成。
+${rawSource ? "" : "本次没有待精简草稿，不恢复未选择的原文内容，只给一条待补充框架，sourceIndices/highlights 为 []，STAR 各字段为空。\n"}sourceIndices 仍定位本次待精简草稿的段落，不引用原始段落编号；映射只辅助对照，不证明内容正确。原始依据没有相关事实时只给待补充框架，sourceIndices/highlights 为 []，STAR 各字段为空。
+
+`;
+
   // 示例本身也满足当前协议，避免要求模型纠正模式外字段或不存在的来源编号。
-  // 只按模式与是否有来源选择固定文案，不将用户材料插入系统提示。
-  const exampleText = rawSource
-    ? "基于来源原文的独立条目，保留必要限定"
-    : isSummary ? "待补充：有真实经历支持的个人优势" : "待补充：真实任务、本人行动与已知结果";
+  // 语种推断仅影响示例，不能替代完整目标决定实际正文语言；用户目标仍在不可信数据块中。
+  const exampleText = exampleLanguage === "en"
+    ? hasEvidence ? "A source-supported item with the original scope and qualifiers"
+      : isSummary ? "[TBD: strengths supported by real experience]" : "[TBD: a real task, your own actions, and known results]"
+    : exampleLanguage === "zh-Hant"
+      ? hasEvidence ? "基於來源原文的獨立條目，保留必要限定"
+        : isSummary ? "[TBD: 待補充有真實經歷支持的個人優勢]" : "[TBD: 待補充真實任務、本人行動與已知結果]"
+      : hasEvidence ? "基于来源原文的独立条目，保留必要限定"
+        : isSummary ? "[TBD: 待补充有真实经历支持的个人优势]" : "[TBD: 待补充真实任务、本人行动与已知结果]";
+  const languageRule = "示例语言只演示 JSON 结构，不指定正文语言。draft、draftItems、STAR 中的经历及 highlights 必须根据完整目标中的正文语言要求书写，区分来源语言与目标语言，保留否定、条件和多语种要求；没有明确要求时沿用原文。示例语言不能覆盖这些要求，专名和技术字面量保留原样。";
   const example = {
     star: isSummary ? null : { situation: "", task: "", action: "", result: "" },
     quantifiedTips: [],
     draft: `• ${exampleText}`,
-    draftItems: [{ text: exampleText, sourceIndices: rawSource ? [1] : [] }],
+    draftItems: [{ text: exampleText, sourceIndices: hasEvidence ? [1] : [] }],
     highlights: [],
   };
 
-  const user = isSummary
+  const user = isSummaryModule
     ? `【模块类型】：自我评价
 ${ctxParts.length ? `【上下文信息（仅作为背景参考，简历中已有专门输入框，严禁在 draft 中输出抬头标题行）】：\n${ctxParts.join("\n")}\n` : ""}
 ${modeInstructions}
 
-【原始待润色内容】：
+${revisionContext}【${originalParagraphs === undefined ? "原始待润色内容" : "待精简草稿"}】：
 ${rawSource || "（暂无原文，仅输出待补充真实优势的填写框架，不推断候选人能力；sourceIndices 为 []）"}
 
 请输出润色分析 JSON。draft 与 draftItems 一一对应，带 • 前缀，不强求新增数字，保留原文已有且相关的数据与限定，不新增量化占位符，切勿包含抬头标题行。sourceIndices 对应真实来源。star 设为 null，quantifiedTips 设为 []。`
     : `【模块类型】：${moduleType === "work" ? "工作经历" : "项目经历"}
-${ctxParts.length ? `【上下文信息（仅作为技术与业务背景参考，简历中已有专门输入框，严禁在 draft 中输出公司/职位/项目标题抬头行）】：\n${ctxParts.join("\n")}\n` : ""}
+${ctxParts.length ? `【上下文信息（仅作为求职与经历背景参考，简历中已有专门输入框，严禁在 draft 中输出公司/职位/项目标题抬头行）】：\n${ctxParts.join("\n")}\n` : ""}
 ${modeInstructions}
 
-【原始待润色内容】：
+${revisionContext}【${originalParagraphs === undefined ? "原始待润色内容" : "待精简草稿"}】：
 ${rawSource || "（暂无原文，仅输出待补充真实经历的填写框架，不推断技术方案、个人职责或成果；sourceIndices 为 []）"}
 
-请输出润色分析 JSON。注意：draft 仅输出有原文依据的工作或项目内容条目（带 • 前缀），不强求每条都有成果，切勿包含公司、职位、项目名等抬头标题行。在 draftItems 中输出各条目并标明对应的来源段落索引 sourceIndices（如 [1] 或多段融合的 [1, 2]）。务必控制输出篇幅高度凝练，保留各条必要限定，确保在 token 预算内完整输出并闭合 JSON。`;
+请输出润色分析 JSON。注意：draft 仅输出有原文依据的工作或项目内容条目（带 • 前缀），不强求每条都有成果，切勿包含公司、职位、项目名等抬头标题行。在 draftItems 中输出各条目并标明对应的来源段落索引 sourceIndices（如 [1] 或多段融合的 [1, 2]）。务必控制输出篇幅高度凝练，保留各条必要限定，确保在 token 预算内完整输出并闭合 JSON。${isSummary ? "star 设为 null，quantifiedTips 设为 []。" : ""}`;
 
   return {
-    system: `${SYSTEM_PROMPT}\n所有非空输出文本必须包含可见内容，不用零宽、控制字符或纯标点占位；协议允许的空字段和空数组保持为空。\n以下 JSON 示例已按本次模块、模式与有无原文选择字段及空值。${rawSource ? "正文与来源编号仅示意格式，实际内容须根据原文填写。" : "没有原文，只保留待补充框架，不把公司、职位或项目名称当成经历。"}${isSummary ? "star 保持 null。" : "STAR 各字段只填写有依据的内容，缺失保留空字符串。"}\n${JSON.stringify(example, null, 2)}`,
+    system: `${SYSTEM_PROMPT}\n所有非空输出文本必须包含可见内容，不用零宽、控制字符或纯标点占位；协议允许的空字段和空数组保持为空。\n以下 JSON 示例已按本次模块、模式与有无原文选择字段及空值。${hasEvidence ? "正文与来源编号仅示意格式，实际内容须根据原文填写。" : "没有原文，只保留待补充框架，不把公司、职位或项目名称当成经历。"}${isSummary ? "star 保持 null。" : "STAR 各字段只填写有依据的内容，缺失保留空字符串。"}\n${JSON.stringify(example, null, 2)}\n${languageRule}`,
     user,
   };
 }
@@ -174,6 +205,7 @@ ${rawSource || "（暂无原文，仅输出待补充真实经历的填写框架�
 export function buildPolishMessages(args: {
   text: string;
   sourceParagraphs?: string[];
+  originalSourceParagraphs?: string[];
   moduleType: "work" | "projects" | "summary";
   mode: PolishMode;
   context?: PolishContext;
@@ -201,14 +233,17 @@ export function buildPolishMessages(args: {
   const markedSourceParagraphs = sourceParagraphs.length
     ? sourceParagraphs.map((paragraph, index) => mark(`__SAFE_POLISH_SOURCE_P_${index + 1}__`, `resume_source_paragraph_${index + 1}`, paragraph))
     : undefined;
+  const markedOriginalParagraphs = args.originalSourceParagraphs?.map(paragraph => paragraph.trim()).filter(Boolean)
+    .map((paragraph, index) => mark(`__SAFE_POLISH_ORIGINAL_P_${index + 1}__`, `original_resume_source_paragraph_${index + 1}`, paragraph));
   const { system, user } = buildPolishPrompt({
     text: markedText,
     sourceParagraphs: markedSourceParagraphs,
+    originalSourceParagraphs: markedOriginalParagraphs,
     moduleType: args.moduleType,
     mode: args.mode,
     context: markedContext,
     targetRole: markedTargetRole,
-  });
+  }, resolveResumeExampleLanguage(args.targetRole));
   return { system, messages: [{ role: "user", parts: splitPromptMarkers(user, markers) }] };
 }
 
@@ -464,7 +499,7 @@ export function normalizePolishResult(
 export function validateGeneratedPolishResult(
   raw: unknown,
   context?: PolishContext,
-  options?: { sourceCount: number; moduleType?: "work" | "projects" | "summary"; mode?: PolishMode },
+  options?: { sourceCount: number; originalSourceCount?: number; moduleType?: "work" | "projects" | "summary"; mode?: PolishMode },
 ): PolishResult | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
@@ -478,7 +513,7 @@ export function validateGeneratedPolishResult(
   if (!bounded(o.draft, limits.draft, true)) return null;
   // 与提示的自我评价口径一致；字段缺省继续兼容，已返回的模式外内容整份拒绝。
   const isSummary = options?.moduleType === "summary" || options?.mode === "summary";
-  const noSource = options?.sourceCount === 0;
+  const noSource = options?.sourceCount === 0 || options?.originalSourceCount === 0;
   if (isSummary && o.star !== undefined && o.star !== null) return null;
 
   if (o.star !== undefined && o.star !== null && (typeof o.star !== "object" || Array.isArray(o.star))) return null;
@@ -506,6 +541,7 @@ export function validateGeneratedPolishResult(
   if (!Array.isArray(o.draftItems) || o.draftItems.length === 0 || o.draftItems.length > limits.maxDraftItems) return null;
   // 背景名称不构成经历；没有原文时只保留一个框架，不生成多条经历或分析。
   if (noSource && o.draftItems.length !== 1) return null;
+  if (noSource && !isNoSourcePlaceholder(o.draft)) return null;
   for (const item of o.draftItems) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null;
     const entry = item as Record<string, unknown>;
@@ -513,7 +549,9 @@ export function validateGeneratedPolishResult(
         !bounded(entry.text, limits.draftItem, true)) return null;
     // 新生成条目是正文的权威来源。先拒绝已知抬头，防止全部清除后兼容清洗从 draft 回填。
     if (isHeaderLine(stripLeadingListMarker(cleanStr(entry.text)), context, "plain-text")) return null;
+    if (noSource && !isNoSourcePlaceholder(entry.text)) return null;
     const sourceIndices = entry.sourceIndices;
+    if (noSource && Array.isArray(sourceIndices) && sourceIndices.length > 0) return null;
     const maxSourceIndices = Math.max(limits.maxDraftItems, options?.sourceCount ?? 0);
     if (!Array.isArray(sourceIndices) || sourceIndices.length > maxSourceIndices ||
         sourceIndices.some((index, position) => typeof index !== "number" || !Number.isSafeInteger(index) || index < 1 ||
@@ -524,7 +562,7 @@ export function validateGeneratedPolishResult(
   const rawHighlights = o.highlights === undefined ? [] : o.highlights;
   if (!Array.isArray(rawHighlights) || rawHighlights.length > limits.maxHighlights ||
       !rawHighlights.every((item) => bounded(item, limits.highlight, true))) return null;
-  if (options?.sourceCount === 0 && rawHighlights.length > 0) return null;
+  if (noSource && rawHighlights.length > 0) return null;
 
   const result = normalizePolishResult(raw, context, options);
   if (!result || !result.draftItems || result.draft.length > limits.draft || result.draftItems.length === 0 ||

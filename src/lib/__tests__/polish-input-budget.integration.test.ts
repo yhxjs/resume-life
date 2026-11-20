@@ -82,6 +82,8 @@ describe("润色的实际外发输入预算", () => {
   it.each([
     ["原文", { text: "文".repeat(MAX_MODEL_INPUT_CHARS) + "尚未上线。" }],
     ["来源末段", { sourceParagraphs: ["首段原文", "文".repeat(MAX_MODEL_INPUT_CHARS) + "末段限定尚未上线。"] }],
+    ["二次改写原始末段", { text: "待精简草稿", mode: "condense", originalSourceParagraphs: ["首段事实", "文".repeat(MAX_MODEL_INPUT_CHARS) + "原始限定尚未上线。"] }],
+    ["二次改写原始转义", { text: "待精简草稿", mode: "condense", originalSourceParagraphs: ["<&>".repeat(6000)] }],
     ["上下文转义", { text: "参与接口校验", context: { company: "<&>".repeat(6000) } }],
     ["目标岗位转义", { text: "参与接口校验", targetRole: "<&>".repeat(6000) }],
     ["大量短段落", { sourceParagraphs: Array.from({ length: 20_000 }, (_, index) => `段${index + 1}`) }],

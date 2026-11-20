@@ -53,7 +53,7 @@ const cases: {
     id: "work-summary-does-not-upgrade-skill",
     text: "了解 Redis 缓存基本操作，参与编写缓存接口的回归用例，未负责选型和生产调优。",
     mode: "summary", moduleType: "work", targetRole: "资深缓存架构师",
-    rubric: "显式 summary 模式使用自我评价规则；不因工作经历模块补 STAR，不把了解升级为精通，不把求职目标当成现有能力，保留未负责选型和生产调优的限定；star 为 null，quantifiedTips 为 []。",
+    rubric: "显式 summary 模式归纳工作事实并保留工作模块身份；不补 STAR，不把了解升级为精通，不把求职目标当成现有能力，保留未负责选型和生产调优的限定；star 为 null，quantifiedTips 为 []。",
   },
   {
     id: "project-without-source-context-is-not-evidence",

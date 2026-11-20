@@ -37,6 +37,28 @@ function basicModule(phone = "13800138000", email = "me@example.com"): ModuleDat
 }
 
 describe("inspectResumeForExport", () => {
+  it.each([
+    "協助客戶完成申請填寫及文件核實。",
+    "跟進待確認訂單並協助主管核實資料。",
+    "协助客户完成申请填写及文件核实。",
+    "跟进待确认订单并协助主管核实资料。",
+    "維護[申請填寫流程]文件。",
+    "整理待補充資料清單並交主管跟進。",
+  ])("正常职责中的词片段不阻断导出：%s", text => {
+    expect(inspectResumeForExport({ modules: [workModule(text)] }).blockingIssues).toEqual([]);
+  });
+
+  it.each([
+    "請填寫實際職責", "待確認的業績", "待补充", "• 待補充：真實職責",
+    "完成盘点。请填写真实结果", "完成盤點；待確認：實際結果",
+    "完成盤點，[請填入真實數據：統計口徑]", "完成盤點\n[TBD: actual results]",
+  ])("明确待填指令仍阻断且不能通过确认跳过：%s", text => {
+    const modules = [workModule(text)];
+    const first = inspectResumeForExport({ modules });
+    expect(first.blockingIssues.some(issue => issue.kind === "placeholder")).toBe(true);
+    expect(inspectResumeForExport({ modules, confirmedIssueIds: new Set(first.issues.map(issue => issue.id)) }).canExport).toBe(false);
+  });
+
   it("按模块和条目定位未确认数字与残留占位符", () => {
     const result = inspectResumeForExport({
       modules: [basicModule(), workModule("优化 40%，将 [请填入真实数据，例如：30%] 的耗时降低")],

@@ -2,6 +2,7 @@ import type { ModuleData } from "@/lib/modules";
 import { findMetricSpans } from "@/lib/metric-highlight";
 import { stripRichText } from "@/lib/rich-text";
 import { A4_HEIGHT_PX, estimatePageFitStatus } from "@/lib/resume-compression";
+import { RESUME_BRACKETED_PLACEHOLDER_PATTERN } from "@/lib/resume-placeholders";
 
 export type ResumeExportIssueKind = "unconfirmed_metric" | "placeholder" | "contact" | "pagination";
 export type ResumeExportIssue = {
@@ -38,7 +39,9 @@ export type ResumeExportCheckResult = {
   canExport: boolean;
 };
 
-const PLACEHOLDER_RE = /[\[【][^\]】]*(?:请填入|请填写|待填写|待补充|待确认|待核实|占位|TODO|TBD|例如\s*[：:]|姓名|学校名称|公司名称|项目名称|数量|百分比|X[%％]|X{2,})[^\]】]*[\]】]|\{\{[^{}]+\}\}|\b(?:TODO|TBD|X{2,})\b|(?:XX|xx)(?:%|％|人|万|个)|请(?:填入|填写|补充|替换)|待(?:填写|补充|确认|核实)/giu;
+// 裸指令须从文字边界开始，不能截取“申請填寫”或“跟進待確認訂單”中的词。
+const LEGACY_PLACEHOLDER_RE = /[\[【](?:To\s+(?:add|confirm|fill)|Missing|Pending\s+(?:information|confirmation))\s*[:：][^\]】]*[\]】]|[\[【][^\]】]*(?:(?<!申)[请請](?:填入|填[写寫])|待填[写寫]|待[补補]充|待[确確][认認]|待核[实實]|占位|TODO|TBD|例如\s*[：:]|姓名|[学學]校名[称稱]|公司名[称稱]|[项項]目名[称稱]|[数數]量|百分比|X[%％]|X{2,})[^\]】]*[\]】]|\{\{[^{}]+\}\}|\b(?:TODO|TBD|X{2,})\b|(?:XX|xx)(?:%|％|人|万|个)|(?<![\p{L}\p{N}_])(?:[请請](?:填入|填[写寫]|[补補]充|替[换換])|待(?:填[写寫]|[补補]充|[确確][认認]|核[实實]))/giu;
+const PLACEHOLDER_RE = new RegExp(`${RESUME_BRACKETED_PLACEHOLDER_PATTERN}|${LEGACY_PLACEHOLDER_RE.source}`, "giu");
 const DATE_RE = /\b(?:19|20)\d{2}[-/.]\d{1,2}(?:[-/.]\d{1,2})?\b/g;
 
 function addTextIssues(

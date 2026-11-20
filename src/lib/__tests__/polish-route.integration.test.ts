@@ -54,6 +54,104 @@ async function callPolish(body: unknown) {
 }
 
 describe("polish 路由", () => {
+  it.each(["待补充。主导采购并降低损耗 30%。", "待補充資料已完成整理。"])("无原始事实时不能把中文标记后的经历当成框架：%s", async text => {
+    const before = snapshot();
+    safeLlm.safeChat.mockResolvedValue(JSON.stringify({
+      draft: `• ${text}`, draftItems: [{ text, sourceIndices: [] }], star: null, quantifiedTips: [], highlights: [],
+    }));
+    for (const body of [
+      { text: "", moduleType: "work", mode: "star" },
+      { text: "主导采购并降低损耗 30%", originalSourceParagraphs: [], moduleType: "work", mode: "condense" },
+    ]) {
+      const response = await callPolish(body);
+      expect(response.status).toBe(502);
+      expect((await response.json()).error).toContain("返回格式未通过校验");
+    }
+    expect(snapshot()).toEqual(before);
+  });
+
+  it.each(["待补充", "待補充", "[待补充]", "[待補充]"])("空原文与无原始事实的精简均兼容简短占位符：%s", async text => {
+    const before = snapshot();
+    safeLlm.safeChat.mockResolvedValue(JSON.stringify({
+      draft: `• ${text}`, draftItems: [{ text, sourceIndices: [] }], star: null, quantifiedTips: [], highlights: [],
+    }));
+    for (const body of [
+      { text: "", moduleType: "work", mode: "star" },
+      { text: "主导采购并提升 30%", moduleType: "work", mode: "condense", originalSourceParagraphs: [] },
+    ]) {
+      const response = await callPolish(body);
+      expect(response.status).toBe(200);
+      expect((await response.json()).result.draftItems).toEqual([text]);
+    }
+    expect(snapshot()).toEqual(before);
+  });
+
+  it.each([
+    { targetRole: "CV en français", text: "[À compléter : responsabilités réelles]" },
+    { targetRole: "Lebenslauf auf Deutsch", text: "[Ergänzen: tatsächliche Aufgaben]" },
+    { targetRole: "日本語の履歴書", text: "[TBD: 実際の担当業務]" },
+  ])("$targetRole 的合法待填框架不返回 502", async ({ targetRole, text }) => {
+    const before = snapshot();
+    safeLlm.safeChat.mockResolvedValue(JSON.stringify({
+      draft: `• ${text}`, draftItems: [{ text, sourceIndices: [] }], star: null, quantifiedTips: [], highlights: [],
+    }));
+    for (const body of [
+      { text: "", moduleType: "work", mode: "star", targetRole },
+      { text: "Unconfirmed draft", moduleType: "work", mode: "condense", targetRole, originalSourceParagraphs: [] },
+    ]) {
+      const response = await callPolish(body);
+      expect(response.status).toBe(200);
+      expect((await response.json()).result.draftItems).toEqual([text]);
+    }
+    expect(safeLlm.safeChat.mock.calls[0]![2]).toContain("TBD 和括号不翻译");
+    expect(snapshot()).toEqual(before);
+  });
+
+  it.each([null, "原始资料", [null], [1], [true], [{}], [["文本"]]])("二次精简原始资料类型错误时在调用前拒绝：%j", async originalSourceParagraphs => {
+    const before = snapshot();
+    const response = await callPolish({ text: "草稿", mode: "condense", originalSourceParagraphs });
+    expect(response.status).toBe(400);
+    expect(safeLlm.safeChat).not.toHaveBeenCalled();
+    expect(snapshot()).toEqual(before);
+  });
+
+  it("二次精简保留原始依据，来源编号仍指向当前草稿位置", async () => {
+    const before = snapshot();
+    const original = "Assisted stock counts; the supervisor made purchasing decisions. No losses were measured.";
+    const text = "Assisted stock counts; purchasing decisions remained with the supervisor and losses were not measured.";
+    safeLlm.safeChat.mockResolvedValueOnce(JSON.stringify({ draft: `• ${text}`, draftItems: [{ text, sourceIndices: [1] }] }));
+    const response = await callPolish({ text: "Led purchasing and reduced losses by 30%", originalSourceParagraphs: [" ", original], moduleType: "work", mode: "condense" });
+    expect(response.status).toBe(200);
+    const parts = safeLlm.safeChat.mock.calls[0]![3][0].parts;
+    expect(parts).toContainEqual({ trust: "untrusted", tag: "original_resume_source_paragraph_1", text: original });
+    expect((await response.json()).result.draftItemDetails).toEqual([{ text, sourceIndices: [1] }]);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it("非精简请求不能使用另一份原文覆盖事实依据", async () => {
+    const response = await callPolish({ text: "原文", mode: "star", originalSourceParagraphs: ["另一份资料"] });
+    expect(response.status).toBe(400);
+    expect(safeLlm.safeChat).not.toHaveBeenCalled();
+  });
+
+  it("二次精简缺少原始事实时拒绝沿用草稿成果，允许明确待补框架", async () => {
+    const before = snapshot();
+    const body = { text: "主导采购并提升 30%", originalSourceParagraphs: [], moduleType: "work", mode: "condense" };
+    safeLlm.safeChat.mockResolvedValueOnce(JSON.stringify({
+      draft: "• 主导采购并提升 30%", draftItems: [{ text: "主导采购并提升 30%", sourceIndices: [1] }], highlights: ["采购"],
+    }));
+    expect((await callPolish(body)).status).toBe(502);
+    safeLlm.safeChat.mockResolvedValueOnce(JSON.stringify({
+      draft: "• 主导采购并提升 30%", draftItems: [{ text: "主导采购并提升 30%", sourceIndices: [] }],
+      star: null, quantifiedTips: [], highlights: [],
+    }));
+    expect((await callPolish(body)).status).toBe(502);
+    const text = "[TBD: real responsibilities and known outcomes]";
+    safeLlm.safeChat.mockResolvedValueOnce(JSON.stringify({ draft: `• ${text}`, draftItems: [{ text, sourceIndices: [] }], highlights: [], star: null }));
+    expect((await callPolish(body)).status).toBe(200);
+    expect(snapshot()).toEqual(before);
+  });
+
   describe.each(["work", "projects", "summary"] as const)("%s 保留事实正文", (moduleType) => {
     it.each([
       { shape: "结构化条目", format: "标签" }, { shape: "仅整段", format: "标签" },
@@ -98,8 +196,8 @@ describe("polish 路由", () => {
 
   const emptySourceViolations = [
     { name: "多条框架", patch: { draftItems: [
-      { text: "待补充：真实任务及本人行动", sourceIndices: [] },
-      { text: "待补充：已经确认的结果", sourceIndices: [] },
+      { text: "[TBD: 真实任务及本人行动]", sourceIndices: [] },
+      { text: "[TBD: 已经确认的结果]", sourceIndices: [] },
     ] } },
     ...(["situation", "task", "action", "result"] as const).map(field => ({
       name: `非空 STAR ${field}`, patch: { star: { [field]: "参与订单接口回归验证" } },
@@ -116,8 +214,8 @@ describe("polish 路由", () => {
   it.each(emptySourceCases)("无原文 $moduleType/$mode 拒绝$name，单条空分析框架可重试", async ({ moduleType, mode, patch }) => {
     const before = snapshot();
     const frame = {
-      draft: "• 待补充：真实任务及本人行动",
-      draftItems: [{ text: "待补充：真实任务及本人行动", sourceIndices: [] }],
+      draft: "• [TBD: 真实任务及本人行动]",
+      draftItems: [{ text: "[TBD: 真实任务及本人行动]", sourceIndices: [] }],
       star: moduleType === "summary" ? null : { situation: "", task: " ", action: "\n", result: "" },
       quantifiedTips: [], highlights: [],
     };
@@ -199,7 +297,7 @@ describe("polish 路由", () => {
   );
 
   it("没有原文时拒绝声称来自原文的关键词，有原文时可返回", async () => {
-    const frame = { draft: "• 待补充真实经历", draftItems: [{ text: "待补充真实经历", sourceIndices: [] }], highlights: ["TypeScript"] };
+    const frame = { draft: "• [TBD: 真实经历]", draftItems: [{ text: "[TBD: 真实经历]", sourceIndices: [] }], highlights: ["TypeScript"] };
     const before = snapshot();
     safeLlm.safeChat.mockResolvedValueOnce(JSON.stringify(frame));
     expect((await callPolish({ context: { name: "TypeScript 测试工具" } })).status).toBe(502);
@@ -296,7 +394,7 @@ describe("polish 路由", () => {
 
   it.each([{}, { text: "  " }, { sourceParagraphs: ["", "  "], context: {} }])("保留无原文填写框架及缺省模式 %#", async input => {
     safeLlm.safeChat.mockResolvedValue(JSON.stringify({
-      draft: "待补充真实经历", draftItems: [{ text: "待补充真实经历", sourceIndices: [] }],
+      draft: "[TBD: 真实经历]", draftItems: [{ text: "[TBD: 真实经历]", sourceIndices: [] }],
     }));
     const response = await callPolish(input);
     expect(response.status).toBe(200);
@@ -360,20 +458,20 @@ describe("polish 路由", () => {
   });
 
   it.each([
-    { body: { sourceParagraphs: ["原文甲", "", "原文乙"], text: "被段落覆盖的文本" }, sourceIndices: [1, 2], expected: [1, 2] },
-    { body: { text: "单段原文" }, sourceIndices: [1], expected: [1] },
-    { body: { text: "  " }, sourceIndices: [], expected: [] },
-  ])("接受与实际发送原文对应的来源编号：$expected", async ({ body, sourceIndices, expected }) => {
+    { body: { sourceParagraphs: ["原文甲", "", "原文乙"], text: "被段落覆盖的文本" }, draftText: "参与接口开发", sourceIndices: [1, 2], expected: [1, 2] },
+    { body: { text: "单段原文" }, draftText: "参与接口开发", sourceIndices: [1], expected: [1] },
+    { body: { text: "  " }, draftText: "[TBD: 真实任务及本人行动]", sourceIndices: [], expected: [] },
+  ])("接受与实际发送原文对应的来源编号：$expected", async ({ body, draftText, sourceIndices, expected }) => {
     safeLlm.safeChat.mockResolvedValue(JSON.stringify({
-      draft: "• 与条目不一致的旧正文",
-      draftItems: [{ text: "参与接口开发", sourceIndices }],
+      draft: `• ${draftText}`,
+      draftItems: [{ text: draftText, sourceIndices }],
     }));
     const res = await callPolish(body);
     expect(res.status).toBe(200);
     const { result } = await res.json();
-    expect(result.draft).toBe("• 参与接口开发");
-    expect(result.draftItems).toEqual(["参与接口开发"]);
-    expect(result.draftItemDetails).toEqual([{ text: "参与接口开发", sourceIndices: expected }]);
+    expect(result.draft).toBe(`• ${draftText}`);
+    expect(result.draftItems).toEqual([draftText]);
+    expect(result.draftItemDetails).toEqual([{ text: draftText, sourceIndices: expected }]);
   });
 
   it.each([

@@ -409,7 +409,7 @@ export function MetricBeautifyDialog({
                 onClick={() => setMode("quantify")}
                 aria-pressed={mode === "quantify"}
               >
-                📊 深度量化扩写
+                📊 量化建议
               </button>
             </div>
           </div>
@@ -420,8 +420,9 @@ export function MetricBeautifyDialog({
               className={`${inputCls} mt-1`}
               value={targetRole}
               onChange={(e) => setTargetRole(e.target.value)}
-              placeholder="如：前端架构师 / 资深后端"
+              placeholder="如：初级前端 / 英国数据分析，英语简历 / 香港客服，繁体中文"
             />
+            <span className="mt-1 block text-xs text-muted">可补充求职地区、级别和正文语言；未指定时沿用原文。</span>
           </label>
 
           <div>

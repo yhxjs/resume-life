@@ -6,6 +6,7 @@ import path from "node:path";
 import { canArchiveDiagnosisSnapshot } from "../diagnosis-history";
 import { sanitizeModulesForDiagnosis, type DiagnosisSnapshot } from "../diagnosis";
 import { buildDiagnosisMessages } from "../diagnosis-llm";
+import { DIAGNOSIS_PRODUCTION_SYSTEM_PROMPT } from "../diagnosis-production-prompt";
 import { buildResumeImportMessages } from "../resume-import-llm";
 import { buildGenerateUserMessage } from "../intro-llm";
 import type { IntroKind } from "../intro";
@@ -21,7 +22,7 @@ const outputs: string[] = [];
 type ResumeEvalSuite = "interview" | "interview-retry" | "interview-reference" | "interview-reverse"
   | "interview-finish" | "evaluator" | "interview-series-advance" | "interview-series-answer" | "application-interview-review";
 
-async function snapshot(suite: "diagnosis" | "intro" | "import" | ResumeEvalSuite) {
+async function snapshot(suite: "diagnosis" | "resume-job-search" | "intro" | "import" | ResumeEvalSuite) {
   const child = spawn(process.execPath, [path.resolve("scripts/eval-prompts.mjs"), `--suite=${suite}`], {
     cwd: process.cwd(), windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, PROMPT_EVAL_API_KEY: "", PROMPT_EVAL_BASE_URL: "", PROMPT_EVAL_MODEL: "" },
@@ -58,6 +59,24 @@ afterAll(() => {
 });
 
 describe("评测源材料与生产输入契约一致", () => {
+  it("求职场景的诊断评测包含生产接口完整的系统约束及材料", async () => {
+    const samples = await snapshot("resume-job-search");
+    const diagnoses = samples.filter((sample: { input: { request: { kind: string } } }) => sample.input.request.kind === "diagnosis");
+    expect(diagnoses).toHaveLength(2);
+    // 与 diagnose route 实际外发的完整系统提示一致，不能只校验基础提示的子串。
+    const system = `${DIAGNOSIS_PRODUCTION_SYSTEM_PROMPT}\n所有非空文本必须包含可见内容，不用零宽、控制字符或纯标点占位；协议允许的空 gaps 与 suggestions 继续为空。`;
+    for (const sample of diagnoses) {
+      const { jd, modules } = sample.input.request;
+      const expected = checkSafeModelInput(system, buildDiagnosisMessages(jd, sanitizeModulesForDiagnosis(modules)));
+      const expectedSystem = expected[0]!;
+      if (typeof expectedSystem.content !== "string") throw new Error("诊断系统提示必须是纯文本");
+      expect(withoutEvaluationDate(sample.assembledMessages[0])).toEqual(
+        withoutEvaluationDate({ role: expectedSystem.role, content: expectedSystem.content }),
+      );
+      expect(sample.assembledMessages.slice(1)).toEqual(expected.slice(1));
+    }
+  });
+
   it("导入新增保留样本包含已完成里程碑对照与多层实体原文，传输只加一层保护", async () => {
     const samples = await snapshot("import");
     expect(samples).toHaveLength(15);

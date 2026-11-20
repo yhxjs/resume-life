@@ -39,6 +39,7 @@ import { buildInterviewReferenceMessages } from "../interview-reference-llm";
 import { buildInterviewAnswerMessages, interviewAnswerPrompt } from "../interview-answer-llm";
 import { parseInterviewAnswerDecision } from "../model-protocol";
 import { buildResumeImportMessages, RESUME_IMPORT_SYSTEM_PROMPT } from "../resume-import-llm";
+import { buildPolishMessages } from "../polish";
 import { collectResumeEvidenceParts, formatResumeContext, formatResumeEvidenceText } from "../resumes";
 import { buildResumeDefenseScanMessages, buildResumeDefenseDrillMessages, RESUME_DEFENSE_SCAN_SYSTEM_PROMPT, RESUME_DEFENSE_DRILL_SYSTEM_PROMPT } from "../resume-defense-llm";
 import { BANK_EVAL_PROMPT, PROJECT_EVAL_PROMPT, buildDrillEvaluation } from "../drill-answer-llm";
@@ -394,8 +395,8 @@ async function service(badFirstReply = false, emptyFirstReply = false, emptyResu
     }
     if (polish) {
       if (user.includes("（暂无原文，")) {
-        answer = { star: null, quantifiedTips: [], draft: "• 待补充：真实经历及本人行动。", draftItems: [{ text: "待补充：真实经历及本人行动。", sourceIndices: polishContractViolations ? [1] : [] }], highlights: [] };
-      } else if (polishContractViolations && user.includes("【模块类型】：自我评价")) {
+        answer = { star: null, quantifiedTips: [], draft: "• [TBD: 真实经历及本人行动]", draftItems: [{ text: "[TBD: 真实经历及本人行动]", sourceIndices: polishContractViolations ? [1] : [] }], highlights: [] };
+      } else if (polishContractViolations && (user.includes("【模块类型】：自我评价") || user.includes("【润色模式】：summary"))) {
         answer = { ...answer as object, star: { situation: "不应出现的模式外分析" } };
       } else if (polishContractViolations && user.includes("<project_name>\n迁移项目\n</project_name>")) {
         answer = { star: null, quantifiedTips: [], draft: "• 迁移项目", draftItems: [{ text: "迁移项目", sourceIndices: [1] }], highlights: [] };
@@ -1252,7 +1253,7 @@ describe("显式提示词评估入口（本地合成服务，无真实模型）"
     const readSample = (id: string) => JSON.parse(fs.readFileSync(path.join(snapshot.output!, `${id}.json`), "utf8"));
     for (const id of ["summary-keeps-overlap-and-team-metrics", "summary-condense-keeps-qualifiers", "work-summary-does-not-upgrade-skill", "summary-without-source-context-injection"]) {
       const sample = readSample(id);
-      expect(sample.assembledMessages[1].content).toContain("【模块类型】：自我评价");
+      expect(sample.assembledMessages[1].content).toContain(`【模块类型】：${sample.input.moduleType === "work" ? "工作经历" : "自我评价"}`);
       expect(sample.assembledMessages[1].content).toContain(`【润色模式】：${sample.input.mode}`);
       expect(sample.assembledMessages[0].content).toContain('"star": null');
     }
@@ -1278,6 +1279,56 @@ describe("显式提示词评估入口（本地合成服务，无真实模型）"
       "work-summary-does-not-upgrade-skill", "project-without-source-context-is-not-evidence", "summary-without-source-context-injection",
     ].sort());
     expect(failed.every((entry: { failureStage: string }) => entry.failureStage === "validation")).toBe(true);
+  });
+
+  it("简历求职场景快照零外发，包含二次改写的原始事实和真实生产消息", async () => {
+    const local = await service();
+    const result = await run(["--suite=resume-job-search"], { PROMPT_EVAL_LIVE: "1", PROMPT_EVAL_BASE_URL: local.url, PROMPT_EVAL_API_KEY: syntheticKey, PROMPT_EVAL_MODEL: "synthetic-model" });
+    expect(result.code, result.text).toBe(0);
+    expect(local.requests).toHaveLength(0);
+    expect(result.summary).toMatchObject({ suite: "resume-job-search", mode: "snapshot", expectedSamples: 11, recordedSamples: 11,
+      protocolCounts: { "not-run": 11, pass: 0, fail: 0, error: 0 }, semanticQuality: "not-evaluated" });
+    expect(fs.existsSync(path.join(result.output!, "data"))).toBe(false);
+    const sample = JSON.parse(fs.readFileSync(path.join(result.output!, "revision-keeps-original-facts.json"), "utf8"));
+    const { system, messages } = buildPolishMessages(sample.input.request.args);
+    expect(sample.assembledMessages[0].content).toContain(system);
+    expect(sample.assembledMessages.slice(1)).toEqual(checkSafeModelInput("", messages).slice(1));
+    expect(sample.assembledMessages[1].content).toContain(wrapUntrustedData("original_resume_source_paragraph_1", sample.input.request.args.originalSourceParagraphs[0]));
+    expect(sample.assembledMessages[1].content).toContain(wrapUntrustedData("resume_source_paragraph_1", sample.input.request.args.sourceParagraphs[0]));
+    expect(sample.raw).toBeNull();
+    expect(sample.semanticReview).toBe("not-evaluated");
+  });
+
+  it("求职评测保留 STAR 中无依据的方法断言，格式通过仍需逐项事实审阅", async () => {
+    // 重现真实复评的失败：正文正确，但 STAR 把另一动作的工具移给清理行动。
+    const text = "For a university exercise, cleaned 120 synthetic survey records and used Excel pivot tables to summarise response counts. Presented the findings to the course tutor. This was coursework, not a client project. Have only practised basic SQL SELECT queries.";
+    const answer = {
+      star: { situation: "University coursework, not a client project.", task: "", action: "Cleaned 120 synthetic survey records using Excel.", result: "" },
+      quantifiedTips: [], draft: `• ${text}`, draftItems: [{ text, sourceIndices: [1] }], highlights: [],
+    };
+    let requests = 0;
+    const server = createServer(async (req, res) => {
+      for await (const chunk of req) void chunk;
+      requests += 1;
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(answer) } }] })}\n\ndata: [DONE]\n\n`);
+    });
+    servers.push(server);
+    await listenForFetch(server);
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing local test endpoint");
+    const result = await run(["--suite=resume-job-search", "--live", "--sample=uk-graduate-analyst-english"], {
+      PROMPT_EVAL_BASE_URL: `http://127.0.0.1:${address.port}/v1`, PROMPT_EVAL_API_KEY: syntheticKey, PROMPT_EVAL_MODEL: "synthetic-model",
+    });
+    expect(result.code, result.text).toBe(0);
+    expect(requests).toBe(1);
+    expect(result.summary).toMatchObject({ protocolCounts: { pass: 1, fail: 0, error: 0 }, semanticQuality: "pending-human-review" });
+    const sample = JSON.parse(fs.readFileSync(path.join(result.output!, "uk-graduate-analyst-english.json"), "utf8"));
+    expect(sample.input.request.args.text).toBe(text);
+    expect(JSON.parse(sample.raw)).toEqual(answer);
+    expect(sample.semanticReview).toBe("pending-human-review");
+    expect(sample.semanticReviewItems.every((item: { verdict: string }) => item.verdict === "pending")).toBe(true);
+    expect(sample.semanticReviewItems.some((item: { criterion: string }) => item.criterion.includes("逐个主张追溯"))).toBe(true);
   });
 
   it("简历导入解析快照复用生产安全消息与新草稿校验", async () => {

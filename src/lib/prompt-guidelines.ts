@@ -1,7 +1,100 @@
+import { RESUME_PLACEHOLDER_RULES } from "./resume-placeholders";
+
 /** 可复用的任务约束；只含固定指令，用户材料仍由 safe-llm 封装。 */
 export const INTERVIEW_QUESTION_MAX_CHARS = 800;
 
 export const CHINESE_EXPLANATION_RULES = "说明性文字使用中文；JSON 字段名、规定枚举、原文引文、技术名称和公司/产品专名保留原样，不为满足中文表达而翻译或改写。";
+
+/** 简历正文与界面点评分别适配，不将中文指令或岗位偏好变成履历事实。 */
+export const RESUME_JOB_SEARCH_RULES = `求职场景与表达：
+- 可采用的正文、技能和关键词沿用原文语言与表达风格；目标信息明确要求另一种语言时才转换。系统指令、字段名和示例使用中文不表示正文必须中文。繁简体按原文或明确要求保留；点评与核实说明可用中文。没有正文时按明确的目标语言给填写框架，不照抄中文示例。
+- 地区、行业、职位级别及格式偏好只从已有材料和明确目标读取，不凭公司名或语言猜求职地区。没有要求时，不把照片、年龄、婚姻、签名、固定页数或某地区惯例当通用必填项，也不补资格、语言能力或工作许可。
+- 按目标岗位的实际职责选择已有事实；技术、服务、行政、设计等岗位都允许具体日常工作、协作和有依据的定性产出，不预设每人都有架构决策、管理职责或量化增长。ATS 只帮助组织真实信息，不补原文没有的关键词或熟练程度，不承诺筛选通过。
+- 岗位匹配看整份材料：某模块已展示的行动、工具与能力，不因另一模块没重复列出就判为未展示；志愿、兼职和课程实践按实际行动及范围评价，不因身份否定相关证据。区分 JD 的必需项、加分项与表达细节，不把 JD 未要求的专用系统、量化成果或管理权限当必需缺口。点评也保留动作的真实对象，例如管理排班不等于管理人员。
+- 真正未知的信息先问是否有相关真实经历或可核对记录，再在确有依据时补细节；不能直接要求补写一项未证实的技能或成果。${RESUME_PLACEHOLDER_RULES}`;
+
+export type ResumeExampleLanguage = "en" | "zh-Hans" | "zh-Hant";
+
+const OTHER_RESUME_LANGUAGES = String.raw`(?:german|french|spanish|japanese|italian|portuguese|dutch|korean|arabic|russian|(?<!simplified )(?<!traditional )chinese)`;
+const RESUME_DOCUMENT_LANGUAGES = String.raw`(?:english|(?:simplified|traditional)\s+chinese|${OTHER_RESUME_LANGUAGES})`;
+const OTHER_CHINESE_RESUME_LANGUAGES = String.raw`(?:[法德日俄韩韓][文语語]|(?:西班牙|葡萄牙|意大利|義大利|荷兰|荷蘭|阿拉伯)[文语語])`;
+const CHINESE_RESUME_LANGUAGES = String.raw`(?:[简簡][体體]中文|繁[体體]中文|中文|英[文语語]|${OTHER_CHINESE_RESUME_LANGUAGES})`;
+const CHINESE_RESUME_DOCUMENT = String.raw`(?:[简簡][历歷]|履[历歷]|正文)`;
+
+// 各语种共用文档写法与边界，避免只识别 English résumé 而漏掉 French résumé。
+function documentLanguagePattern(language: string): string {
+  const document = String.raw`(?:cv|r[eé]sum[eé])`;
+  return String.raw`\b(?:${language}\s+${document}|${document}\s+(?:is\s+)?in\s+${language})(?=\s|[.;,:!?()；，：。！？（）]|$)`;
+}
+
+function hasSharedDocumentLanguages(target: string): boolean {
+  const document = String.raw`(?:\b(?:cv|r[eé]sum[eé])(?![\p{L}\p{N}_])|${CHINESE_RESUME_DOCUMENT})`;
+  const language = String.raw`(?:\b${RESUME_DOCUMENT_LANGUAGES}\b|${CHINESE_RESUME_LANGUAGES})`;
+  const entry = String.raw`${language}(?:\s*${document})?`;
+  const separator = String.raw`\s*(?:\b(?:and|or)\b|或者|以及|或|和|与|與|及|[、,，/&])\s*`;
+  // 先完整消费列表，再判断文档归属，避免在长列表的每个词上反复回溯寻找文档名。
+  const lists = new RegExp(String.raw`(?:${document}\s*(?:(?:is\s+)?in\s+|(?:使用|用|以|[:：])\s*))?${entry}(?:${separator}${entry})+`, "giu");
+  for (const match of target.matchAll(lists)) {
+    // 独立分句中的外语技能不属于正文偏好。
+    if (!new RegExp(document, "iu").test(match[0])) continue;
+    const languages = new Set<string>();
+    for (const item of match[0].matchAll(new RegExp(language, "giu"))) {
+      // 同一语种的中英文名称及繁简写法不构成多语种要求。
+      const name = item[0].toLowerCase()
+        .replace(/^英[文语語]$/u, "english")
+        .replace(/^[简簡][体體]中文$/u, "simplified chinese")
+        .replace(/^繁[体體]中文$/u, "traditional chinese");
+      languages.add(name);
+      if (languages.size > 1) return true;
+    }
+  }
+  return false;
+}
+
+/** 仅为 JSON 示例选择语言；自由文本无法穷举解析，结果不能成为正文语言指令。 */
+export function resolveResumeExampleLanguage(targetRole?: string): ResumeExampleLanguage | undefined {
+  const target = targetRole?.normalize("NFKC").replace(/\s+/gu, " ").trim() ?? "";
+  if (!target || /\bbilingual\b|\bmultilingual\b|双语|雙語|多语|多語/iu.test(target)) return undefined;
+  // 问句在分句前识别，不能丢掉问号后把询问变成确定要求。
+  if (/[?？]|\b(?:should|could|can|must)\s+(?:i|we)\b|[吗嗎](?:\s|[，,。；;！!]|$)/iu.test(target)) return undefined;
+  // 翻译或转换请求中的文档语种可能描述输入，不能把它提升成固定输出要求。
+  // 保留完整目标交给模型理解方向，也兼容固定枚举以外的目标语言。
+  if (/\b(?:translat(?:e[ds]?|ing|ion)|convert(?:s|ed|ing)?|switch(?:es|ed|ing)?|chang(?:e[ds]?|ing)|rewrit(?:es?|ing)|rewritten|source|original|current|existing|output|render|become)\b|翻[译譯]|[译譯](?:成|[为為])|[转轉](?:[换換为為]|成)|改(?:[写寫为為]|成)|原文|原始|[现現]有|目前|已有|[输輸]出/iu.test(target)) return undefined;
+  if (hasSharedDocumentLanguages(target)) return undefined;
+  // 逗号连接的条件、否定仍约束本句；不截断长句，否则远处的限定会丢失。
+  const clauses = target.split(/[.;!?。！？；]/u);
+  const negative = /\b(?:no|not|never|without|avoid|neither|unnecessary|unwanted|unacceptable|prohibited|forbidden|disallowed|discouraged|banned|excluded|omit|skip)\b|\b\w+n['’]t\b|不|(?:无|無|毋)[需须須]|别|別|并非|並非|非必[需须須]|禁止|拒[绝絕]|省略/iu;
+  const uncertain = /\b(?:whether|if|unless|when|optional(?:ly)?|maybe|perhaps|might|consider(?:ing)?)\b|\b(?:upon|on)\s+request\b|是否|也许|也許|可能|考虑|考慮|可选|可選|视情况|視情況|如果|如需|假如|若|除非|[仅僅][当當]|只有|必要[时時]|按需/iu;
+  const otherChineseLanguages = String.raw`(?:(?<![简簡繁][体體])中文|${OTHER_CHINESE_RESUME_LANGUAGES})`;
+  type DocumentLanguage = ResumeExampleLanguage | "other";
+  const patterns: [DocumentLanguage, RegExp][] = [
+    ["en", new RegExp(documentLanguagePattern("english") + String.raw`|(?:英文|英语|英語)\s*(?:[简簡][历歷]|履[历歷])|(?:[简簡][历歷]|履[历歷]|正文)\s*(?:用|以|使用|[:：])\s*(?:英文|英语|英語)`, "giu")],
+    ["zh-Hans", new RegExp(documentLanguagePattern(String.raw`simplified\s+chinese`) + String.raw`|(?:简体中文|簡體中文)\s*(?:[简簡][历歷]|履[历歷])|(?:[简簡][历歷]|履[历歷]|正文)\s*(?:用|以|使用|[:：])\s*(?:简体中文|簡體中文)|(?:^|[;；,，])\s*(?:简体中文|簡體中文)(?=\s*(?:$|[;；,，]))`, "giu")],
+    ["zh-Hant", new RegExp(documentLanguagePattern(String.raw`traditional\s+chinese`) + String.raw`|(?:繁体中文|繁體中文)\s*(?:[简簡][历歷]|履[历歷])|(?:[简簡][历歷]|履[历歷]|正文)\s*(?:用|以|使用|[:：])\s*(?:繁体中文|繁體中文)|(?:^|[;；,，])\s*(?:繁体中文|繁體中文)(?=\s*(?:$|[;；,，]))`, "giu")],
+    ["other", new RegExp(documentLanguagePattern(OTHER_RESUME_LANGUAGES)
+      + String.raw`|${otherChineseLanguages}\s*(?:[简簡][历歷]|履[历歷])|${CHINESE_RESUME_DOCUMENT}\s*(?:用|以|使用|[:：])\s*${otherChineseLanguages}`
+      + String.raw`|\b(?:cv|r[eé]sum[eé])\s+en\s+fran[cç]ais\b|\blebenslauf\s+auf\s+deutsch\b|日本語の履歴書`, "giu")],
+  ];
+  const affirmativeLanguages = new Set<DocumentLanguage>();
+  const qualifiedLanguages = new Set<DocumentLanguage>();
+  for (const clause of clauses) {
+    const qualified = negative.test(clause) || uncertain.test(clause);
+    let references = 0;
+    for (const [language, pattern] of patterns) {
+      for (const match of clause.matchAll(pattern)) {
+        if (!match[0]) continue;
+        references += 1;
+        // 同一句中多个文档语种要求带有限定，无法可靠判断限定归属时不强制选语种。
+        if (qualified && references > 1) return undefined;
+        (qualified ? qualifiedLanguages : affirmativeLanguages).add(language);
+      }
+    }
+  }
+  // 肯定要求不能被另一句中的否定或条件抹掉；冲突和多语种均交回完整目标解释。
+  if (affirmativeLanguages.size !== 1) return undefined;
+  const [language] = affirmativeLanguages;
+  return language && language !== "other" && !qualifiedLanguages.has(language) ? language : undefined;
+}
 
 /** 供消费文件材料的任务使用，不施加到逐字 OCR 任务。 */
 export const DOCUMENT_TABLE_READING_RULES = `文档表格的阅读规则：

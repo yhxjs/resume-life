@@ -6,7 +6,8 @@ export default defineConfig({
   resolve: { alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) } },
   test: {
     include: [
-      process.env.PROMPT_EVAL_SUITE === "project" ? "evals/project.eval.ts"
+      process.env.PROMPT_EVAL_SUITE === "resume-job-search" ? "evals/resume-job-search.eval.ts"
+        : process.env.PROMPT_EVAL_SUITE === "project" ? "evals/project.eval.ts"
         : process.env.PROMPT_EVAL_SUITE === "project-challenge-boundaries" ? "evals/project-challenge-boundaries.eval.ts"
         : process.env.PROMPT_EVAL_SUITE === "project-personal-scope" ? "evals/project-personal-scope.eval.ts"
         : process.env.PROMPT_EVAL_SUITE === "project-challenge-order" ? "evals/project-challenge-order.eval.ts"

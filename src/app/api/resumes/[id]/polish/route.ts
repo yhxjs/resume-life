@@ -34,6 +34,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
   const body = parsedBody.data as {
     text?: unknown;
     sourceParagraphs?: unknown;
+    originalSourceParagraphs?: unknown;
     moduleType?: unknown;
     mode?: unknown;
     context?: unknown;
@@ -47,6 +48,10 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
   if (body.sourceParagraphs !== undefined && (!Array.isArray(body.sourceParagraphs) ||
     body.sourceParagraphs.some(paragraph => typeof paragraph !== "string"))) {
     return NextResponse.json({ error: "来源段落必须是字符串数组" }, { status: 400 });
+  }
+  if (body.originalSourceParagraphs !== undefined && (!Array.isArray(body.originalSourceParagraphs) ||
+    body.originalSourceParagraphs.some(paragraph => typeof paragraph !== "string"))) {
+    return NextResponse.json({ error: "二次精简的原始资料必须是字符串数组" }, { status: 400 });
   }
   if (body.moduleType !== undefined && body.moduleType !== "work" && body.moduleType !== "projects" && body.moduleType !== "summary") {
     return NextResponse.json({ error: "无效的润色模块类型" }, { status: 400 });
@@ -89,10 +94,16 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
         ? "summary"
         : "star";
   const targetRole = typeof body?.targetRole === "string" ? body.targetRole : "";
+  const originalSourceParagraphs = Array.isArray(body.originalSourceParagraphs)
+    ? body.originalSourceParagraphs.map((paragraph: string) => paragraph.trim()).filter(Boolean) : undefined;
+  if (originalSourceParagraphs !== undefined && mode !== "condense") {
+    return NextResponse.json({ error: "原始资料对照仅用于二次精简" }, { status: 400 });
+  }
 
   const { system, messages } = buildPolishMessages({
     text,
     sourceParagraphs: rawParagraphs,
+    originalSourceParagraphs,
     moduleType,
     mode,
     context,
@@ -119,6 +130,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
   try {
     const parsed = validateGeneratedPolishResult(JSON.parse(raw), context, {
       sourceCount: rawParagraphs.length || (text.trim() ? 1 : 0),
+      originalSourceCount: originalSourceParagraphs?.length,
       moduleType,
       mode,
     });
