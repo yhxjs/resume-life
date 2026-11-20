@@ -37,7 +37,7 @@ async function findSafeMainPoint(page: Page) {
 for (const reducedMotion of ["no-preference", "reduce"] as const) test.describe(`导航指针 ${reducedMotion}`, () => {
   test.use({ viewport: { width: 1280, height: 900 }, reducedMotion });
   test("悬停后首次点击保持展开，再次点击与外部点击关闭，链接仍能正常跳转", async ({ page }, info) => {
-    await page.goto("/tools"); await page.clock.install();
+    await page.clock.install(); await page.goto("/tools");
     for (const name of ["简历中心", "面试演练", "题库复盘"]) {
       const trigger = page.getByRole("button", { name, exact: true });
       await trigger.hover(); await expect(trigger).toHaveAttribute("aria-expanded", "true");
@@ -56,7 +56,7 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) test.describe(
   });
 
   test("仅悬停会关闭，鼠标移开不能隐藏键盘链接，Tab 离开与 Escape 正确收起", async ({ page }, info) => {
-    await page.goto("/tools"); await page.clock.install(); const trigger = page.getByRole("button", { name: "面试演练", exact: true });
+    await page.clock.install(); await page.goto("/tools"); const trigger = page.getByRole("button", { name: "面试演练", exact: true });
     await trigger.hover(); await page.mouse.move(1, 300); await page.clock.runFor(200); await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await trigger.hover(); const link = group(page).getByRole("link", { name: /^自我介绍/ }); await link.focus();
     await page.mouse.move(1, 300); await page.clock.runFor(200); await expect(link).toBeVisible(); await expect(link).toBeFocused();
@@ -70,12 +70,18 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) test.describe(
   });
 
   test("旧菜单关闭计时不能关闭键盘新开的菜单，普通 Tab 顺序保留", async ({ page }) => {
-    await page.goto("/tools"); await page.clock.install();
+    await page.clock.install(); await page.goto("/tools");
     const first = page.getByRole("button", { name: "简历中心", exact: true }); const next = page.getByRole("button", { name: "面试演练", exact: true });
-    await first.hover(); await page.mouse.move(1, 300); await next.focus(); await next.press("Enter"); await page.clock.runFor(200);
+    // 先确认悬停已被客户端处理，再产生关闭计时；展开后确认链接可参与原生 Tab 顺序。
+    await first.hover(); await expect(first).toHaveAttribute("aria-expanded", "true");
+    await page.mouse.move(1, 300); await next.focus(); await next.press("Enter");
+    const firstLink = group(page).getByRole("link", { name: /^模拟面试/ });
+    await expect(next).toHaveAttribute("aria-expanded", "true"); await expect(firstLink).toBeVisible();
+    await page.clock.runFor(200);
     await expect(first).toHaveAttribute("aria-expanded", "false"); await expect(next).toHaveAttribute("aria-expanded", "true");
+    await expect(next).toBeFocused();
     await expect(page.getByRole("menu")).toHaveCount(0); await expect(page.getByRole("menuitem")).toHaveCount(0);
-    await page.keyboard.press("Tab"); await expect(group(page).getByRole("link", { name: /^模拟面试/ })).toBeFocused();
+    await page.keyboard.press("Tab"); await expect(firstLink).toBeFocused();
     await page.keyboard.press("Shift+Tab"); await expect(next).toBeFocused(); await page.keyboard.press("Escape");
     await page.keyboard.press("Tab"); await expect(page.getByRole("button", { name: "题库复盘", exact: true })).toBeFocused();
   });

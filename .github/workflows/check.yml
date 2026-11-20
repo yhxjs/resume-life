@@ -46,6 +46,15 @@ jobs:
       - run: npm run setup:ocr
       - run: npx playwright install --with-deps chromium
       - run: npm run check:release
+      - name: Upload browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-failure-diagnostics
+          path: |
+            test-results/**/trace.zip
+            test-results/**/error-context.md
+          retention-days: 7
       - name: Unit tests with coverage gate
         run: npm run test:coverage
       # 门禁失败时把 lcov 报告留成 artifact，免得只能在本地复现才能定位缺口

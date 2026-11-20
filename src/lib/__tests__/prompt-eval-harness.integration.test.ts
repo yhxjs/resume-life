@@ -7,6 +7,10 @@ import path from "node:path";
 
 const directories: string[] = [];
 const syntheticKey = "synthetic-harness-key-never-a-real-credential";
+// Windows coverage 并行运行时，嵌套 Vitest 启动与原生图像模块加载可能超过 20 秒。
+// 仅放宽测试子进程的总预算；各 fixture 的模型调用期限仍由独立断言校验。
+const fixtureProcessTimeoutMs = process.platform === "win32" ? 60_000 : 20_000;
+const fixtureTestTimeoutMs = fixtureProcessTimeoutMs + 5_000;
 
 type RateLimitMode = "stop" | "recover" | "cancel-after-429" | "cancel-on-429" | "recover-then-cancel" | "recover-invalid-json" | "503-then-cancel" | "cancel-without-headers";
 
@@ -49,7 +53,7 @@ async function runFixture(live: boolean, ids?: readonly string[], vision = false
   child.stdout.on("data", data => { text += data; });
   child.stderr.on("data", data => { text += data; });
   const code = await new Promise<number | null>((resolve, reject) => {
-    const timer = setTimeout(() => { child.kill(); reject(new Error("Harness fixture exceeded 20s")); }, 20_000);
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`Harness fixture exceeded ${fixtureProcessTimeoutMs / 1000}s`)); }, fixtureProcessTimeoutMs);
     child.once("error", error => { clearTimeout(timer); reject(error); });
     child.once("exit", status => { clearTimeout(timer); resolve(status); });
   });
@@ -142,7 +146,7 @@ describe("评估失败报告（真实输入预检与 Vitest 生命周期，合�
       .map(name => fs.readFileSync(path.join(result.output, name), "utf8")).join("\n");
     for (const hidden of [syntheticKey, "private-progress-observer-never-copy", "https://synthetic.invalid/v1"])
       expect(artifacts + result.text).not.toContain(hidden);
-  }, 25_000);
+  }, fixtureTestTimeoutMs);
 
   it.each([false, true].flatMap(vision => [false, true].map(live => ({ vision, live }))))(
     "只记录调用阶段 typed 响应错误的有限诊断：vision=$vision，live=$live", async ({ vision, live }) => {
@@ -191,7 +195,7 @@ describe("评估失败报告（真实输入预检与 Vitest 生命周期，合�
       for (const hidden of [syntheticKey, "synthetic-private-response-diagnostic-do-not-copy", "https://synthetic.invalid/v1"]) {
         expect(artifacts + result.text).not.toContain(hidden);
       }
-    }, 25_000,
+    }, fixtureTestTimeoutMs,
   );
 
   it.each([
@@ -240,7 +244,7 @@ describe("评估失败报告（真实输入预检与 Vitest 生命周期，合�
     }
     expect(result.text).not.toContain("private-");
     expect(result.text).not.toContain(syntheticKey);
-  }, 25_000);
+  }, fixtureTestTimeoutMs);
 
   it.each([false, true].flatMap(vision => (["complete", "skipped", "missing", "extra"] as const).map(completeness => ({ vision, completeness }))))(
     "样本记录数与预期一致才成功退出：$completeness，vision=$vision", async ({ vision, completeness }) => {
@@ -261,7 +265,7 @@ describe("评估失败报告（真实输入预检与 Vitest 生命周期，合�
       if (recorded === 2) expect(result.read("second")).toMatchObject({ id: "second", raw: null, protocol: "not-run" });
       else expect(fs.existsSync(path.join(result.output, "second.json"))).toBe(false);
       expect(fs.existsSync(path.join(result.output, "data"))).toBe(false);
-    }, 25_000,
+    }, fixtureTestTimeoutMs,
   );
 
   it.each([
@@ -288,7 +292,7 @@ describe("评估失败报告（真实输入预检与 Vitest 生命周期，合�
       expect(fs.existsSync(path.join(result.output, "data"))).toBe(false);
       expect(fs.readdirSync(result.output).filter(name => /^summary-.*\.png$/.test(name))).toEqual([]);
     }
-  }, 25_000);
+  }, fixtureTestTimeoutMs);
 
   it.each([false, true])("预检、调用和校验失败均保留记录且令进程失败，live=%s", async live => {
     const result = await runFixture(live);
@@ -337,7 +341,7 @@ describe("评估失败报告（真实输入预检与 Vitest 生命周期，合�
     for (const hidden of [syntheticKey, "synthetic-private-call-error-do-not-copy", "synthetic-private-validation-error-do-not-copy"]) {
       expect(artifacts + result.text).not.toContain(hidden);
     }
-  }, 25_000);
+  }, fixtureTestTimeoutMs);
 
   it.each([
     { live: true, mode: "stop" },
@@ -389,7 +393,7 @@ describe("评估失败报告（真实输入预检与 Vitest 生命周期，合�
     for (const hidden of [syntheticKey, "synthetic-private-rate-limit-body", "synthetic-private-error-HTTP-429"]) {
       expect(artifacts + result.text).not.toContain(hidden);
     }
-  }, 25_000);
+  }, fixtureTestTimeoutMs);
 
   it.each([
     { mode: "cancel-after-429", statuses: [429], stopped: true, requests: 2 },
@@ -429,5 +433,5 @@ describe("评估失败报告（真实输入预检与 Vitest 生命周期，合�
       if (stopped) expect(after.raw).toBeNull();
     }
     expect(result.read("invalid-after")).toMatchObject({ protocol: "error", failureStage: "input", observedHttpStatuses: [] });
-  }, 25_000);
+  }, fixtureTestTimeoutMs);
 });
