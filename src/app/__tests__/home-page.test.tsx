@@ -34,6 +34,14 @@ beforeEach(() => {
 });
 
 describe("首页行为", () => {
+  it("今日三件事作为唯一主标题放在统计与功能入口之前", async () => {
+    const html = renderToStaticMarkup(await HomePage());
+    expect(html).toContain("今天最重要的三件事</h1>");
+    expect(html.match(/<h1\b/g)).toHaveLength(1);
+    expect(html.indexOf("今天最重要的三件事")).toBeLessThan(html.indexOf("求职漏斗看板"));
+    expect(html.indexOf("今天最重要的三件事")).toBeLessThan(html.indexOf("历史四维均分"));
+  });
+
   it("会话无效时不渲染任何数据，重定向到登录页", async () => {
     vi.mocked(resolveSession).mockReturnValueOnce(null);
     await expect(HomePage()).rejects.toThrow("NEXT_REDIRECT:/login");

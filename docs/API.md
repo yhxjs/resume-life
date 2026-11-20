@@ -318,6 +318,14 @@
 - 详情 GET 和重答回复中的历史为显示投影：旧记录缺失的 answer、comment、created_at 补空字符串，缺失 scores 补 null；已有空日期、无分数、小数分、长正文与缺参考保持兼容，不裁剪或转换错误类型。读取不回写；追加使用原存储记录，保留已有字段和扩展字段。
 - 非数组、不可解析、字段类型损坏或重复编号的历史不可追加：调用模型前和提交事务内均校验，返回 422 并保留原记录。详情 GET 仍返回原题原答，并将该题 retries 置为安全显示用的空数组、附上 retries_error 提示；这不表示原历史为空，页面暂停重答，需刷新核对或恢复有效备份。客户端只在回执编号、实际提交正文和对应历史记录一致时确认成功，不用历史末条替代缺失回执。
 
+### 首页今日重点
+
+`GET /api/home/priorities` 接受可选的 `time_zone`（默认服务器本地时区，首页发送浏览器时区），返回 `{date,items}`。`date` 为该时区的 `YYYY-MM-DD` 日期；`items` 最多三项，不足时不补数，每项含 `id,kind,title,reason,badge,urgent,href,action`，`kind` 为 `interview|materials|review`。端点需要登录，所有响应禁止缓存；无效时区返回 400，读取异常返回统一 500，不以空列表掩盖失败。
+
+顺序为：48 小时内面试、逾期复习、7 天内面试、缺失发布版简历或 JD、今日复习、其他准备资料。同一岗位的面试和资料缺口合并，全部到期复习合为一项；同一优先级的岗位按最近面试时刻、投递 ID 排序。已终止投递不推荐，Offer 岗位仅保留真实待面试提醒。资料只认投递明确关联的发布版本、自我介绍、JD 画像和简历诊断。
+
+存在轮次记录时，只从 `scheduled` 轮次中选最近的未来时刻，取消、完成、无效和过期轮次不回退到遗留汇总时间；没有轮次时使用 `next_interview_at`。筛选和后续比较统一解析时间，带时区值按实际时刻处理，历史无时区时间沿用服务器本地时间语义，展示使用请求时区；读取不改写排期。正投递 ID 链接到对应准备页，历史零／负 ID 链接到投递看板，复习项链接到 `/reviews`。
+
 ### 间隔复习
 
 - `GET /api/reviews`：`scope=due|all`（默认 due，包含逾期）、`source=all|notebook|remedial`、`time_zone`（IANA 时区，可选，默认服务器本地时区）、`limit`（1–100）、`cursor`。返回 `{items,nextCursor,summary}`；按存储到期日、ID 升序分页，条目的 `sort_date` 明确返回存储排序日期，游标基于该字段。未复习卡的展示 `next_review_date` 为用户当地今日，不能据此推断游标或排序。summary 为全局到期/来源/逾期/今日已复习题数，今日已复习按题去重，来源数量为到期题分区。
@@ -465,7 +473,7 @@ DOCX 上传额外保存由服务端提取器生成的 `tableProvenance`，材料
 
 ### 路由列表
 
-共 107 个路由文件。下表按路径分组；同一路径的多个方法写在一起。
+共 108 个路由文件。下表按路径分组；同一路径的多个方法写在一起。
 
 | 路径 | 方法 |
 |---|---|
@@ -495,6 +503,7 @@ DOCX 上传额外保存由服务端提取器生成的 `tableProvenance`，材料
 | `/api/drills/[id]` | GET, DELETE |
 | `/api/drills/[id]/questions/[qid]` | POST |
 | `/api/health` | GET |
+| `/api/home/priorities` | GET |
 | `/api/import/parse` | POST |
 | `/api/import/source/discard` | POST |
 | `/api/interviews` | GET, POST |

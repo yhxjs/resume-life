@@ -7,6 +7,9 @@ import { getOverallScore } from "@/lib/overall-score";
 import { resolveSession, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { STAGES } from "./home-stages";
 import { TodayReviews } from "@/components/reviews/today-reviews";
+import { TodayPriorities } from "@/components/home/today-priorities";
+import { HomeIcon } from "@/components/home/home-icon";
+import homeStyles from "@/components/home/home.module.css";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +37,6 @@ export default async function HomePage() {
   const overallScore = scoreStats?.value ?? null;
 
   const totalInterviewsAndDrills = dbStats ? dbStats.interviews + dbStats.drills : null;
-  const upcoming = appStats?.upcomingInterviews?.[0]; // 最近一场待办面试
 
   return (
     <div className="mx-auto max-w-7xl space-y-8">
@@ -49,116 +51,25 @@ export default async function HomePage() {
         </div>
       )}
 
-      {/* 待办面试快速提醒条（若有未来 7 天待办面试） */}
-      {upcoming && (
-        <div className="flex items-center justify-between gap-4 rounded-xl border border-accent/30 bg-accent-wash px-4 py-3 text-sm text-ink shadow-card-subtle">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span className="flex h-2.5 w-2.5 shrink-0 rounded-full bg-accent animate-pulse" />
-            <span className="font-serif font-bold text-accent shrink-0">面试日程提醒：</span>
-            <span className="truncate text-ink">
-              <strong>{upcoming.company}</strong> · {upcoming.role}
-              {upcoming.next_interview_at && (
-                <span className="ml-2 font-mono text-xs text-muted">
-                  ({new Date(upcoming.next_interview_at).toLocaleString("zh-CN", {
-                    month: "numeric",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })})
-                </span>
-              )}
-            </span>
-          </div>
-          <Link
-            href="/applications"
-            className="shrink-0 text-xs font-medium text-accent hover:underline flex items-center gap-1"
-          >
-            <span>查看日程</span>
-            <span aria-hidden>→</span>
-          </Link>
-        </div>
-      )}
+      <TodayPriorities />
 
-      {/* 顶部 Hero 工作台区域 */}
-      <section className="relative overflow-hidden rounded-2xl border border-line bg-card p-6 sm:p-8 lg:p-10 shadow-card-subtle bg-grain">
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-8">
-          <div className="max-w-2xl space-y-4">
-            <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary-soft px-3 py-1 text-xs font-medium text-primary">
-              <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-primary" />
-              <span>全生命周期 · 结构化求职备考工作台</span>
-            </div>
-
-            <h1 className="font-serif text-[30px] font-bold leading-tight text-ink sm:text-[38px] lg:text-[42px] tracking-tight">
-              智者善谋，以弈求生。
-            </h1>
-            <div aria-hidden className="h-1 w-12 rounded-full bg-primary" />
-
-            <p className="max-w-prose text-sm leading-relaxed text-muted sm:text-[15px]">
-              AI 驱动的结构化求职体系：从沉淀真实技术素材、打磨打印级 A4 简历，到全真高压多轮模考与四维弱项归因 —— 一处通关求职全程。
-            </p>
-          </div>
-
-          {/* 快捷核心行动卡片 */}
-          <div className="flex flex-col sm:flex-row lg:flex-col gap-3 shrink-0 lg:w-72">
-            <Link
-              href="/applications"
-              className="group flex items-center justify-between gap-3 rounded-xl bg-primary px-4 py-3 text-sm font-medium text-on-primary shadow-xs transition-all hover:bg-primary-hover"
-            >
-              <div className="flex items-center gap-2.5">
-                <svg
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                  className="h-4 w-4 shrink-0 text-on-primary/90"
-                  aria-hidden
-                >
-                  <path d="M2 4.25A2.25 2.25 0 0 1 4.25 2h11.5A2.25 2.25 0 0 1 18 4.25v11.5A2.25 2.25 0 0 1 15.75 18H4.25A2.25 2.25 0 0 1 2 15.75V4.25Z" />
-                </svg>
-                <span>求职漏斗看板</span>
-              </div>
-              <span className="text-xs text-on-primary/80 transition-transform group-hover:translate-x-0.5">
-                {appStats ? (appStats.totalActive > 0 ? `${appStats.totalActive} 条推进中 →` : "进入管理 →") : "查看看板 →"}
-              </span>
-            </Link>
-
-            <Link
-              href="/interviews"
-              className="group flex items-center justify-between gap-3 rounded-xl border border-line-strong bg-card px-4 py-2.5 text-sm font-medium text-ink transition-all hover:bg-surface hover:border-primary/40 shadow-xs"
-            >
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-2 w-2 rounded-full bg-accent" />
-                <span>开启全真模考</span>
-              </div>
-              <span className="text-xs text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-primary">
-                技术/HR 连打 →
-              </span>
-            </Link>
-
-            <Link
-              href="/resumes"
-              className="group flex items-center justify-between gap-3 rounded-xl border border-line-strong bg-card px-4 py-2.5 text-sm font-medium text-ink transition-all hover:bg-surface hover:border-primary/40 shadow-xs"
-            >
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-2 w-2 rounded-full bg-primary" />
-                <span>管理我的简历</span>
-              </div>
-              <span className="text-xs text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-primary">
-                {dbStats ? `${dbStats.resumes} 份已存 →` : "查看简历 →"}
-              </span>
-            </Link>
-          </div>
-        </div>
-
-        {/* 右下角文房印章装饰水印 */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -bottom-6 -right-3 select-none font-serif text-[130px] font-black text-ink opacity-[0.03]"
-        >
-          弈
-        </div>
-      </section>
+      <nav aria-label="快捷行动" className={`${homeStyles.quickActions} grid grid-cols-3 overflow-hidden rounded-2xl border border-line bg-card`}>
+        <Link href="/applications" className="group flex min-w-0 flex-col items-center gap-2.5 px-2 py-4 text-center transition-colors hover:bg-surface focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-primary sm:flex-row sm:gap-3 sm:px-5 sm:text-left">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-soft/60 text-primary transition-colors group-hover:bg-primary-soft"><HomeIcon kind="applications" /></span>
+          <span className="min-w-0"><span className="block text-xs font-semibold text-ink sm:text-sm">求职漏斗看板</span><span className="mt-1 block text-[11px] text-muted">{appStats ? (appStats.totalActive > 0 ? `${appStats.totalActive} 条推进中 →` : "进入管理 →") : "查看看板 →"}</span></span>
+        </Link>
+        <Link href="/interviews" className="group flex min-w-0 flex-col items-center gap-2.5 px-2 py-4 text-center transition-colors hover:bg-surface focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-primary sm:flex-row sm:gap-3 sm:px-5 sm:text-left">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-wash text-accent"><HomeIcon kind="interview" /></span>
+          <span className="min-w-0"><span className="block text-xs font-semibold text-ink sm:text-sm">开启全真模考</span><span className="mt-1 block text-[11px] text-muted">练习表达 →</span></span>
+        </Link>
+        <Link href="/resumes" className="group flex min-w-0 flex-col items-center gap-2.5 px-2 py-4 text-center transition-colors hover:bg-surface focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-primary sm:flex-row sm:gap-3 sm:px-5 sm:text-left">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-soft/60 text-primary transition-colors group-hover:bg-primary-soft"><HomeIcon kind="materials" /></span>
+          <span className="min-w-0"><span className="block text-xs font-semibold text-ink sm:text-sm">管理我的简历</span><span className="mt-1 block text-[11px] text-muted">{dbStats ? `${dbStats.resumes} 份已存 →` : "查看简历 →"}</span></span>
+        </Link>
+      </nav>
 
       {/* 4 宫格数字档案指标概览 */}
-      <section className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+      <section aria-label="求职概览" className={`${homeStyles.metrics} grid grid-cols-2 overflow-hidden rounded-2xl border border-line bg-card lg:grid-cols-4`}>
         <Link
           href="/resumes"
           className="group rounded-xl border border-line bg-card p-4 shadow-card-subtle transition-all hover:border-primary/40 hover:bg-surface/30"
@@ -173,9 +84,9 @@ export default async function HomePage() {
             </span>
             <span className="text-xs text-faint">份已存简历</span>
           </div>
-          <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted">
+          <div className="mt-3 flex items-center justify-between gap-3 border-t border-line/60 pt-2 text-[11px] text-muted">
             <span>{dbStats ? "支持 A4 打印与导出" : "简历统计读取失败"}</span>
-            <span className="font-medium text-primary group-hover:underline">查看 ↗</span>
+            <span className="shrink-0 whitespace-nowrap font-medium text-primary group-hover:underline">查看 ↗</span>
           </div>
         </Link>
 
@@ -193,9 +104,9 @@ export default async function HomePage() {
             </span>
             <span className="text-xs text-faint">条投递记录</span>
           </div>
-          <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted">
+          <div className="mt-3 flex items-center justify-between gap-3 border-t border-line/60 pt-2 text-[11px] text-muted">
             <span>{appStats ? `面试中 ${appStats.counts.interviewing} · Offer ${appStats.counts.offer}` : "投递统计读取失败"}</span>
-            <span className="font-medium text-accent group-hover:underline">看板 ↗</span>
+            <span className="shrink-0 whitespace-nowrap font-medium text-accent group-hover:underline">看板 ↗</span>
           </div>
         </Link>
 
@@ -213,9 +124,9 @@ export default async function HomePage() {
             </span>
             <span className="text-xs text-faint">条演练记录</span>
           </div>
-          <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted">
+          <div className="mt-3 flex items-center justify-between gap-3 border-t border-line/60 pt-2 text-[11px] text-muted">
             <span>{dbStats ? `${dbStats.interviews} 场模考 · ${dbStats.drills} 组练习` : "演练统计读取失败"}</span>
-            <span className="font-medium text-primary group-hover:underline">演练 ↗</span>
+            <span className="shrink-0 whitespace-nowrap font-medium text-primary group-hover:underline">演练 ↗</span>
           </div>
         </Link>
 
@@ -243,11 +154,11 @@ export default async function HomePage() {
               </>
             )}
           </div>
-          <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2 text-[11px] text-muted">
+          <div className="mt-3 flex items-center justify-between gap-3 border-t border-line/60 pt-2 text-[11px] text-muted">
             <span>
               {scoreStats === null ? "评分读取失败，请刷新重试" : overallScore !== null ? "基于已评分的练习与模考" : "练习或模考评分后显示"}
             </span>
-            <span className="font-medium text-primary group-hover:underline">复盘 ↗</span>
+            <span className="shrink-0 whitespace-nowrap font-medium text-primary group-hover:underline">复盘 ↗</span>
           </div>
         </Link>
       </section>
