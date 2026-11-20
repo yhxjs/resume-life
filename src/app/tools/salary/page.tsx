@@ -113,6 +113,11 @@ export default function SalaryNegotiationListPage() {
       </div>
 
       {/* 新建谈判演练工作台 */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-surface p-4">
+        <p className="text-sm text-muted">已有两份实际 Offer？结合收入、时间成本和个人偏好，再决定如何谈。</p>
+        <Link href="/tools/offer" className={btnGhost}>比较 Offer 实际价值 →</Link>
+      </div>
+
       <div className={`space-y-6 p-6 sm:p-7 ${cardCls}`}>
         <div className="border-b border-line pb-4">
           <h2 className="font-serif text-lg font-bold text-ink">发起一场薪酬博弈演练</h2>

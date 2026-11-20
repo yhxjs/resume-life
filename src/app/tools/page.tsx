@@ -37,6 +37,13 @@ const TOOLS = [
     actionText: "开始薪酬谈判练习",
   },
   {
+    href: "/tools/offer",
+    title: "Offer 实际价值比较器",
+    desc: "并排比较两份 Offer 的固定收入、浮动收入、工时、通勤与个人偏好，计算三种情景并整理待向 HR 确认的问题。",
+    badge: "情景测算 · 选择参考",
+    actionText: "比较两份 Offer",
+  },
+  {
     href: "/tools/portfolio",
     title: "个人作品集与静态主页",
     desc: "选择简历草稿或发布版，按需加入项目档案，调整模板与主题并实时预览、下载静态主页。基础身份信息默认脱敏，项目正文仍需自行核对。",
@@ -55,7 +62,7 @@ export default function ToolsPage() {
             求职特战工具箱
           </h1>
           <p className="mt-1 max-w-prose text-sm text-muted leading-relaxed">
-            轻量实用外挂工具矩阵，随取随用，覆盖考点解码、简历审阅、敏感经历表达与薪酬谈判练习。
+            轻量实用外挂工具矩阵，随取随用，覆盖考点解码、简历审阅、敏感经历表达、薪酬谈判练习与 Offer 比较。
           </p>
         </div>
       </div>

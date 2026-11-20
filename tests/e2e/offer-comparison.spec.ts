@@ -1,0 +1,31 @@
+import { expect, test } from "@playwright/test";
+
+test("从工具箱比较 Offer，切换假设并核实问题，窄屏保持可用", async ({ page }, testInfo) => {
+  await page.goto("/tools");
+  await page.getByRole("link", { name: /Offer 实际价值比较器/ }).click();
+  await expect(page.getByRole("heading", { name: "Offer 实际价值比较器" })).toBeVisible();
+  await page.getByRole("button", { name: "用示例体验" }).click();
+  const results = page.getByRole("region", { name: "比较结果", exact: true });
+  await expect(results.getByText(/Offer A 每年成本后现金多 31,000 元/)).toBeVisible();
+  await page.getByRole("button", { name: "检查并查看比较" }).click();
+  await page.screenshot({ path: testInfo.outputPath("offer-desktop.png"), fullPage: true });
+  await results.getByRole("button", { name: "保守", exact: true }).click();
+  await expect(results.getByText(/Offer A 每年成本后现金多 14,000 元/)).toBeVisible();
+  const a = page.getByRole("region", { name: "Offer A 条件" });
+  await a.getByText("调整三种情景的兑现假设", { exact: true }).click();
+  await a.getByLabel("中性奖金兑现（%）").fill("80");
+  await results.getByRole("button", { name: "中性", exact: true }).click();
+  await expect(results.getByText(/Offer A 每年成本后现金多 58,000 元/)).toBeVisible();
+  await a.getByLabel("奖金兑现与发放条件").check();
+  await expect(page.getByRole("region", { name: "Offer A 确认清单" }).getByText(/年度目标奖金/)).toHaveCount(0);
+  await a.getByLabel("税前月固定工资").fill("");
+  await expect(results.getByText(/情景下的取舍/)).toHaveCount(0);
+  await page.getByRole("button", { name: "检查并查看比较" }).click();
+  await expect(a.getByLabel("税前月固定工资")).toHaveAttribute("aria-invalid", "true");
+  await a.getByLabel("税前月固定工资").fill("30000");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "检查并查看比较" }).click();
+  await expect(results.getByRole("button", { name: "乐观", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("offer-mobile.png"), fullPage: true });
+});
