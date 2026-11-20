@@ -11,6 +11,8 @@ import { ScanRepoModal } from "./scan-repo-modal";
 import { useProjectDetail } from "./use-project-detail";
 import { useProjectRepoPaths } from "./use-project-repo-paths";
 import { ProjectSummaryHistory } from "./project-summary-history";
+import { ProjectEvidencePanel } from "./project-evidence-panel";
+import type { ScanEvidenceFile } from "@/lib/evidence-challenge";
 
 export default function ProjectDetailPage() {
   const params = useParams<{ id: string }>();
@@ -22,6 +24,7 @@ function ProjectDetailSession({ id }: { id: string }) {
   const view = useProjectDetail(id);
   const repoPathsManager = useProjectRepoPaths(id);
   const [scanModalOpen, setScanModalOpen] = useState(false);
+  const [sourceFiles, setSourceFiles] = useState<ScanEvidenceFile[]>([]);
 
   if (view.error && !view.data) return <LoadError message={view.error} onRetry={view.retryLoad} />;
   if (!view.data) return <Loading />;
@@ -101,6 +104,13 @@ function ProjectDetailSession({ id }: { id: string }) {
         />
       </div>
 
+      <ProjectEvidencePanel projectId={data.id} materials={data.materials} sourceFiles={sourceFiles}
+        savedSummary={data.summary} repoPaths={repoPathsManager.repoPaths} onSourceFilesChange={setSourceFiles}
+        onRepoPathSelected={repoPathsManager.addPath} onImportMaterial={() => {
+          const input = document.getElementById("project-material-title");
+          input?.scrollIntoView({ behavior: "smooth", block: "center" }); input?.focus({ preventScroll: true });
+        }}
+        hasMore={Boolean(material.materialsNextCursor)} loadingMore={material.loadingMoreMaterials} onLoadMore={material.loadMoreMaterials} />
       <ProjectSummaryHistory projectId={data.id} revisionId={data.summary_revision_id ?? 0} />
 
       <ScanRepoModal
@@ -110,7 +120,8 @@ function ProjectDetailSession({ id }: { id: string }) {
         repoPaths={repoPathsManager.repoPaths}
         onPathsChange={repoPathsManager.setRepoPaths}
         onClose={() => setScanModalOpen(false)}
-        onSuccess={(scanned, repoPath) => {
+        onSuccess={(scanned, repoPath, files) => {
+          setSourceFiles(files ?? []);
           summary.applyDraft(
             {
               ...scanned,

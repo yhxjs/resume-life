@@ -57,7 +57,7 @@ export interface RunScanOptions {
   onDelta?: (text: string, log?: string) => void;
 }
 
-export interface ScanResult { summary: ProjectSummary; cliUsed: CliType; rawOutput: string; logs: string[] }
+export interface ScanResult { summary: ProjectSummary; cliUsed: CliType; rawOutput: string; logs: string[]; sourceSnapshot?: string }
 
 const activeScans = new Set<string>();
 
@@ -116,7 +116,7 @@ export async function runRepoScan(options: RunScanOptions): Promise<ScanResult> 
     }
     if (issue) throw new Error(`CLI 输出未通过完整八字段项目总结 JSON 校验：${issue.message}`);
     addLog("[完成] 项目总结解析完成");
-    return { summary: normalizeSummary(parsed), cliUsed: chosen, rawOutput: stdout, logs };
+    return { summary: normalizeSummary(parsed), cliUsed: chosen, rawOutput: stdout, logs, sourceSnapshot: source };
   } finally {
     activeScans.delete(key);
     if (workdir) await cleanupCliWorkdir(workdir, "scan");

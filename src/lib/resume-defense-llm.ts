@@ -2,6 +2,7 @@ import { METRIC_EVIDENCE_RULES, QUESTION_CONTENT_RULES, REFERENCE_ANSWER_RULES }
 import { RESUME_DEFENSE_OUTPUT_LIMITS as LIMITS } from "./resume-defense";
 import { RESUME_DEFENSE_DRILL_OUTPUT_LIMITS as DRILL_LIMITS } from "./model-protocol";
 import type { PromptPart, SafeMessage } from "./safe-llm";
+import { EVIDENCE_CHALLENGE_RULES } from "./evidence-challenge";
 
 /** 简历排雷与防御演练的 LLM 提示词与交互逻辑 */
 
@@ -91,6 +92,7 @@ export function buildResumeDefenseScanMessages(targetRole: string, resumeContent
 // 用户材料必须保持为 safeChat 的 untrusted parts，由 wrapUntrustedData 转义标签边界。
 
 export const RESUME_DEFENSE_DRILL_SYSTEM_PROMPT = `你是一名严格、直接、实事求是的技术面试官，点评针对回答内容，不羞辱候选人。
+${EVIDENCE_CHALLENGE_RULES}
 候选人正在练习回应简历某处表述的追问。原排雷结论只是待核实的线索，不代表已证实存在高危漏洞或造假。
 
 【材料与评分边界】

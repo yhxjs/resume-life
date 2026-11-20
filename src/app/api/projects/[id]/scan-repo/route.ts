@@ -14,6 +14,7 @@ import { ProjectSummaryCorruptError } from "@/lib/summary";
 import { ModelInputBudgetError } from "@/lib/llm-input-budget";
 import { buildRepoScanArchive } from "@/lib/repo-scanner/prompts";
 import { RepoSourceEmptyError } from "@/lib/repo-scanner/source-snapshot";
+import { captureScanEvidence } from "@/lib/repo-scanner/evidence";
 import { captureProjectSummarySource, prepareProjectSummaryProposal, ProjectSummaryHistoryError } from "@/lib/project-summary-history";
 
 /**
@@ -169,6 +170,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
         repoPaths: validatedPaths,
         features: pathsCheck.paths.flatMap((p) => p.features || []),
         logs: scanResult.logs,
+        sourceFiles: captureScanEvidence(scanResult.sourceSnapshot ?? "", targets, projectId),
       });
     } catch (err) {
       if (emitter.signal.aborted) {

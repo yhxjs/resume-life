@@ -41,16 +41,16 @@ const goldens = {
     "summaryFull": "a5f53eaef97f0f1b7cf47f92f26f160d33e85b73751280e88c53b943c1414b10",
     "summaryResume": "71688853544278bd22d2457b203d138617628c1f8c24601a7f0663fe10a2fddb",
     "context": "b0f4e4e3c98dde11853e473bfffc1f868e4e0cbdbfd9de7d4182b07ec4f81d4f",
-    "question": "f55c9810c5774d70702b54637fd5af9ef459a5f2fb5fc24a1029a4ed88a034c7",
-    "grade": "161cfd16ba53619184dcba44c5b9091e51733a660fabe1b32ee6c7fe0eff83bb"
+    "question": "0015db2194e2ab95371eabd02c766ec7244dd76a2b12b52e20cc80e61fbfc9f0",
+    "grade": "35282dee28e95e9593a8453d2f17a1bf12c91a77fa36361f6ff1b8740b6e6e7f"
   },
   "legacy": {
     "materialText": "c97f4da1f0694689e6603006586f7a970073f2ffd2ace006d30d65e0b8d1572d",
     "summaryFull": "759f11ccbfc3bc132a7a0452a5e7b7a9ef99fdfee8eb9acbb865ebe568c4c776",
     "summaryResume": "8618ba756de2f3c9d67fe15a42d540bfec7f95fe412e6eb15505c547fdd7f6be",
     "context": "404ee2eb225ea13fde21bed4d39b53c5e56c7787a926e1a31a89182582e512a8",
-    "question": "18137a571c8bf664aa67c909b285d21b79cc8916930a56724af1f4e67010beb2",
-    "grade": "2342a1a68f99f73cdc487eb00d3bef7d7afcc87f0f36ec11522ebaf92a10f3e0"
+    "question": "016027f36b7d7f97508c08b2bc0706a3f57d00a68a3124eb8ccb962da52c065c",
+    "grade": "affb19336ef3cee9b3b8e17c54e7cd075a8433c6657a967ab209295b0c938e97"
   },
   "native": {
     "materialText": "f0b3a919a1c7b0ec1faa4cb4c35e984b35b0ecfe981424249943f98eafcff4d8",

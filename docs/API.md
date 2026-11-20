@@ -395,6 +395,12 @@ DOCX 上传额外保存由服务端提取器生成的 `tableProvenance`，材料
 
 `PATCH /api/projects/[id]` 的 `summary` 若提供，必须包含全部当前字段：正文各字段为字符串，`achievements` 为字符串数组；缺失字段、错误类型、未知字段、`null` 和数组根结构返回 400，不修改项目或新增总结历史。合法空字符串与空数组允许主动清空，总结采用整体替换语义。仅修改项目名称时可省略 `summary`。
 
+`POST /api/projects/[id]/evidence-sources` 接受 `{repoPaths: string[]}`，原始数组须含 1–32 个非空目录，沿用仓库扫描的路径校验与受限源码读取，返回 `{sourceFiles}`，不调用模型或保存项目档案。每个文件含 `locator`、`content`、`truncated`、`capturedAt` 与 `receipt`；回执绑定当前数据世代、项目与全部文件字段，有效期一小时，服务重启后失效。创建练习时原样提交所选文件，不以客户端路径重新读盘。
+
+`POST /api/projects/[id]/evidence-drill` 与 `/evidence-drill/recommend` 必须且只能选择一种依据：材料用 `materialId`、`revision`、`startLine`、`endLine`；代码用完整 `scanFile`、`startLine`、`endLine`；已保存档案用 `summaryKey`、完整 `summaryContent` 和连续原文 `summaryQuote`。摘录限 1–280 字，材料和代码行号从 1 开始。服务端核对材料修订、代码回执或当前档案正文；失配返回 400，项目不存在返回 404，损坏档案返回 422。题目保存来源、版本、定位和摘录；Word 材料仅保留所选范围的服务端表格来源，有定位说明时按顺序分别保存正文与定位片段，每段使用 JSON 字符串引用，避免提示词转义改变来源归属。普通正文与来源未知分开，未选择的表头和合并关系保持未知。后续评分及收藏复习使用已保存快照。
+
+手动创建另需 `mode`、`baseline`、`change`：方式来自共用追问清单，原条件最多 80 字，变化条件最多 100 字，自定义变化不能为空。返回 `201 {id,count:1}`；同一项目内完全相同的依据与条件复用已有练习。智能推荐另需整数 `count`（1–5），成功返回 `201 {id,count,questions}`；材料不足可少于请求数量，每题附同一依据快照。模型等待不占用数据库事务，保存前重新核对依据；等待期间依据变化或项目删除返回 400，不保存题目。同项目已有推荐在运行时返回 409；模型输入超限返回 413，调用或返回题目校验失败返回 502，不保存部分结果。
+
 目录浏览 `GET /api/projects/[id]/scan-repo?action=browse&path=...` 先验证项目 ID 与存在性；省略或空白路径时使用宿主用户主目录。指定目标不存在返回 `404`，目标为普通文件、系统报告 `ENOTDIR` 或路径含 NUL 返回 `400`，权限不足（`EACCES`／`EPERM`）返回 `403`，其他读取异常使用统一脱敏 `500`。失败不会改为浏览主目录，也不会伪装成空目录成功。成功返回 `currentPath`、`parentPath`、`drives`、`entries` 和 `truncated`；可见子目录按名称选取最多 200 项，再将带代码工程标识的目录排在前面，超过上限时 `truncated: true`。个别子目录的标识探测失败不阻止父目录列表。页面显示读取失败目标并禁用确认，显式重试同一目标；列表截断时提示可取消后输入完整路径重新浏览。浏览与重试不启动扫描或写入项目材料。
 
 目录浏览的目标检查、列表读取及工程标识探测均异步执行；每次请求最多同时探测 4 个子目录，逐批读取文件名并在发现标识时停止，关闭已打开的目录句柄。请求取消后返回 `499 {"error":"请求已取消"}`，不再调度后续探测，盘符枚举子进程也收到取消信号。已经提交的文件系统操作不能被强制中断，需等待其返回后检查取消并清理句柄；此机制不为慢磁盘或网络文件系统承诺固定完成期限。
@@ -455,7 +461,7 @@ DOCX 上传额外保存由服务端提取器生成的 `tableProvenance`，材料
 
 ### 路由列表
 
-共 104 个路由文件。下表按路径分组；同一路径的多个方法写在一起。
+共 107 个路由文件。下表按路径分组；同一路径的多个方法写在一起。
 
 | 路径 | 方法 |
 |---|---|
@@ -514,6 +520,9 @@ DOCX 上传额外保存由服务端提取器生成的 `tableProvenance`，材料
 | `/api/portfolio/sources` | GET |
 | `/api/projects` | GET, POST |
 | `/api/projects/[id]` | GET, PATCH, DELETE |
+| `/api/projects/[id]/evidence-drill` | POST |
+| `/api/projects/[id]/evidence-drill/recommend` | POST |
+| `/api/projects/[id]/evidence-sources` | POST |
 | `/api/projects/[id]/materials` | POST |
 | `/api/projects/[id]/materials/[mid]` | GET, PATCH, DELETE |
 | `/api/projects/[id]/scan-repo` | GET, POST |

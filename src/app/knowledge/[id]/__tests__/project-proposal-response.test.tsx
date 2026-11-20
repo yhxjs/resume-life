@@ -74,7 +74,7 @@ describe("源码扫描草稿回包校验", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "开始扫描并提炼" })); });
     act(() => vi.advanceTimersByTime(400));
     expect(onSuccess).toHaveBeenCalledOnce();
-    expect(onSuccess).toHaveBeenCalledWith(valid(), "D:\\synthetic\\repo");
+    expect(onSuccess).toHaveBeenCalledWith(valid(), "D:\\synthetic\\repo", []);
     expect(onClose).toHaveBeenCalledOnce();
   });
 });

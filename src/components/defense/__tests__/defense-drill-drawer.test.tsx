@@ -33,6 +33,24 @@ function send(text = saved().userAnswer) {
 }
 
 describe("演练提交快照与互斥", () => {
+  it("代码定位与替代方案保存到本次问题，提交后修改草稿不改变已提交快照", async () => {
+    const pending = deferred<unknown>(); vi.mocked(jsonFetch).mockReturnValueOnce(pending.promise);
+    mount();
+    fireEvent.click(screen.getByText("定位依据与条件变化"));
+    fireEvent.change(screen.getByLabelText("来源位置"), { target: { value: "src/queue.ts L2–3" } });
+    fireEvent.change(screen.getByLabelText(/依据原文/), { target: { value: "await save(order);" } });
+    fireEvent.change(screen.getByLabelText("追问方式"), { target: { value: "alternative" } });
+    fireEvent.change(screen.getByLabelText("替代方案"), { target: { value: "异步队列" } });
+    fireEvent.click(screen.getByRole("button", { name: "应用到本次问题" }));
+    send();
+    const submitted = JSON.parse(vi.mocked(jsonFetch).mock.calls[0]![1]!.body as string);
+    expect(submitted.question).toContain("src/queue.ts L2–3");
+    expect(submitted.question).toContain("await save(order);");
+    expect(submitted.question).toContain("假设改用「异步队列」");
+    fireEvent.change(screen.getByLabelText("本次问题（可编辑）"), { target: { value: "新问题" } });
+    await act(async () => pending.resolve(saved({ question: submitted.question })));
+    expect(screen.getByRole("status").textContent).toContain("问题或回答已修改");
+  });
   it("同一事件重复提交只发一次，等待仍能修改草稿，完整响应按原快照展示", async () => {
     const pending = deferred<unknown>(); vi.mocked(jsonFetch).mockReturnValueOnce(pending.promise);
     const view = mount();

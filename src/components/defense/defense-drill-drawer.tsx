@@ -8,12 +8,15 @@ import { readDefenseDetail, readDefenseDrill } from "@/lib/resume-defense-detail
 import {
   btnGhost,
   btnPrimary,
+  inputCls,
   textareaTallCls,
   textErr,
 } from "@/lib/ui";
 import { errorMessage } from "@/lib/error-message";
 import { DefenseQuote } from "@/components/defense/defense-quote";
 import { DefenseScoreTag } from "@/components/defense/defense-badges";
+import { ChallengeConditionsEditor } from "./challenge-conditions";
+import { challengeQuestion, type ChallengeConditions } from "@/lib/evidence-challenge";
 
 interface DefenseDrillDrawerProps {
   defenseId: number;
@@ -48,6 +51,9 @@ function DefenseDrillForm({
     "请解释这段表述的具体含义、个人职责与可确认依据。";
   const answerId = useId();
   const [selectedQuestion, setSelectedQuestion] = useState(initialQuestion);
+  const [conditions, setConditions] = useState<ChallengeConditions>({ mode: "scale", baseline: "", change: "" });
+  const [locator, setLocator] = useState("");
+  const [excerpt, setExcerpt] = useState("");
   const [answer, setAnswer] = useState(existingDrill?.userAnswer || "");
   const [phase, setPhase] = useState<"idle" | "submitting" | "checking" | "unknown">("idle");
   const [error, setError] = useState("");
@@ -242,6 +248,22 @@ function DefenseDrillForm({
           </div>
 
           {/* 防御答题区 */}
+          <details className="rounded-xl border border-line p-3 space-y-3">
+            <summary className="cursor-pointer text-sm font-semibold text-ink">定位依据与条件变化</summary>
+            <p className="text-xs text-muted">可粘贴代码或设计摘录并标明文件、行号或章节。这里的补充为用户提供，尚未核验；应用后会随本次问题保存。</p>
+            <label className="block text-xs text-muted">来源位置
+              <input className={inputCls} maxLength={180} value={locator} onChange={event => setLocator(event.target.value)} placeholder="例如：src/queue.ts L20–28，或设计文档 §3.2" />
+            </label>
+            <label className="block text-xs text-muted">依据原文（留空则引用当前简历原句）
+              <textarea className={textareaTallCls} maxLength={280} value={excerpt} onChange={event => setExcerpt(event.target.value)} />
+            </label>
+            <ChallengeConditionsEditor value={conditions} onChange={setConditions} />
+            <button type="button" className={btnGhost} disabled={(Boolean(excerpt.trim()) && !locator.trim()) || (conditions.mode === "custom" && !conditions.change.trim())}
+              onClick={() => setSelectedQuestion(`依据（用户提供，待核实）：${locator.trim() || item.sectionHint}\n原文摘录：\n${excerpt.trim() || item.originalText}\n\n${challengeQuestion(conditions)}`)}>应用到本次问题</button>
+          </details>
+          <label className="block space-y-1 text-xs text-muted">本次问题（可编辑）
+            <textarea className={textareaTallCls} value={selectedQuestion} onChange={event => setSelectedQuestion(event.target.value)} />
+          </label>
           <form onSubmit={handleSubmit} className="space-y-3">
             <div className="flex items-center justify-between">
               <label htmlFor={answerId} className="text-xs font-bold text-ink flex items-center gap-1.5">

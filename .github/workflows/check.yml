@@ -1,6 +1,9 @@
 name: Release checks
-on: [push, pull_request]
-# 同一分支的连续推送只保留最新一次检查，取消已过时的 run，避免 job 叠加
+on:
+  push:
+    tags:
+      - '**'
+# 同一 tag 的连续推送只保留最新一次检查，取消已过时的 run，避免 job 叠加
 concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: true
@@ -171,9 +174,9 @@ jobs:
           CHECK_RESULTS: ${{ toJSON(needs) }}
         run: node -e 'const results = JSON.parse(process.env.CHECK_RESULTS); if (Object.values(results).some(job => job.result !== "success")) { console.error(results); process.exit(1); }'
 
-  # 制品证明只在受信任的默认分支推送中执行，普通 PR 只需要读权限即可完成检查。
+  # tag 推送通过全部检查后生成制品证明。
   attest:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 10

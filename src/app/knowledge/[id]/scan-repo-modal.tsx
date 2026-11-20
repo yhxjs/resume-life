@@ -9,6 +9,7 @@ import { fetchSse } from "@/lib/fetch-sse";
 import { readProjectSummaryProposal, type ProjectSummaryProposal } from "@/lib/project-summary-proposal";
 import { errorMessage } from "@/lib/error-message";
 import { DirectoryPickerDialog } from "./directory-picker-dialog";
+import type { ScanEvidenceFile } from "@/lib/evidence-challenge";
 
 interface DetectedClisResponse {
   codex: { available: boolean; path?: string };
@@ -28,7 +29,7 @@ interface ScanRepoModalProps {
   repoPaths?: string[];
   onPathsChange?: (paths: string[]) => void;
   onClose: () => void;
-  onSuccess: (proposal: ProjectSummaryProposal, repoPath: string) => void;
+  onSuccess: (proposal: ProjectSummaryProposal, repoPath: string, sourceFiles?: ScanEvidenceFile[]) => void;
 }
 
 export function ScanRepoModal(props: ScanRepoModalProps) {
@@ -218,7 +219,12 @@ function ScanRepoSession({
             setStatusText("扫描提炼完成！正在载入工作台草稿...");
             setTimeout(() => {
               if (!isCurrent()) return;
-              onSuccess(received, finalPaths.join(" ; "));
+              const files = (data as { sourceFiles?: ScanEvidenceFile[] }).sourceFiles;
+              if (files !== undefined && (!Array.isArray(files) || files.some(file => !file || typeof file.locator !== "string" || typeof file.content !== "string" || typeof file.receipt !== "string" || typeof file.capturedAt !== "string" || typeof file.truncated !== "boolean"))) {
+                setErrorMsg("扫描依据响应不完整，请重新扫描");
+                return;
+              }
+              onSuccess(received, finalPaths.join(" ; "), files ?? []);
               onClose();
             }, 400);
           },

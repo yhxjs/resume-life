@@ -41,7 +41,7 @@ type DrillData = {
   questions: Question[];
 };
 
-const KIND_LABELS: Record<string, string> = { tech: "八股", behavior: "行为" };
+const KIND_LABELS: Record<string, string> = { tech: "八股", behavior: "行为", evidence: "依据与条件变化" };
 type AnswerDraft = { text: string };
 
 /** 练习标题副标：项目题显示项目名，追练题显示追练重点，题库题显示方向或 JD 摘要 */
@@ -347,9 +347,12 @@ function DrillSession({ drillId }: { drillId: string }) {
 
             {/* 考题描述 */}
             <div className="space-y-2">
-              <h2 className="min-w-0 break-words font-serif text-lg sm:text-xl font-bold text-ink leading-relaxed" style={{ overflowWrap: "anywhere" }}>
+              {current.kind === "evidence" ? <>
+                <h2 className="font-serif text-lg font-bold text-ink">依据与条件变化</h2>
+                <p className="min-w-0 whitespace-pre-wrap break-words rounded-lg bg-surface p-3 font-mono text-sm leading-relaxed text-ink [overflow-wrap:anywhere]">{current.question}</p>
+              </> : <h2 className="min-w-0 break-words font-serif text-lg sm:text-xl font-bold text-ink leading-relaxed" style={{ overflowWrap: "anywhere" }}>
                 {current.question}
-              </h2>
+              </h2>}
             </div>
 
             {/* 作答输入区 */}

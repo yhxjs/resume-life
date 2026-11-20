@@ -4,6 +4,7 @@ import { hasQuestionContent } from "@/lib/question-normalization";
 import { validateGeneratedScores } from "@/lib/scores";
 import type { PromptPart, SafeMessage } from "@/lib/safe-llm";
 import { projectInterviewContextHasTableDocument } from "./project-interview-context";
+import { EVIDENCE_CHALLENGE_RULES } from "./evidence-challenge";
 
 const DRILL_OUTPUT_RULES = `只输出一个 JSON 对象，恰含以下六个字段：
 - depth、structure、authenticity、completeness：各为 0 到 10 的整数，分别依据本次原答确定，不提供示例分数或默认分。技术依据薄弱不自动等于表达混乱或事实矛盾；给任一维度低分时，应有该维度自己的证据，不能将同一个技术缺口复制成四维清零。
@@ -34,6 +35,7 @@ const PROJECT_EVAL_REFERENCE_SCOPE_RULES = `
 若本题回答或同一项目更正明确使用“只／仅／未参与”等排他限定，reference应以等义措辞保留该职责范围，不能弱化为只描述某项正向动作。`;
 
 export const PROJECT_EVAL_PROMPT = `你是面试官。候选人针对项目面试题提交了书面回答，请依据题目范围评分。
+${EVIDENCE_CHALLENGE_RULES}
 ${ANSWER_SCORING_RULES}
 ${REFERENCE_ANSWER_RULES}
 ${PROJECT_INTERVIEW_CONTEXT_RULES}

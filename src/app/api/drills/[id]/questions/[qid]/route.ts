@@ -54,9 +54,11 @@ async function handlePost(
   // 追练使用创建时的 JD 快照；旧追练缺少快照时仅回退到关联面试，不修改历史记录。
   // 项目题带项目档案评分；题库题与追练用方向/JD 作背景。
   const isBankDrill = drill.source === "bank" || drill.project_id === null;
+  const usesEvidenceSnapshot = drill.source === "project" && question.kind === "evidence";
   let projectContext = "";
   try {
-    if (!isBankDrill) projectContext = await loadProjectContext(drill.project_id!);
+    if (usesEvidenceSnapshot) projectContext = "本题仅使用题干保存的依据快照与条件；未提供完整项目档案，不能据此推断全文缺失或个人职责。";
+    else if (!isBankDrill) projectContext = await loadProjectContext(drill.project_id!);
   } catch (err) {
     if (err instanceof ProjectNotFoundError) return NextResponse.json({ error: err.message }, { status: 404 });
     if (err instanceof ProjectSummaryCorruptError) return NextResponse.json({ error: err.message }, { status: 422 });
@@ -93,7 +95,7 @@ async function handlePost(
     const currentDrill = drillQuery.get(drillId);
     if (!currentDrill) return "missing";
     if (JSON.stringify(currentDrill) !== JSON.stringify(drill)
-      || (!isBankDrill && !projectContextMatches(drill.project_id!, projectContext))) return "context-conflict";
+      || (!isBankDrill && !usesEvidenceSnapshot && !projectContextMatches(drill.project_id!, projectContext))) return "context-conflict";
     const result = db.prepare(
       `UPDATE drill_questions SET answer = ?, comment = ?, reference = ?, scores = ?, answered_at = ?
        WHERE id = ? AND drill_id = ? AND idx = ? AND question = ? AND answer = ?
