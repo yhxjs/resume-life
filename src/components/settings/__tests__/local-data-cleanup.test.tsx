@@ -6,6 +6,7 @@ import { LocalDataCleanup } from "../local-data-cleanup";
 import { RESUME_IMPORT_SESSION_KEY } from "@/lib/resume-import-session";
 import { SALARY_CREATION_STORAGE_KEY } from "@/lib/salary-creation-storage";
 import { clearSensitiveBrowserData, hasSensitiveBrowserDrafts } from "@/lib/browser-sensitive-data";
+import { CUSTOM_CLI_PROFILES_KEY } from "@/lib/custom-cli-storage";
 
 vi.mock("@/components/common/confirm-dialog", () => ({ confirmDialog: vi.fn() }));
 beforeEach(() => {
@@ -16,6 +17,7 @@ beforeEach(() => {
   localStorage.setItem("other-app", "keep");
   localStorage.setItem("resume_life_project_repo_paths_1", '["C:/synthetic/legacy"]');
   localStorage.setItem("resume_life_project_repo_paths_old:2", '["C:/synthetic/old"]');
+  localStorage.setItem(CUSTOM_CLI_PROFILES_KEY, '[{"command":"synthetic-client"}]');
   sessionStorage.setItem("other-app", "keep");
   vi.mocked(confirmDialog).mockResolvedValue(true);
 });
@@ -30,6 +32,7 @@ it("主动清理仅删除应用敏感键并给出完成反馈", async () => {
   expect(localStorage.getItem("other-app")).toBe("keep");
   expect(localStorage.getItem("resume_life_project_repo_paths_1")).toBeNull();
   expect(localStorage.getItem("resume_life_project_repo_paths_old:2")).toBeNull();
+  expect(localStorage.getItem(CUSTOM_CLI_PROFILES_KEY)).toBeNull();
   expect(sessionStorage.getItem("other-app")).toBe("keep");
 });
 it.each([RESUME_IMPORT_SESSION_KEY, SALARY_CREATION_STORAGE_KEY])("退出时能发现、保留和清除单独的会话草稿 %s", key => {
@@ -49,6 +52,7 @@ it("保留草稿也清除所有项目路径和脱敏规则", () => {
   expect(localStorage.getItem("resume_life_anonymize_config")).toBeNull();
   expect(localStorage.getItem("resume_life_project_repo_paths_1")).toBeNull();
   expect(localStorage.getItem("resume_life_project_repo_paths_old:2")).toBeNull();
+  expect(localStorage.getItem(CUSTOM_CLI_PROFILES_KEY)).toBeNull();
   expect(localStorage.getItem("other-app")).toBe("keep");
 });
 it("取消清理保留副本", async () => {

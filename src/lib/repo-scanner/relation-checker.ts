@@ -1,7 +1,9 @@
 import { extractJson } from "@/lib/llm";
 import { safeChat, LLM_FEATURES, type SafeMessage } from "@/lib/safe-llm";
 import type { PathValidationResult } from "./path-validator";
-import { detectInstalledClis, type CliType } from "./cli-runner";
+import { detectInstalledClis } from "./cli-runner";
+import { parseCliSelection, type BuiltinCliType, type CustomCliConfig, type PreferredCli } from "./cli-config";
+import { resolveCustomCli } from "./custom-cli";
 import { UNTRUSTED_DATA_SYSTEM_RULES, wrapUntrustedData } from "../prompt-safety";
 import { hasQuestionContent } from "../question-normalization";
 import { runCliPrompt, textOnlyCliArgs } from "./cli-process";
@@ -81,14 +83,25 @@ export function parseRelationResult(raw: string, method: "model" | "cli"): PathR
  */
 export async function checkPathsRelation(
   paths: PathValidationResult[],
-  options?: { preferredCli?: "auto" | CliType; signal?: AbortSignal; projectId?: number }
+  options?: { preferredCli?: PreferredCli; customCli?: CustomCliConfig; signal?: AbortSignal; projectId?: number }
 ): Promise<PathRelationCheckResult> {
   options?.signal?.throwIfAborted();
+  const { preferredCli, customCli } = parseCliSelection(options?.preferredCli, options?.customCli);
   if (paths.length <= 1) {
     return { isRelated: true, reason: "单一路径无需校验关联性", method: "single" };
   }
 
-  const { preferredCli = "auto", signal } = options || {};
+  const { signal } = options || {};
+
+  // 显式选择的自定义客户端同时负责预检与扫描，不改用应用模型或其他 CLI。
+  if (preferredCli === "custom") {
+    try {
+      const invocation = await resolveCustomCli(customCli, signal);
+      const result = await runCliQuickCheck(invocation, buildPathRelationCheckPrompt(paths), signal);
+      if (result) return result;
+    } catch { signal?.throwIfAborted(); }
+    return unknownRelation(paths, "自定义 CLI 未能完成研判");
+  }
 
   const modelMessages = buildPathRelationCheckMessages(
     paths.map((p) => ({
@@ -126,7 +139,7 @@ export async function checkPathsRelation(
     const primaryPath = paths[0]?.normalizedPath;
 
     // 优先顺序：如果指定了 preferredCli 则优先，否则 claude 优先（次选 codex）
-    const candidateClis: CliType[] = [];
+    const candidateClis: BuiltinCliType[] = [];
     if (preferredCli === "codex" && clis.codex.available) {
       candidateClis.push("codex");
     } else if (preferredCli === "claude" && clis.claude.available) {
@@ -139,7 +152,7 @@ export async function checkPathsRelation(
     if (primaryPath) {
       for (const cli of candidateClis) {
         const cliPath = clis[cli].path;
-        const cliResult = await runCliQuickCheck(cli, cliPath, buildPathRelationCheckPrompt(paths.map((p) => ({
+        const cliResult = await runCliQuickCheck({ command: cliPath || cli, args: textOnlyCliArgs(cli) }, buildPathRelationCheckPrompt(paths.map((p) => ({
           projectName: p.projectName,
           features: p.features,
           readmeSnippet: p.readmeSnippet,
@@ -154,10 +167,14 @@ export async function checkPathsRelation(
     signal?.throwIfAborted();
   }
 
+  return unknownRelation(paths, "AI 与本机 CLI 未能完成研判");
+}
+
+function unknownRelation(paths: PathValidationResult[], message: string): PathRelationCheckResult {
   const details = paths.map((p) => `「${p.projectName || "未命名工程"}」(${p.packageMetadata?.type || p.features?.[0] || "代码库"})`).join(" 与 ");
   return {
     isRelated: null,
-    reason: `AI 与本机 CLI 未能完成研判，启发式仅能读取 ${details} 的元数据，无法确认关联。技术栈、名称或 README 词汇的异同不足以判定是否属于同一项目，请核对接口调用、相互依赖或共同业务流程。`,
+    reason: `${message}，启发式仅能读取 ${details} 的元数据，无法确认关联。技术栈、名称或 README 词汇的异同不足以判定是否属于同一项目，请核对接口调用、相互依赖或共同业务流程。`,
     method: "heuristic",
   };
 }
@@ -168,16 +185,14 @@ export async function checkPathsRelation(
  * 也绕开 ~8K 字符的命令行长度上限。
  */
 async function runCliQuickCheck(
-  cliType: "claude" | "codex",
-  cliExecutablePath: string | undefined,
+  invocation: CustomCliConfig,
   prompt: string,
   signal?: AbortSignal
 ): Promise<PathRelationCheckResult | null> {
   signal?.throwIfAborted();
   const workdir = await fs.mkdtemp(path.join(os.tmpdir(), "resume-life-relation-"));
   try {
-    const stdout = await runCliPrompt({ command: cliExecutablePath || cliType,
-      args: textOnlyCliArgs(cliType), cwd: workdir, prompt, timeoutMs: 15_000, signal });
+    const stdout = await runCliPrompt({ ...invocation, cwd: workdir, prompt, timeoutMs: 15_000, signal });
     return parseRelationResult(stdout, "cli");
   } catch (error) {
     signal?.throwIfAborted();

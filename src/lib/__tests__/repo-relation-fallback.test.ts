@@ -36,6 +36,26 @@ beforeEach(() => {
 });
 
 describe("仓库关联降级", () => {
+  it("显式自定义客户端用于关联预检，不调用已配置模型或内置 CLI", async () => {
+    calls.chat.mockResolvedValue('{"isRelated":false,"reason":"不应调用"}');
+    const customCli = { command: process.execPath, args: ["D:/synthetic/sdk-client.mjs", "--text"] };
+    calls.cli.mockResolvedValue('{"isRelated":true,"reason":"源码表明两个模块有相互依赖"}');
+    const result = await checkPathsRelation(paths, { preferredCli: "custom", customCli });
+    expect(result).toEqual({ isRelated: true, reason: "源码表明两个模块有相互依赖", method: "cli" });
+    expect(calls.chat).not.toHaveBeenCalled();
+    expect(calls.detect).not.toHaveBeenCalled();
+    expect(calls.cli).toHaveBeenCalledWith(expect.objectContaining({ ...customCli, prompt: expect.stringContaining("<repo_summaries>"), timeoutMs: 15_000 }));
+  });
+
+  it("自定义客户端失败仍返回未知关系，不自动切换到其他客户端", async () => {
+    calls.cli.mockRejectedValue(new Error("synthetic failure"));
+    const result = await checkPathsRelation(paths, { preferredCli: "custom", customCli: { command: process.execPath, args: [] } });
+    expect(result).toMatchObject({ isRelated: null, method: "heuristic" });
+    expect(result.reason).toContain("自定义 CLI 未能完成研判");
+    expect(calls.chat).not.toHaveBeenCalled();
+    expect(calls.detect).not.toHaveBeenCalled();
+  });
+
   it.each((["model", "cli"] as const).flatMap(method =>
     [true, false, null].flatMap(isRelated => [
       { label: "空白", reason: " \t\r\n\u00a0 " },

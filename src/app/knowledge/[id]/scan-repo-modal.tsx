@@ -10,6 +10,9 @@ import { readProjectSummaryProposal, type ProjectSummaryProposal } from "@/lib/p
 import { errorMessage } from "@/lib/error-message";
 import { DirectoryPickerDialog } from "./directory-picker-dialog";
 import type { ScanEvidenceFile } from "@/lib/evidence-challenge";
+import { parseCustomCliArgs, parseCustomCliConfig, type CustomCliConfig, type PreferredCli } from "@/lib/repo-scanner/cli-config";
+import { CustomCliFields, type CustomCliDraft } from "./custom-cli-fields";
+import { CliCommandPreview } from "./cli-command-preview";
 
 interface DetectedClisResponse {
   codex: { available: boolean; path?: string };
@@ -48,7 +51,9 @@ function ScanRepoSession({
 }: ScanRepoModalProps) {
   const [repoPaths, setRepoPaths] = useState<string[]>(propRepoPaths || []);
   const [inputPath, setInputPath] = useState("");
-  const [cliType, setCliType] = useState<"auto" | "claude" | "codex">("auto");
+  const [cliType, setCliType] = useState<PreferredCli>("auto");
+  // 选择和所有输入共享会话生命周期，切换客户端时保留完整草稿。
+  const [customCli, setCustomCli] = useState<CustomCliDraft>({ selectedId: "", name: "", command: "", argsText: "[]" });
   const [scanning, setScanning] = useState(false);
   const [checkingRelation, setCheckingRelation] = useState(false);
   const [detecting, setDetecting] = useState(true);
@@ -128,6 +133,12 @@ function ScanRepoSession({
   }
 
   async function handleStartScan() {
+    let customConfig: CustomCliConfig | undefined;
+    if (cliType === "custom") {
+      try { customConfig = parseCustomCliConfig({ command: customCli.command, args: parseCustomCliArgs(customCli.argsText) }); }
+      catch (error) { setErrorMsg(errorMessage(error)); return; }
+    }
+    const cliSelection = { preferredCli: cliType, ...(customConfig ? { customCli: customConfig } : {}) };
     // 汇总待扫描的所有路径：已添加的列表 + 输入框中尚未按添加的路径
     const finalPaths = [...repoPaths];
     const pendingInput = inputPath.trim();
@@ -158,7 +169,7 @@ function ScanRepoSession({
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ repoPaths: finalPaths, preferredCli: cliType }),
+              body: JSON.stringify({ repoPaths: finalPaths, ...cliSelection }),
               signal: controller.signal,
             }
           );
@@ -202,7 +213,7 @@ function ScanRepoSession({
           method: "POST",
           body: {
             repoPaths: finalPaths,
-            preferredCli: cliType,
+            ...cliSelection,
           },
           signal: controller.signal,
           onDelta: (text, extra) => {
@@ -259,7 +270,7 @@ function ScanRepoSession({
           <span className="font-serif text-lg font-bold text-ink">一键扫描本地仓库提炼项目亮点</span>
         </div>
       }
-      description={`调用本机 Codex 或 Claude Code CLI 深入剖析「${projectName}」本地源码，自动生成五维 STAR 简历素材`}
+      description={`调用本机 CLI 或自定义 SDK 客户端分析「${projectName}」源码，自动生成项目档案与 STAR 简历素材`}
       onClose={handleCancel}
       closeOnBackdrop={!scanning && !checkingRelation}
       escapeDisabled={scanning || checkingRelation}
@@ -376,9 +387,10 @@ function ScanRepoSession({
         {/* 引擎选择 */}
         <div className="space-y-1.5">
           <span className={labelCls}>执行工具选择</span>
-          <div className="grid grid-cols-3 gap-2 text-xs">
+          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
             <button
               type="button"
+              aria-pressed={cliType === "auto"}
               disabled={scanning || checkingRelation}
               onClick={() => setCliType("auto")}
               className={`rounded-xl border p-2.5 text-left transition-all ${
@@ -393,6 +405,7 @@ function ScanRepoSession({
 
             <button
               type="button"
+              aria-pressed={cliType === "claude"}
               disabled={scanning || checkingRelation || (cliInfo !== null && !cliInfo.claude.available)}
               onClick={() => setCliType("claude")}
               className={`rounded-xl border p-2.5 text-left transition-all ${
@@ -414,6 +427,7 @@ function ScanRepoSession({
 
             <button
               type="button"
+              aria-pressed={cliType === "codex"}
               disabled={scanning || checkingRelation || (cliInfo !== null && !cliInfo.codex.available)}
               onClick={() => setCliType("codex")}
               className={`rounded-xl border p-2.5 text-left transition-all ${
@@ -432,7 +446,15 @@ function ScanRepoSession({
                 {cliInfo?.codex.available ? "codex exec 只读沙盒" : detecting ? "检测中..." : "未检测到"}
               </div>
             </button>
+            <button type="button" disabled={scanning || checkingRelation} aria-pressed={cliType === "custom"}
+              onClick={() => setCliType("custom")}
+              className={`rounded-xl border p-2.5 text-left transition-all ${cliType === "custom" ? "border-primary bg-primary/5 text-ink font-medium shadow-sm" : "border-line bg-card hover:bg-subtle text-muted"}`}>
+              <div className="font-medium text-ink">自定义 CLI / SDK</div>
+              <div className="text-[10px] text-muted mt-0.5">配置其他客户端命令</div>
+            </button>
           </div>
+          {cliType === "custom" && <CustomCliFields value={customCli} onChange={setCustomCli} disabled={scanning || checkingRelation} />}
+          <CliCommandPreview selected={cliType} detected={cliInfo} detecting={detecting} custom={customCli} />
         </div>
 
         {/* 错误提示 */}

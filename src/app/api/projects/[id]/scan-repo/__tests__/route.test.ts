@@ -88,6 +88,30 @@ async function expectRejected(body: unknown, query = "") {
 }
 
 describe("扫描请求运行时结构校验", () => {
+  it.each(["scan", "check-relation"])("%s 将自定义命令和参数传递到所选客户端", async action => {
+    const customCli = { command: "node", args: ["D:/tools/SDK client.mjs", "--text"] };
+    const response = await post({ repoPaths: [directory], action, preferredCli: "custom", customCli });
+    expect(response.status).toBe(200);
+    await response.text();
+    if (action === "scan") expect(calls.scan).toHaveBeenCalledWith(expect.objectContaining({ preferredCli: "custom", customCli }));
+    else expect(calls.relation).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ preferredCli: "custom", customCli }));
+    expect(calls.detect).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, null, {}, { command: "" }, { command: "node --eval dangerous" },
+    { command: "node", args: "--text" }, { command: "node", args: [42] },
+    { command: "D:/client.cmd", args: ["%PATH%"] },
+    { command: "D:/client.cmd", args: ["--config-dir", "C:\\SDK config\\", "--text"] },
+  ])("拒绝无效自定义配置 %j，预检与扫描都不开始", async customCli => {
+    for (const action of ["scan", "check-relation"]) {
+      await expectRejected({ repoPaths: [directory], preferredCli: "custom", customCli, action });
+    }
+  });
+
+  it("内置客户端不能夹带自定义命令", async () => {
+    await expectRejected({ repoPaths: [directory], preferredCli: "auto", customCli: { command: "node", args: [] } });
+  });
+
   it.each([null, [], 42, "synthetic", false])("根 JSON %j 返回 400 且不启动 CLI", async (body) => {
     await expectRejected(body);
   });

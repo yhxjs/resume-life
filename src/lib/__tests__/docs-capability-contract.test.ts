@@ -25,6 +25,7 @@ const tools = [
   { requirement: "离职与空窗沟通准备", page: "离职与空窗沟通准备" },
   { requirement: "Offer 谈判与薪酬博弈模拟器", page: "Offer 谈判与薪酬博弈模拟器" },
   { requirement: "个人作品集静态主页", page: "个人作品集与静态主页" },
+  { requirement: "Offer 实际价值比较器", page: "Offer 实际价值比较器" },
 ];
 
 /** 导航项：`{ href: "/x", label: "…" }`，下拉分组的子项与直达链接写法一致 */
@@ -132,9 +133,9 @@ describe("文档能力清单契约", () => {
     const pageToolCount = [...toolsPage.matchAll(/href:\s*"\/tools\//gu)].length;
     const requirementsToolCount = [...toolsRequirements.matchAll(/^### 8\.\d+ /gmu)].length;
 
-    expect(pageToolCount).toBe(6);
+    expect(pageToolCount).toBe(tools.length);
     expect(requirementsToolCount).toBe(pageToolCount);
-    expect(requirements).toContain("当前包含 6 个工具");
+    expect(requirements).toContain(`当前包含 ${tools.length} 个工具`);
     for (const tool of tools) {
       expect(toolsPage).toContain(`title: "${tool.page}"`);
       expect(toolsRequirements).toContain(tool.requirement);

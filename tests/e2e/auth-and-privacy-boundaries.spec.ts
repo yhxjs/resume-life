@@ -32,6 +32,7 @@ for (const keepDrafts of [false, true]) {
       localStorage.setItem("unrelated-test-key", "keep");
       localStorage.setItem("resume_life_project_repo_paths_1", '["C:/synthetic/legacy"]');
       localStorage.setItem("resume_life_project_repo_paths_initial:1", '["C:/synthetic/project"]');
+      localStorage.setItem("resume_life_custom_cli_profiles", '[{"id":"synthetic","name":"SDK","command":"node","args":[]}]');
     });
     await page.getByRole("button", { name: "退出登录", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "退出前处理未保存草稿" })).toBeVisible();
@@ -40,6 +41,7 @@ for (const keepDrafts of [false, true]) {
     const state = await page.evaluate(() => ({ config: localStorage.getItem("resume_life_anonymize_config"), draft: sessionStorage.getItem("resume-life:draft:synthetic"), other: localStorage.getItem("unrelated-test-key") }));
     expect(state).toEqual({ config: null, draft: keepDrafts ? '{"title":"合成草稿"}' : null, other: "keep" });
     expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("resume_life_project_repo_paths_")))).toEqual([]);
+    expect(await page.evaluate(() => localStorage.getItem("resume_life_custom_cli_profiles"))).toBeNull();
     expect((await page.request.get("/api/resumes")).status()).toBe(401);
   });
 }
@@ -52,12 +54,14 @@ test("真实设置页主动清理只删除本应用敏感副本", async ({ page 
     sessionStorage.setItem("resume-life:draft:synthetic", '{"title":"合成草稿"}');
     sessionStorage.setItem("unrelated-test-key", "keep");
     localStorage.setItem("resume_life_project_repo_paths_initial:1", '["C:/synthetic/project"]');
+    localStorage.setItem("resume_life_custom_cli_profiles", '[{"id":"synthetic","name":"SDK","command":"node","args":[]}]');
   });
   await page.getByRole("button", { name: "清除本机敏感副本" }).click();
   await page.getByRole("button", { name: "清除副本", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "已清除本机脱敏规则" })).toBeVisible();
   expect(await page.evaluate(() => ({ config: localStorage.getItem("resume_life_anonymize_config"), draft: sessionStorage.getItem("resume-life:draft:synthetic"), other: sessionStorage.getItem("unrelated-test-key") }))).toEqual({ config: null, draft: null, other: "keep" });
   expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("resume_life_project_repo_paths_")))).toEqual([]);
+  expect(await page.evaluate(() => localStorage.getItem("resume_life_custom_cli_profiles"))).toBeNull();
 });
 
 test("真实作品集 ZIP 不保留标题姓名和不可识别门牌", async ({ request }) => {

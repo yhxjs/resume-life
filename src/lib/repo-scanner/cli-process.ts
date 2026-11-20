@@ -1,12 +1,13 @@
 import { StringDecoder } from "node:string_decoder";
 import { logServerError } from "../server-errors";
+import { validateWindowsBatchCommand } from "./cli-config";
 
 const { spawn } = process.getBuiltinModule("child_process");
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
 let activeProcesses = 0;
 
-/** 两条 CLI 路径共用输出、并发、截止时间和进程组生命周期。 */
+/** 内置与自定义 CLI 共用输出、并发、截止时间和进程组生命周期。 */
 export async function runCliPrompt(options: {
   command: string;
   args: readonly string[];
@@ -34,9 +35,7 @@ function execute(options: Parameters<typeof runCliPrompt>[0]): Promise<string> {
     try {
       if (isWin && /\.(?:cmd|bat)$/i.test(options.command)) {
         // 路径始终引用；百分号与引号无法可靠表达，提前拒绝。cwd 不进入命令行。
-        if (/[%"\r\n\0]/.test(options.command) || options.args.some((arg) => /[%"\r\n\0]/.test(arg))) {
-          throw new Error("CLI 批处理命令包含不能安全引用的字符");
-        }
+        validateWindowsBatchCommand(options.command, options.args);
         const inner = [options.command, ...options.args].map((arg) => `"${arg}"`).join(" ");
         child = spawn(process.env.ComSpec || "cmd.exe", ["/d", "/v:off", "/s", "/c", `"${inner}"`], {
           cwd: options.cwd, env, windowsVerbatimArguments: true, windowsHide: true, shell: false,
@@ -155,13 +154,4 @@ function execute(options: Parameters<typeof runCliPrompt>[0]): Promise<string> {
   });
 }
 
-/** 只分析 stdin 材料；不给模型文件、命令、网络或外部插件工具。 */
-export function textOnlyCliArgs(cli: "claude" | "codex"): string[] {
-  return cli === "claude"
-    ? ["-p", "--output-format", "text", "--tools", "", "--safe-mode", "--strict-mcp-config", "--no-session-persistence"]
-    : ["exec", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-      "--disable", "shell_tool", "--disable", "unified_exec", "--disable", "hooks",
-      "--disable", "apps", "--disable", "plugins",
-      "-c", "web_search='disabled'", "-c", "default_permissions='resume_life_scan'",
-      "-c", "permissions.resume_life_scan.filesystem={':minimal'='read',':workspace_roots'='read'}"];
-}
+export { textOnlyCliArgs } from "./cli-config";

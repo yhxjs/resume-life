@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import type { Stats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { CliType, DetectedClis } from "@/lib/repo-scanner/cli-runner";
+import type { BuiltinCliType as CliType, DetectedClis } from "@/lib/repo-scanner/cli-runner";
 
 const childProcess = process.getBuiltinModule("child_process");
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;

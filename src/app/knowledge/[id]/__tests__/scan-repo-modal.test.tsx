@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScanRepoModal } from "../scan-repo-modal";
 import { emptySummary } from "@/lib/summary";
 import { compareProjectSummaries } from "@/lib/project-summary-diff";
+import { CUSTOM_CLI_PROFILES_KEY } from "@/lib/custom-cli-storage";
 
 const requests = vi.hoisted(() => ({ jsonFetch: vi.fn(), fetchSse: vi.fn(), confirm: vi.fn() }));
 
@@ -28,6 +29,7 @@ const baseProps = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   requests.confirm.mockReset().mockResolvedValue(true);
   requests.jsonFetch.mockResolvedValue({
     codex: { available: true },
@@ -49,6 +51,128 @@ function deferred<T>() {
 type Relation = { isRelated: boolean | null; reason: string; method: string };
 const related: Relation = { isRelated: true, reason: "有共同模块", method: "model" };
 
+function enterCustomCli(command = "node", args = '["D:/tools/sdk client.mjs", "--text"]') {
+  fireEvent.click(screen.getByRole("button", { name: /自定义 CLI \/ SDK/ }));
+  fireEvent.change(screen.getByLabelText(/可执行程序/), { target: { value: command } });
+  fireEvent.change(screen.getByLabelText("命令参数（JSON 数组）"), { target: { value: args } });
+}
+
+describe("自定义 CLI / SDK 客户端", () => {
+  it("无内置 CLI 时仍能启动自定义命令，预检和扫描携带同一配置", async () => {
+    requests.jsonFetch.mockResolvedValueOnce({ codex: { available: false }, claude: { available: false }, recommended: null });
+    render(<ScanRepoModal {...baseProps} repoPaths={[firstPath, secondPath]} />);
+    await waitFor(() => expect(screen.getAllByText("未检测到")).toHaveLength(2));
+    enterCustomCli();
+    const preview = screen.getByRole("region", { name: "最终命令预览" });
+    expect(preview.querySelector("code")?.textContent).toBe('node "D:/tools/sdk client.mjs" --text\nstdin: {{PROMPT}}');
+    expect(preview.textContent).not.toContain(firstPath);
+    requests.jsonFetch.mockResolvedValueOnce(related);
+    fireEvent.click(screen.getByRole("button", { name: "合并扫描 2 个代码库" }));
+    await waitFor(() => expect(requests.fetchSse).toHaveBeenCalledOnce());
+    const selection = { preferredCli: "custom", customCli: { command: "node", args: ["D:/tools/sdk client.mjs", "--text"] } };
+    expect(JSON.parse(requests.jsonFetch.mock.calls[1]![1].body)).toMatchObject(selection);
+    expect(requests.fetchSse.mock.calls[0]![1].body).toMatchObject(selection);
+    expect(screen.getByLabelText(/可执行程序/).closest("fieldset")?.disabled).toBe(true);
+  });
+
+  it.each(["--text", '["--text", 42]'])("错误参数 %s 在请求前提示，切换内置客户端不携带旧命令", async args => {
+    render(<ScanRepoModal {...baseProps} />);
+    await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledOnce());
+    enterCustomCli("node", args);
+    fireEvent.click(screen.getByRole("button", { name: "开始扫描并提炼" }));
+    expect(screen.getByText(/命令参数须为/, { selector: "div" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "最终命令预览" }).querySelector("code")).toBeNull();
+    expect(requests.fetchSse).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Codex CLI/ }));
+    fireEvent.click(screen.getByRole("button", { name: "开始扫描并提炼" }));
+    expect(requests.fetchSse.mock.calls[0]![1].body).toEqual({ repoPaths: [firstPath], preferredCli: "codex" });
+  });
+
+  it("切换其他客户端再返回时保留新建配置的完整草稿，关闭弹窗才重置", async () => {
+    requests.jsonFetch.mockResolvedValue({ codex: { available: true }, claude: { available: true }, recommended: "codex" });
+    const view = render(<ScanRepoModal {...baseProps} />);
+    await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledOnce());
+    enterCustomCli();
+    fireEvent.change(screen.getByLabelText("客户端名称（保存时填写）"), { target: { value: "待保存 SDK" } });
+
+    for (const name of [/智能推荐/, /Codex CLI/, /Claude Code/]) {
+      fireEvent.click(screen.getByRole("button", { name }));
+      expect(screen.queryByLabelText("已保存的客户端")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: /自定义 CLI \/ SDK/ }));
+      expect((screen.getByLabelText("已保存的客户端") as HTMLSelectElement).value).toBe("");
+      expect((screen.getByLabelText("客户端名称（保存时填写）") as HTMLInputElement).value).toBe("待保存 SDK");
+      expect((screen.getByLabelText(/可执行程序/) as HTMLInputElement).value).toBe("node");
+      expect((screen.getByLabelText("命令参数（JSON 数组）") as HTMLTextAreaElement).value).toBe('["D:/tools/sdk client.mjs", "--text"]');
+      expect(screen.getByRole("region", { name: "最终命令预览" }).querySelector("code")?.textContent).toBe('node "D:/tools/sdk client.mjs" --text\nstdin: {{PROMPT}}');
+    }
+    expect(localStorage.getItem(CUSTOM_CLI_PROFILES_KEY)).toBeNull();
+
+    view.rerender(<ScanRepoModal {...baseProps} open={false} />);
+    view.rerender(<ScanRepoModal {...baseProps} />);
+    await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: /自定义 CLI \/ SDK/ }));
+    expect((screen.getByLabelText("已保存的客户端") as HTMLSelectElement).value).toBe("");
+    expect((screen.getByLabelText("客户端名称（保存时填写）") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/可执行程序/) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("命令参数（JSON 数组）") as HTMLTextAreaElement).value).toBe("[]");
+  });
+
+  it("保存、切换、更新和删除多客户端配置，重开可复用", async () => {
+    requests.jsonFetch.mockResolvedValue({ codex: { available: true }, claude: { available: true }, recommended: "codex" });
+    const view = render(<ScanRepoModal {...baseProps} />);
+    await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledOnce());
+    enterCustomCli();
+    fireEvent.change(screen.getByLabelText("客户端名称（保存时填写）"), { target: { value: "团队 SDK" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存客户端配置" }));
+    const firstId = (screen.getByLabelText("已保存的客户端") as HTMLSelectElement).value;
+    fireEvent.change(screen.getByLabelText("已保存的客户端"), { target: { value: "" } });
+    enterCustomCli("python", '["D:/tools/second.py"]');
+    fireEvent.change(screen.getByLabelText("客户端名称（保存时填写）"), { target: { value: "第二客户端" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存客户端配置" }));
+    expect(JSON.parse(localStorage.getItem(CUSTOM_CLI_PROFILES_KEY)!)).toHaveLength(2);
+    view.rerender(<ScanRepoModal {...baseProps} open={false} />);
+    view.rerender(<ScanRepoModal {...baseProps} />);
+    await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: /自定义 CLI \/ SDK/ }));
+    fireEvent.change(screen.getByLabelText("已保存的客户端"), { target: { value: firstId } });
+    expect((screen.getByLabelText(/可执行程序/) as HTMLInputElement).value).toBe("node");
+    expect(JSON.parse((screen.getByLabelText("命令参数（JSON 数组）") as HTMLTextAreaElement).value)).toEqual(["D:/tools/sdk client.mjs", "--text"]);
+    expect(screen.getByRole("region", { name: "最终命令预览" }).querySelector("code")?.textContent).toBe('node "D:/tools/sdk client.mjs" --text\nstdin: {{PROMPT}}');
+    fireEvent.change(screen.getByLabelText(/可执行程序/), { target: { value: "updated-client" } });
+    fireEvent.change(screen.getByLabelText("客户端名称（保存时填写）"), { target: { value: "更新后的 SDK" } });
+    for (const name of [/智能推荐/, /Codex CLI/, /Claude Code/]) {
+      fireEvent.click(screen.getByRole("button", { name }));
+      expect(screen.queryByLabelText("已保存的客户端")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: /自定义 CLI \/ SDK/ }));
+      expect((screen.getByLabelText("已保存的客户端") as HTMLSelectElement).value).toBe(firstId);
+      expect((screen.getByLabelText("客户端名称（保存时填写）") as HTMLInputElement).value).toBe("更新后的 SDK");
+      expect((screen.getByLabelText(/可执行程序/) as HTMLInputElement).value).toBe("updated-client");
+      expect(JSON.parse((screen.getByLabelText("命令参数（JSON 数组）") as HTMLTextAreaElement).value)).toEqual(["D:/tools/sdk client.mjs", "--text"]);
+      expect(screen.getByRole("region", { name: "最终命令预览" }).querySelector("code")?.textContent).toBe('updated-client "D:/tools/sdk client.mjs" --text\nstdin: {{PROMPT}}');
+      expect(screen.getByRole("button", { name: "更新客户端配置" })).toBeTruthy();
+    }
+    expect(JSON.parse(localStorage.getItem(CUSTOM_CLI_PROFILES_KEY)!)[0]).toMatchObject({ id: firstId, name: "团队 SDK", command: "node" });
+    fireEvent.click(screen.getByRole("button", { name: "更新客户端配置" }));
+    const saved = JSON.parse(localStorage.getItem(CUSTOM_CLI_PROFILES_KEY)!);
+    expect(saved).toHaveLength(2);
+    expect(saved[0]).toMatchObject({ id: firstId, name: "更新后的 SDK", command: "updated-client" });
+    fireEvent.click(screen.getByRole("button", { name: "移除已保存客户端" }));
+    expect(JSON.parse(localStorage.getItem(CUSTOM_CLI_PROFILES_KEY)!)).toMatchObject([{ name: "第二客户端", command: "python" }]);
+  });
+
+  it("存储失败明确提示，仍可直接使用当前命令", async () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("存储权限被关闭"); });
+    render(<ScanRepoModal {...baseProps} />);
+    await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledOnce());
+    enterCustomCli();
+    fireEvent.change(screen.getByLabelText("客户端名称（保存时填写）"), { target: { value: "SDK" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存客户端配置" }));
+    expect(screen.getByRole("alert").textContent).toContain("存储权限被关闭");
+    fireEvent.click(screen.getByRole("button", { name: "开始扫描并提炼" }));
+    expect(requests.fetchSse.mock.calls[0]![1].body.preferredCli).toBe("custom");
+  });
+});
+
 async function startPrecheck() {
   const view = render(<ScanRepoModal {...baseProps} repoPaths={[firstPath, secondPath]} />);
   await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledTimes(1));
@@ -67,6 +191,9 @@ describe("ScanRepoModal 初始化边界", () => {
     await waitFor(() => expect(requests.jsonFetch).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: new RegExp(engine.replace(/[()]/g, "\\$&")) }));
     await act(async () => { detected.resolve({ codex: { available: true }, claude: { available: true }, recommended: "claude" }); });
+    const preview = screen.getByRole("region", { name: "最终命令预览" }).querySelector("code")?.textContent;
+    expect(preview).toContain(engine === "Codex CLI" ? "codex exec --skip-git-repo-check" : 'claude -p --output-format text --tools ""');
+    expect(preview).toContain("stdin: {{PROMPT}}");
     fireEvent.click(screen.getByRole("button", { name: "开始扫描并提炼" }));
     expect(requests.fetchSse.mock.calls[0]![1].body.preferredCli).toBe(engine === "Codex CLI" ? "codex" : "auto");
   });

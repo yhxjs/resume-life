@@ -6,6 +6,7 @@ import { createSseResponse } from "@/lib/sse";
 import { parseApiJson } from "@/lib/api-request";
 import { validateRepoPaths } from "@/lib/repo-scanner/path-validator";
 import { detectInstalledClis, runRepoScan } from "@/lib/repo-scanner/cli-runner";
+import { CliConfigError, parseCliSelection } from "@/lib/repo-scanner/cli-config";
 import { DirectoryBrowseError, listDirectory } from "@/lib/repo-scanner/dir-browser";
 import { checkPathsRelation } from "@/lib/repo-scanner/relation-checker";
 import { requestIdFrom, logServerError } from "@/lib/server-errors";
@@ -79,13 +80,16 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
   if (!parsedJson.data || typeof parsedJson.data !== "object" || Array.isArray(parsedJson.data)) {
     return NextResponse.json({ error: "请求体必须是 JSON 对象" }, { status: 400 });
   }
-  const { repoPath, repoPaths, preferredCli = "auto", action: bodyAction } = parsedJson.data as Record<string, unknown>;
+  const { repoPath, repoPaths, preferredCli, customCli, action: bodyAction } = parsedJson.data as Record<string, unknown>;
   if ((repoPath !== undefined && typeof repoPath !== "string") ||
     (repoPaths !== undefined && (!Array.isArray(repoPaths) || repoPaths.some((value) => typeof value !== "string")))) {
     return NextResponse.json({ error: "仓库路径必须是字符串，repoPaths 必须是字符串数组" }, { status: 400 });
   }
-  if (preferredCli !== "auto" && preferredCli !== "codex" && preferredCli !== "claude") {
-    return NextResponse.json({ error: "preferredCli 必须是 auto、codex 或 claude" }, { status: 400 });
+  let selection: ReturnType<typeof parseCliSelection>;
+  try { selection = parseCliSelection(preferredCli, customCli); }
+  catch (error) {
+    if (error instanceof CliConfigError) return NextResponse.json({ error: error.message }, { status: 400 });
+    throw error;
   }
   if ((bodyAction !== undefined && bodyAction !== "scan" && bodyAction !== "check-relation") ||
     (actionParam !== null && actionParam !== "scan" && actionParam !== "check-relation")) {
@@ -112,7 +116,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
   // 若为 AI 多路径关联性研判动作
   if (isCheckRelation) {
     if (!loadProjectRow(projectId)) return NextResponse.json({ error: "项目不存在" }, { status: 404 });
-    const relationResult = await checkPathsRelation(pathsCheck.paths, { preferredCli, signal: req.signal, projectId });
+    const relationResult = await checkPathsRelation(pathsCheck.paths, { ...selection, signal: req.signal, projectId });
     return NextResponse.json({
       isRelated: relationResult.isRelated,
       reason: relationResult.reason,
@@ -155,7 +159,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
         targets,
         projectName,
         projectArchive,
-        preferredCli,
+        ...selection,
         signal: emitter.signal,
         onDelta: (text, log) => {
           emitter.sendDelta(text, { log });
@@ -177,7 +181,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
         emitter.sendError("扫描已被取消");
         return;
       }
-      if (err instanceof RepoSourceEmptyError) {
+      if (err instanceof RepoSourceEmptyError || err instanceof CliConfigError) {
         emitter.sendError(err.message);
         return;
       }

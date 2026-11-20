@@ -8,13 +8,15 @@ import { getGeneratedProjectSummaryIssue, isEmptyGeneratedProjectSummary, normal
 import { collectRepoSourceSnapshot, RepoSourceEmptyError } from "./source-snapshot";
 import { runCliPrompt, textOnlyCliArgs } from "./cli-process";
 import { cleanupCliWorkdir } from "./cli-workdir";
+import { parseCliSelection, type BuiltinCliType, type CliType, type CustomCliConfig, type PreferredCli } from "./cli-config";
+import { resolveCustomCli } from "./custom-cli";
 
 const { execFile } = process.getBuiltinModule("child_process");
 const execFileAsync = promisify(execFile);
 
-export type CliType = "codex" | "claude";
+export type { BuiltinCliType, CliType } from "./cli-config";
 export interface CliAvailability { available: boolean; path?: string; version?: string }
-export interface DetectedClis { codex: CliAvailability; claude: CliAvailability; recommended: CliType | null }
+export interface DetectedClis { codex: CliAvailability; claude: CliAvailability; recommended: BuiltinCliType | null }
 
 /** 探测本机 CLI；检测失败不等于扫描执行失败。 */
 export async function detectInstalledClis(signal?: AbortSignal): Promise<DetectedClis> {
@@ -52,7 +54,8 @@ export interface RunScanOptions {
   targets?: RepoTarget[];
   projectName: string;
   projectArchive?: string;
-  preferredCli?: "auto" | CliType;
+  preferredCli?: PreferredCli;
+  customCli?: CustomCliConfig;
   signal?: AbortSignal;
   onDelta?: (text: string, log?: string) => void;
 }
@@ -66,6 +69,7 @@ export async function runRepoScan(options: RunScanOptions): Promise<ScanResult> 
   const { projectName, preferredCli = "auto", signal, onDelta } = options;
   signal?.throwIfAborted();
   buildRepoScanArchive(options.projectArchive);
+  const selection = parseCliSelection(preferredCli, options.customCli);
   const paths = options.repoPaths?.length ? options.repoPaths : options.repoPath ? [options.repoPath] : [];
   if (!paths.length || !paths[0]) throw new Error("必须提供至少一个有效的本地代码仓库路径");
   const key = paths.map((value) => path.resolve(value)).sort().join("\0");
@@ -74,9 +78,18 @@ export async function runRepoScan(options: RunScanOptions): Promise<ScanResult> 
   activeScans.add(key);
   let workdir: string | undefined;
   try {
-    const clis = await detectInstalledClis(signal);
-    const chosen = preferredCli === "auto" ? clis.recommended : preferredCli;
-    if (!chosen || !clis[chosen].available || !clis[chosen].path) throw new Error("本机未检测到指定 CLI，请先安装配置");
+    let chosen: CliType;
+    let invocation: CustomCliConfig;
+    if (selection.preferredCli === "custom") {
+      chosen = "custom";
+      invocation = await resolveCustomCli(selection.customCli, signal);
+    } else {
+      const clis = await detectInstalledClis(signal);
+      const builtin = selection.preferredCli === "auto" ? clis.recommended : selection.preferredCli;
+      if (!builtin || !clis[builtin].available || !clis[builtin].path) throw new Error("本机未检测到指定 CLI，请先安装配置");
+      chosen = builtin;
+      invocation = { command: clis[builtin].path!, args: textOnlyCliArgs(builtin) };
+    }
     const targets = options.targets?.length ? options.targets : paths.map((value) => ({ path: value }));
     const source = await collectRepoSourceSnapshot(targets, signal);
     if (!source) throw new RepoSourceEmptyError();
@@ -87,13 +100,14 @@ export async function runRepoScan(options: RunScanOptions): Promise<ScanResult> 
       logs.push(log);
       onDelta?.(delta || log, log);
     };
-    addLog(`[引擎选择] 使用 ${chosen === "claude" ? "Claude Code CLI" : "Codex CLI"} 分析受限源码材料`);
+    const cliLabel = chosen === "custom" ? "自定义 CLI / SDK" : chosen === "claude" ? "Claude Code CLI" : "Codex CLI";
+    addLog(`[引擎选择] 使用 ${cliLabel} 分析受限源码材料`);
     workdir = await fs.mkdtemp(path.join(os.tmpdir(), "resume-life-cli-"));
     const prompt = buildRepoScanPrompt(projectName, targets, source, options.projectArchive);
     // 首次生成与一次长度修正共用五分钟截止时间；不重试进程错误或取消。
     const deadline = Date.now() + 5 * 60 * 1000;
     const runPrompt = (input: string) => runCliPrompt({
-      command: clis[chosen].path!, args: textOnlyCliArgs(chosen), cwd: workdir!,
+      ...invocation, cwd: workdir!,
       prompt: input, timeoutMs: Math.max(1, deadline - Date.now()), signal,
       onOutput(text, stderr) {
         for (const line of text.split(/\r?\n/).map((value) => value.trim()).filter(Boolean).slice(stderr ? -2 : -3)) {

@@ -1,6 +1,7 @@
 import { RESUME_IMPORT_SESSION_KEY, SALARY_CREATION_STORAGE_KEY } from "./browser-draft-keys";
 import { clearResumeDrafts, hasPendingResumeDrafts } from "./resume-save-queue-registry";
 import { clearStoredRepoPaths } from "./project-repo-paths-storage";
+import { CUSTOM_CLI_PROFILES_KEY } from "./custom-cli-storage";
 
 export const ANONYMIZE_STORAGE_KEY = "resume_life_anonymize_config";
 const DRAFT_PREFIX = "resume-life:draft:";
@@ -28,4 +29,5 @@ export function clearSensitiveBrowserData(keepDrafts = false): void {
   }
   localStorage.removeItem(ANONYMIZE_STORAGE_KEY);
   clearStoredRepoPaths();
+  localStorage.removeItem(CUSTOM_CLI_PROFILES_KEY);
 }
