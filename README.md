@@ -120,6 +120,7 @@ npm start
 - **AI 数据流向**：相关简历、JD、项目材料和作答会发送至你选择的模型服务。使用前确认服务的隐私政策、数据处理方式及调用费用。
 - **凭证保护**：数据库中的 API Key 和代理密码使用 `RESUME_LIFE_SETTINGS_KEY` 做 AES-256-GCM 加密；同时用操作系统权限保护数据目录。
 - **分享范围**：发布或分享前排除 `data/`、环境文件、上传头像、模型文件，以及含真实信息的截图与备份。
+- **MCP Agent 接入**：提供本机 stdio MCP Server，默认只读；有限写入与模型调用需分别显式启用。MCP 子进程可读取本机业务资料，须仅授权可信 Agent，详见 [MCP 接入](docs/MCP.md)。
 - **仓库扫描**：源码采集按白名单和预算过滤后发送至本机 CLI；CLI 在空临时目录运行，内置 Codex / Claude 模式关闭模型文件、命令和外部工具。支持配置并切换其他 CLI 或 SDK 包装脚本，详见 [自定义客户端](docs/CUSTOM-CLI.md)。自定义客户端需自行关闭工具调用；扫描前仍需清理业务秘密。内置 Codex 模式跳过用户自定义 model/provider 等配置，需要自定义服务时可使用自定义客户端、Claude CLI 或应用内 API；详见 [仓库扫描架构](docs/ARCHITECTURE.md#repo-scanner)。
 
 ### 备份与恢复
@@ -150,7 +151,7 @@ npm run check:page-coverage
 
 | 需要了解什么 | 文档 |
 | --- | --- |
-| 安装、部署与故障处理 | [部署说明](docs/DEPLOYMENT.md) · [故障排查](docs/TROUBLESHOOTING.md) |
+| 安装、部署与故障处理 | [部署说明](docs/DEPLOYMENT.md) · [故障排查](docs/TROUBLESHOOTING.md) · [MCP 接入](docs/MCP.md) |
 | 数据、安全与许可 | [数据生命周期](docs/DATA-LIFECYCLE.md) · [安全政策](SECURITY.md) · [第三方许可](docs/THIRD_PARTY_NOTICES.md) |
 | 功能与产品设计 | [产品说明](PRODUCT.md) · [设计说明](DESIGN.md) · [需求与边界](docs/REQUIREMENTS.md) |
 | 开发与架构 | [API 契约](docs/API.md) · [架构](docs/ARCHITECTURE.md) · [领域术语](CONTEXT.md) · [架构决策](docs/ADR.md) |

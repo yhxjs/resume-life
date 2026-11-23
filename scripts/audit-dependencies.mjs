@@ -7,7 +7,8 @@ import { sha256, PICOMATCH_VERSION, UPSTREAM_SHA256, PATCHED_SHA256 } from "./pa
 
 const ADVISORY = "https://github.com/advisories/GHSA-fc5q-39xc-vjpf";
 const EXPIRES_AT = "2026-12-18T00:00:00Z";
-const REVIEWED_LOCK_SHA256 = "c7560ee1686ca187ffcd511285a6acfac4ec62932765dcf6e817d1f3c520f53f";
+// 2026-11-23 MCP 依赖复核：既有 14 个节点、版本及边均未变化；两份 npm 原始报告均无漏洞。
+const REVIEWED_LOCK_SHA256 = "e6783835a3fb18e2a0c612d950b74aefe2592d25ed423080af7d7b6e1ab8caf9";
 const REVIEWED_GRAPH_SHA256 = "2b6f4091938e0bc7fbce07cfe4d1e3b4a2e48d093911474e3e0b3a49ed4b370a";
 const SEVERITIES = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 };
 const readJson = file => JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));

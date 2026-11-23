@@ -14,6 +14,8 @@ flowchart TD
   API --> Parser[PDF DOCX 文本与图片解析沙箱]
   Parser --> OCR[离线 Tesseract.js OCR]
   CLI[repo-scanner CLI] -->|提示词 stdin| Process[受限子进程]
+  Agent[本机 MCP Agent] -->|stdio JSON-RPC| MCP[MCP Server]
+  MCP --> Domain
 ```
 
 ## 领域边界
@@ -53,6 +55,12 @@ PDF、DOCX 和图片导入在大小、页数、字符数及临时目录边界内
 自定义客户端通过 `customCli: {command,args}` 配置，服务端只解析明确指定的程序，启动前校验参数并解析 PATH；不经过通用 shell 拆分，不插入提示词占位符。自定义模式的关联预检直接使用相同客户端，失败返回未知关系，不回退到应用模型或内置 CLI。第三方客户端或 SDK 包装脚本自行控制工具权限；空临时工作目录不是 OS 沙盒。配置可在当前浏览器保存多套，不写入数据库或项目备份，退出或清理敏感副本时移除。详见 [自定义客户端接入](CUSTOM-CLI.md)。
 
 内置 Codex 模式跳过用户 `config.toml`（认证仍使用本机登录），并关闭 apps/plugins、hooks 与命令执行功能。该隔离也会跳过自定义 model/provider；需要自定义服务时使用自定义客户端、Claude 或应用内 API。空 TOML 表覆盖会递归合并而保留已有 MCP 条目，因此不能用 `mcp_servers={}` 代替配置隔离。管理员级 CLI 配置仍须在部署时审查。
+
+## 本机 MCP 接入
+
+`src/mcp/stdio.ts` 使用官方 TypeScript MCP SDK 提供 stdio Server；不新增 HTTP 端口或绕过业务领域模块。MCP 查询调用 `src/lib/mcp-read.ts` 与既有领域读取函数；所有工具、资源和提示词操作都在数据世代作用域内运行，写操作复用领域事务与并发校验。
+
+默认只注册只读能力。只有显式设置 `RESUME_LIFE_MCP_WRITE_ENABLED=true` 才注册有限投递/准备计划写工具；只有显式设置 `RESUME_LIFE_MCP_LLM_ENABLED=true` 才注册会调用当前配置模型的 JD 分析工具。stdio MCP 直接读取本机数据库，不使用浏览器会话 Cookie；OS 用户、文件权限和 Agent 配置是信任边界。远程 HTTP MCP 不在当前支持范围。详见 [MCP 接入](MCP.md)。
 
 ## 安全边界
 

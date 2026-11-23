@@ -45,6 +45,7 @@ export function listDrills(projectId: number | null, q: string, cursor: number |
     source: string;
     direction: string;
     jd: string;
+    focus: string;
     created_at: string;
     project_name: string | null;
     total: number;

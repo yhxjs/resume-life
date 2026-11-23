@@ -5,7 +5,7 @@
   "reason": "Reviewed install-time mitigation for wildcard-in-repeated-extglob ReDoS; upstream metadata remains unchanged",
   "expiresAt": "2026-12-18T00:00:00Z",
   "scope": "development dependencies only",
-  "lockfileSha256": "c7560ee1686ca187ffcd511285a6acfac4ec62932765dcf6e817d1f3c520f53f",
+  "lockfileSha256": "e6783835a3fb18e2a0c612d950b74aefe2592d25ed423080af7d7b6e1ab8caf9",
   "package": {
     "name": "picomatch",
     "version": "4.0.7",

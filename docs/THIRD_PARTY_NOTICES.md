@@ -18,6 +18,11 @@
 | `pdfjs-dist` | `5.4.296` | `Apache-2.0` | `LICENSE` |
 | `docx` | `9.7.2` | `MIT` | `LICENSE` |
 | `@napi-rs/canvas` | `0.1.80` | `MIT` | `LICENSE` |
+| `@modelcontextprotocol/server` / `@modelcontextprotocol/core` | `2.4.0` | `Apache-2.0` | `LICENSE` |
+| `tsx` | `4.23.15` | `MIT` | `LICENSE` |
+| `zod` | `4.6.7` | `MIT` | `LICENSE` |
+
+2026-11-23 补充核对 MCP 相关包：以上三项按安装包元数据和许可文件记录；测试使用的 `@modelcontextprotocol/client@2.4.0` 同样声明 Apache-2.0。MCP SDK 的 LICENSE 说明许可迁移中尚未取得重新许可同意的历史贡献仍受原 MIT 许可约束，分发时须保留完整 LICENSE。
 
 两个字体包的许可文件包含 Geist Project Authors 的版权声明及 SIL Open Font License 1.1 完整文本。字体许可不因主项目采用 MIT 而改变。
 
