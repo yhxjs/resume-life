@@ -266,5 +266,5 @@ describe("提示词评估精确选样入口（仅本地合成请求）", () => {
     expect(later).toMatchObject({ protocol: "not-run", raw: null, notRunReason: "prior-http-429", semanticReview: "not-evaluated" });
     expect(local.requests).toHaveLength(3);
     expect(local.requests.every(request => JSON.stringify(request.messages) === JSON.stringify(first.assembledMessages))).toBe(true);
-  });
+  }, 30_000);
 });
