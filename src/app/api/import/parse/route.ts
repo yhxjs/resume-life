@@ -142,7 +142,10 @@ async function handlePost(req: Request) {
   let modelFailed = false;
   try {
     raw = await safeChat("parse", { feature: LLM_FEATURES.resumeImportParse }, RESUME_IMPORT_SYSTEM_PROMPT,
-      buildResumeImportMessages(text, provenance), { signal: req.signal, requireJson: "strict" });
+      buildResumeImportMessages(text, provenance), {
+        signal: req.signal,
+        requireJson: "strict"
+      });
   } catch (err) {
     if (err instanceof DataGenerationConflictError || err instanceof DocumentTableProvenanceError) throw err;
     modelError = err;

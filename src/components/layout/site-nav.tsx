@@ -43,6 +43,7 @@ const NAV_ITEMS: NavItem[] = [
     label: "面试演练",
     children: [
       { href: "/interviews", label: "模拟面试", desc: "全真文字模考与连打" },
+      { href: "/interviews/question-graphs", label: "面试题目图谱", desc: "生成、扩展与历史记录" },
       { href: "/drills", label: "题目练习", desc: "项目深挖与通用题精练" },
       { href: "/intros", label: "自我介绍", desc: "30秒/2分钟定制与背诵" },
     ],

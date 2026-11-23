@@ -422,7 +422,10 @@ export async function confirmInterviewReview(applicationId: number, interviewId:
     let raw: string;
     try {
       raw = await safeChat("summary", { feature: LLM_FEATURES.realInterviewReview }, INTERVIEW_REVIEW_SYSTEM_PROMPT,
-        buildInterviewReviewMessages(context, questions), { signal, requireJson: "strict" });
+        buildInterviewReviewMessages(context, questions), {
+          signal,
+          requireJson: "strict"
+        });
     } catch (error) {
       if (signal?.aborted) throw new InterviewReviewError("请求已取消", 499);
       if (error instanceof ModelInputBudgetError) throw new InterviewReviewError(error.message);

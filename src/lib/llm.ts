@@ -133,6 +133,12 @@ class LlmInvalidJsonError extends Error {
   }
 }
 
+class LlmOutputValidationError extends Error {
+  constructor(readonly validationError: unknown) {
+    super("AI 返回内容未通过业务校验");
+  }
+}
+
 type LogFn = (entry: { status: string; errorCode?: string; attempt?: number }) => void;
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -444,9 +450,15 @@ export type ChatStreamOptions = {
    * 两者均拒绝同一对象内重复的键，避免字段被静默覆盖；不改变历史数据读取。
    * 不满足时按可重试错误自动重新生成，总尝试次数与网络重试共享上限；
    * 上游仍以流式读取，但通过 JSON 校验后才一次性调用 onDelta，避免无效片段外发。
-   * 仅校验 JSON 语法，业务字段仍由调用方校验。
    */
   requireJson?: boolean | "strict";
+  /**
+   * 完整 JSON 的业务结构校验。校验器应无副作用，并以 throw 表示模型输出无效；
+   * 失败时不会交付正文。必须同时设置 requireJson。
+   */
+  validateOutput?: (content: string) => void;
+  /** 允许业务结构校验失败复用网络/JSON 重试预算；默认关闭，保留调用方的显式重试流程。 */
+  retryOutputValidationErrors?: boolean;
 };
 
 /**
@@ -465,6 +477,12 @@ export async function chatStream(
   opts?: ChatStreamOptions
 ): Promise<string> {
   opts?.signal?.throwIfAborted();
+  if (opts?.validateOutput && !opts.requireJson) {
+    throw new LlmConfigError("AI 输出结构校验需要启用 requireJson");
+  }
+  if (opts?.retryOutputValidationErrors && !opts.validateOutput) {
+    throw new LlmConfigError("AI 业务结构自动重试需要启用 validateOutput");
+  }
   if (llmInFlight >= LLM_MAX_CONCURRENT) {
     throw new LlmBusyError(
       `同时进行的模型调用过多（上限 ${LLM_MAX_CONCURRENT} 个），请等待当前任务完成后再试。`
@@ -589,6 +607,13 @@ async function runChatStream(
           else extractJson(content);
         } catch { throw new LlmInvalidJsonError(); }
       }
+      if (opts?.validateOutput) {
+        try {
+          opts.validateOutput(content);
+        } catch (error) {
+          throw new LlmOutputValidationError(error);
+        }
+      }
       if (opts?.requireJson) wrappedOnDelta?.(content);
       meter("ok", "", attempt, addUsage(knownUsage, usage));
       return content;
@@ -600,6 +625,7 @@ async function runChatStream(
         : err instanceof LlmResponseError ? err.code
         : err instanceof LlmTimeoutError ? "timeout"
         : err instanceof LlmInvalidJsonError ? "invalid_json"
+        : err instanceof LlmOutputValidationError ? "invalid_output"
         : err instanceof TypeError ? "network"
         : "unknown";
       // 若已由客户端主动取消，直接向上抛出
@@ -619,12 +645,14 @@ async function runChatStream(
         !tokenSent && !signal?.aborted && (
           err instanceof LlmTimeoutError || err instanceof TypeError ||
           err instanceof LlmInvalidJsonError ||
+          (err instanceof LlmOutputValidationError && opts?.retryOutputValidationErrors === true) ||
           (err instanceof LlmResponseError && err.reason === "interrupted") ||
           (err instanceof LlmHttpError && RETRYABLE_STATUS.has(err.status))
         );
       if (!retryable || attempt >= (opts?.connectionTest ? 0 : LLM_MAX_RETRIES)) {
         logLlm({ status: "error", errorCode, attempt });
         meter("failed", errorCode, attempt, knownUsage);
+        if (err instanceof LlmOutputValidationError) throw err.validationError;
         throw err;
       }
       attempt += 1;

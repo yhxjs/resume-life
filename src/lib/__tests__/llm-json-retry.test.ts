@@ -41,6 +41,79 @@ afterEach(() => {
 });
 
 describe("requireJson 无效 JSON 自动重试", () => {
+  it("合法 JSON 但业务结构无效时复用同一重试预算，且只交付通过校验的结果", async () => {
+    const invalid = '{"ok":false}';
+    const valid = '{"ok":true}';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(respondSse(invalid))
+      .mockResolvedValueOnce(respondSse(valid));
+    vi.stubGlobal("fetch", fetchMock);
+    const onDelta = vi.fn();
+    const validateOutput = vi.fn((content: string) => {
+      if ((JSON.parse(content) as { ok?: unknown }).ok !== true) throw new Error("业务字段无效");
+    });
+    vi.useFakeTimers();
+    const pending = chatStream("summary", [], onDelta, {
+      source: SOURCE,
+      requireJson: "strict",
+      validateOutput,
+      retryOutputValidationErrors: true,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await pending).toBe(valid);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(validateOutput).toHaveBeenCalledTimes(2);
+    expect(onDelta).toHaveBeenCalledExactlyOnceWith(valid);
+    expect(recorded.calls[0]).toMatchObject({ status: "ok", attempts: 1 });
+  });
+
+  it("业务结构校验连续失败时最多请求三次，并抛出最后一次校验错误", async () => {
+    const invalid = '{"ok":false}';
+    const validationError = new Error("业务字段无效");
+    const fetchMock = vi.fn(async () => respondSse(invalid));
+    vi.stubGlobal("fetch", fetchMock);
+    const onDelta = vi.fn();
+    vi.useFakeTimers();
+    const pending = chatStream("summary", [], onDelta, {
+      source: SOURCE,
+      requireJson: "strict",
+      validateOutput: () => { throw validationError; },
+      retryOutputValidationErrors: true,
+    }).then(() => null, (error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await pending).toBe(validationError);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(onDelta).not.toHaveBeenCalled();
+    expect(recorded.calls[0]).toMatchObject({ status: "failed", errorCode: "invalid_output", attempts: 2 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("业务结构校验默认不自动重试，保留调用方的显式重试流程", async () => {
+    const invalid = '{"ok":false}';
+    const validationError = new Error("业务字段无效");
+    const fetchMock = vi.fn(async () => respondSse(invalid));
+    vi.stubGlobal("fetch", fetchMock);
+    const onDelta = vi.fn();
+    const outcome = chatStream("summary", [], onDelta, {
+      source: SOURCE,
+      requireJson: "strict",
+      validateOutput: () => { throw validationError; },
+    }).then(() => null, (error: unknown) => error);
+
+    expect(await outcome).toBe(validationError);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onDelta).not.toHaveBeenCalled();
+    expect(recorded.calls[0]).toMatchObject({ status: "failed", errorCode: "invalid_output", attempts: 0 });
+  });
+
+  it("结构校验器没有启用 JSON 缓冲时直接拒绝配置", async () => {
+    const validateOutput = vi.fn();
+    await expect(chatStream("summary", [], undefined, { validateOutput })).rejects.toThrow("requireJson");
+    expect(validateOutput).not.toHaveBeenCalled();
+  });
+
   it.each([true, "strict"] as const)("%s 拒绝重复字段后按原预算重试，只交付唯一字段的结果", async requireJson => {
     const bad = '{"depth":2,"depth":9,"comment":"SYNTHETIC_PRIVATE_MARKER"}';
     const good = '{"depth":7,"comment":"有效点评"}';

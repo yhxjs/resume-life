@@ -107,7 +107,11 @@ async function handlePost(req: Request) {
         input,
         // 生成协议是 JSON；完整校验并保存前不把临时正文或点评作为页面结果。
         () => {},
-        { signal: emitter.signal, requestId, requireJson: "strict" }
+        {
+          signal: emitter.signal,
+          requestId,
+          requireJson: "strict"
+        }
       );
       try {
         return validateGeneratedIntroVersions(JSON.parse(raw), kinds);

@@ -117,7 +117,10 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       { feature: LLM_FEATURES.resumePolish, entity: { type: "resume", id: numericId } },
       system,
       messages,
-      { signal: req.signal, requireJson: "strict" }
+      {
+        signal: req.signal,
+        requireJson: "strict"
+      }
     );
   } catch (err) {
     const message =

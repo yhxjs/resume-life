@@ -88,7 +88,11 @@ async function handlePost(req: Request) {
         systemPrompt,
         messages,
         () => {},
-        { signal: emitter.signal, requestId, requireJson: "strict" }
+        {
+          signal: emitter.signal,
+          requestId,
+          requireJson: "strict"
+        }
       );
     } catch (err) {
       if (err instanceof LlmConfigError) {

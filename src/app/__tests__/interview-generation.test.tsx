@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import { SseServerError, type SseOptions } from "@/lib/fetch-sse";
 import { HttpError } from "@/lib/fetcher";
+import { INTERVIEW_QUESTION_GRAPH_DRAFT_KEY } from "@/lib/interview-question-graph-draft";
 import type { InterviewStartForm } from "@/components/interviews/interview-start-form";
 
 type FormProps = ComponentProps<typeof InterviewStartForm>;
@@ -34,7 +35,10 @@ beforeEach(() => {
   state.form = null;
   state.canDelete = true;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.sessionStorage.removeItem(INTERVIEW_QUESTION_GRAPH_DRAFT_KEY);
+});
 
 it("删除从确认开始持锁时，旧开始回调也不能创建面试，配置原稿保留", async () => {
   const page = render(<InterviewsPage />); const oldStart = state.form!.onStart;
@@ -42,6 +46,19 @@ it("删除从确认开始持锁时，旧开始回调也不能创建面试，配�
   await act(async () => { oldStart(); state.form!.onStart(); }); expect(state.stream).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "立即开启模拟实战" }).closest("fieldset")?.disabled).toBe(true);
   expect((screen.getByLabelText("目标岗位要求（JD / 职位描述）") as HTMLTextAreaElement).value).toContain("尚未上线");
+});
+
+it("切换面试官视角进入独立图谱页并带入当前配置", () => {
+  render(<InterviewsPage />);
+  fireEvent.click(screen.getByRole("button", { name: "面试官视角" }));
+  expect(state.push).toHaveBeenCalledExactlyOnceWith("/interviews/question-graphs?draft=interview");
+  expect(JSON.parse(window.sessionStorage.getItem(INTERVIEW_QUESTION_GRAPH_DRAFT_KEY) ?? "null")).toEqual({
+    resumeId: 1,
+    resumeVersionId: 11,
+    jd: "  仅做接口联调 <T> &amp;\n尚未上线  ",
+    style: "gentle",
+  });
+  expect(screen.queryByRole("region", { name: "模拟面试问题图谱" })).toBeNull();
 });
 
 const creationFailures = [

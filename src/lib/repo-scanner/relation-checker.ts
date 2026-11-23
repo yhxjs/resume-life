@@ -122,7 +122,10 @@ export async function checkPathsRelation(
       },
       PATH_RELATION_SYSTEM_PROMPT,
       modelMessages,
-      { signal, requireJson: "strict" }
+      {
+        signal,
+        requireJson: "strict"
+      }
     );
     const result = parseRelationResult(reply, "model");
     if (result) return result;

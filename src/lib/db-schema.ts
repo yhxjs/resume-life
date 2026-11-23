@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createSearchIndexes, SEARCH_INDEX_OBJECT_NAMES } from "./search-index";
 
-export const CURRENT_DB_VERSION = 7;
+export const CURRENT_DB_VERSION = 8;
 
 const PREPARATION_PLAN_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS application_preparation_plans (
@@ -67,6 +67,23 @@ CREATE TABLE IF NOT EXISTS salary_creation_requests (
   created_at TEXT NOT NULL,
   CHECK (status = 'succeeded' OR negotiation_id IS NULL)
 );
+`;
+
+const INTERVIEW_QUESTION_GRAPH_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS interview_question_graphs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  resume_id INTEGER NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+  resume_version_id INTEGER REFERENCES resume_versions(id) ON DELETE SET NULL,
+  jd TEXT NOT NULL,
+  style TEXT NOT NULL CHECK (style IN ('gentle','stress','deep','manager','hr','mining')),
+  question TEXT NOT NULL,
+  graph_json TEXT NOT NULL CHECK (json_valid(graph_json) AND json_type(graph_json) = 'object'),
+  history_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(history_json) AND json_type(history_json) = 'array'),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_interview_question_graphs_updated ON interview_question_graphs(updated_at DESC, id DESC);
 `;
 
 /**
@@ -264,6 +281,8 @@ CREATE TABLE IF NOT EXISTS interview_turns (
   retries TEXT NOT NULL DEFAULT '[]',
   answered_at TEXT NOT NULL DEFAULT ''
 );
+
+${INTERVIEW_QUESTION_GRAPH_SCHEMA_SQL}
 
 CREATE TABLE IF NOT EXISTS resume_diagnoses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -697,7 +716,8 @@ export function validateDatabaseSchema(database: DatabaseSync, version = CURRENT
     !(version < 4 && table === "application_interview_recap_contexts") &&
     !(version < 5 && table === "project_material_table_provenance") &&
     !(version < 6 && table === "resume_import_source_receipts") &&
-    !(version < 7 && table === "application_preparation_plans");
+    !(version < 7 && table === "application_preparation_plans") &&
+    !(version < 8 && table === "interview_question_graphs");
   const expectedTables = [...EXPECTED_SCHEMA.keys()].filter(included);
   const actualTables = (database
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -760,7 +780,7 @@ export function rollbackIgnoringAutoRollback(
 
 export function initializeDatabase(database: DatabaseSync): void {
   const version = database.prepare("PRAGMA user_version").get() as { user_version: number };
-  if (![0, 1, 2, 3, 4, 5, 6, CURRENT_DB_VERSION].includes(version.user_version)) {
+  if (![0, 1, 2, 3, 4, 5, 6, 7, CURRENT_DB_VERSION].includes(version.user_version)) {
     throw new Error(`不支持数据库版本 ${version.user_version}：仅支持数据库版本 ${CURRENT_DB_VERSION}`);
   }
   if (version.user_version !== 0) {
@@ -773,7 +793,7 @@ export function initializeDatabase(database: DatabaseSync): void {
     try {
       // 取得写锁后重验，支持多个进程同时打开同一份旧版本库。
       const locked = database.prepare("PRAGMA user_version").get() as { user_version: number };
-      if (![1, 2, 3, 4, 5, 6, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
+      if (![1, 2, 3, 4, 5, 6, 7, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
       validateDatabaseSchema(database, locked.user_version);
       database.exec(SALARY_REQUEST_SCHEMA_SQL);
       database.exec(RESUME_REQUEST_SCHEMA_SQL);
@@ -781,6 +801,7 @@ export function initializeDatabase(database: DatabaseSync): void {
       database.exec(PROJECT_MATERIAL_TABLE_PROVENANCE_SCHEMA_SQL);
       database.exec(RESUME_IMPORT_SOURCE_SCHEMA_SQL);
       database.exec(PREPARATION_PLAN_SCHEMA_SQL);
+      database.exec(INTERVIEW_QUESTION_GRAPH_SCHEMA_SQL);
       validateDatabaseSchema(database);
       database.exec(`PRAGMA user_version = ${CURRENT_DB_VERSION}`);
       database.exec("COMMIT");

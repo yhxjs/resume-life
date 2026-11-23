@@ -106,10 +106,11 @@ describe("谈薪创建的持久请求回执", () => {
     expect(records[0].tables).not.toContain("salary_creation_requests");
     expect(records.some(record => record.table === "salary_creation_requests")).toBe(false);
     records[0].dbVersion = 1;
-    records[0].tables = records[0].tables.filter((table: string) => table !== "application_interview_recap_contexts" && table !== "project_material_table_provenance" && table !== "application_preparation_plans");
+    records[0].tables = records[0].tables.filter((table: string) => table !== "application_interview_recap_contexts" && table !== "project_material_table_provenance" && table !== "application_preparation_plans" && table !== "interview_question_graphs");
     delete records.at(-1).stats.application_interview_recap_contexts;
     delete records.at(-1).stats.project_material_table_provenance;
     delete records.at(-1).stats.application_preparation_plans;
+    delete records.at(-1).stats.interview_question_graphs;
     const bytes = Buffer.from(records.map(record => JSON.stringify(record)).join("\n") + "\n");
     const { stageBackupRecordStream } = await import("../backup-staging");
     const staged = await stageBackupRecordStream((async function* () { yield bytes; })(), db);

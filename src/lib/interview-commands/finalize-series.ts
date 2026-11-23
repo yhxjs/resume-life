@@ -54,7 +54,10 @@ export async function finalizeSeries(seriesId: number, signal: AbortSignal): Pro
         { feature: LLM_FEATURES.seriesFinalize, entity: { type: "interview_series", id: seriesId } },
         SERIES_FINALIZE_PROMPT,
         buildSeriesFinalizeMessages(series.jd, roundInputs),
-        { signal, requireJson: "strict" },
+        {
+          signal,
+          requireJson: "strict"
+        },
       );
     } catch (error) {
       const status = error instanceof ModelInputBudgetError ? 413 : 502;

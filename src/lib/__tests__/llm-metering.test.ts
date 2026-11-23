@@ -71,12 +71,21 @@ describe("chatStream 计量", () => {
     expect(onUsage).toHaveBeenCalledExactlyOnceWith({ inputTokens: 12, outputTokens: 2, cachedTokens: null });
   });
 
-  it("用量到达后流意外结束仍记录已报告的 token", async () => {
+  it("流意外结束并耗尽重试时累计各次已报告的 token", async () => {
     const sse = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 11, completion_tokens: 3 } })}\n\n`;
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { headers: { "content-type": "text/event-stream" } })));
-    await expect(chatStream("summary", [], undefined, { source: SOURCE, onUsage })).rejects.toThrow();
-    expect(recorded.calls[0]).toMatchObject({ status: "failed", usage: { inputTokens: 11, outputTokens: 3 } });
-    expect(onUsage).toHaveBeenCalledExactlyOnceWith({ inputTokens: 11, outputTokens: 3, cachedTokens: null });
+    const upstream = vi.fn(async () => new Response(sse, { headers: { "content-type": "text/event-stream" } }));
+    vi.stubGlobal("fetch", upstream);
+    vi.useFakeTimers();
+    const outcome = chatStream("summary", [], undefined, { source: SOURCE, onUsage })
+      .then(() => null, (error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const expectedUsage = { inputTokens: 33, outputTokens: 9, cachedTokens: null };
+    expect(await outcome).toMatchObject({ code: "protocol", reason: "interrupted", usage: expectedUsage });
+    expect(upstream).toHaveBeenCalledTimes(3);
+    expect(recorded.calls).toHaveLength(1);
+    expect(recorded.calls[0]).toMatchObject({ status: "failed", attempts: 2, usage: expectedUsage });
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith(expectedUsage);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("成功时写一条 ok 日志，带 usage 与来源", async () => {

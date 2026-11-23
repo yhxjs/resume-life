@@ -32,7 +32,8 @@ afterEach(() => {
   fs.rmSync(directory, { recursive: true, force: true });
 });
 function downgrade(db: DatabaseSync, version: number) {
-  db.exec("DROP TABLE application_preparation_plans");
+  if (version < 7) db.exec("DROP TABLE application_preparation_plans");
+  if (version < 8) db.exec("DROP TABLE interview_question_graphs");
   db.exec(`DROP TABLE ${table}`);
   if (version < 5) db.exec("DROP TABLE project_material_table_provenance");
   if (version < 4) db.exec("DROP TABLE application_interview_recap_contexts");
@@ -98,7 +99,7 @@ async function stage(records: BackupRecord[]) {
   return (await import("../backup-staging")).stageBackupRecordStream((async function* () { yield bytes; })(), database);
 }
 
-it.each([1, 2, 3, 4, 5, 6])("v%s business backup excludes source receipts and restore invalidates them while preserving login", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7])("v%s business backup excludes source receipts and restore invalidates them while preserving login", async version => {
   const receipt = source.issueResumeImportSource(ownerHash, text, provenance);
   const { TABLES_CLEAR_ORDER, TABLES_INSERT_ORDER, AUTOINCREMENT_TABLES, restoreAllData } = await import("../backup");
   expect(TABLES_CLEAR_ORDER).not.toContain(table);
@@ -118,7 +119,7 @@ it.each([1, 2, 3, 4, 5, 6])("v%s business backup excludes source receipts and re
   expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: CURRENT_DB_VERSION });
 });
 
-it.each([1, 2, 3, 4, 5, 6])("v%s cannot smuggle runtime receipt table into a user backup", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7])("v%s cannot smuggle runtime receipt table into a user backup", async version => {
   const records = await exported(version);
   const manifest = records[0];
   if (manifest?.kind !== "manifest") throw new Error("Missing manifest");

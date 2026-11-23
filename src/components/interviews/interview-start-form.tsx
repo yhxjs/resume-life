@@ -9,12 +9,14 @@ import { INTERVIEW_STYLES, INTERVIEW_ROUNDS_ERROR, isInterviewRounds, type Inter
 import { btnGhost, btnPrimary, inputCls, textareaCls, labelCls, textErr } from "@/lib/ui";
 
 export type InterviewStartMode = "single" | "series";
+export type InterviewPerspective = "candidate" | "interviewer";
 
 export function InterviewStartForm({
   resumes,
   resumesError,
   onRetryResumes,
   mode,
+  perspective,
   resumeId,
   resumeVersionId,
   jd,
@@ -29,6 +31,7 @@ export function InterviewStartForm({
   displayedText,
   isTyping,
   onModeChange,
+  onPerspectiveChange,
   onResumeIdChange,
   onResumeVersionIdChange,
   onJdChange,
@@ -41,6 +44,7 @@ export function InterviewStartForm({
   resumesError?: string;
   onRetryResumes?: () => void;
   mode: InterviewStartMode;
+  perspective: InterviewPerspective;
   resumeId: number | "";
   resumeVersionId: number | "";
   jd: string;
@@ -55,6 +59,7 @@ export function InterviewStartForm({
   displayedText: string;
   isTyping: boolean;
   onModeChange: (mode: InterviewStartMode) => void;
+  onPerspectiveChange: (perspective: InterviewPerspective) => void;
   onResumeIdChange: (id: number) => void;
   onResumeVersionIdChange: (id: number) => void;
   onJdChange: (jd: string) => void;
@@ -84,44 +89,22 @@ export function InterviewStartForm({
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3.5">
               <div className="flex items-center gap-2">
                 <span aria-hidden className="h-[9px] w-[9px] rounded-[1px] bg-primary" />
-                <span className="font-serif text-base font-bold text-ink">配置实战考场</span>
+                <span className="font-serif text-base font-bold text-ink">{perspective === "candidate" ? "配置实战考场" : "配置面试题目图谱"}</span>
               </div>
 
-              <div
-                className="inline-flex rounded-xl border border-line bg-surface p-1 shadow-xs text-xs"
-                role="group"
-                aria-label="面试模式"
-              >
-                <button
-                  type="button"
-                  className={`rounded-lg px-3.5 py-1.5 font-medium transition-all ${
-                    mode === "single"
-                      ? "bg-card text-ink font-bold shadow-xs"
-                      : "text-muted hover:text-ink"
-                  }`}
-                  onClick={() => onModeChange("single")}
-                  aria-pressed={mode === "single"}
-                  disabled={starting}
-                >
-                  单轮模考
-                </button>
-                <button
-                  type="button"
-                  className={`rounded-lg px-3.5 py-1.5 font-medium transition-all ${
-                    mode === "series"
-                      ? "bg-card text-ink font-bold shadow-xs"
-                      : "text-muted hover:text-ink"
-                  }`}
-                  onClick={() => onModeChange("series")}
-                  aria-pressed={mode === "series"}
-                  disabled={starting}
-                >
-                  进阶三轮连打
-                </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex rounded-lg border border-line bg-surface p-1 text-xs" role="group" aria-label="面试视角">
+                  <button type="button" className={`rounded-md px-3 py-1.5 font-medium transition-colors ${perspective === "candidate" ? "bg-card font-bold text-ink shadow-xs" : "text-muted hover:text-ink"}`} onClick={() => onPerspectiveChange("candidate")} aria-pressed={perspective === "candidate"} disabled={starting}>候选人视角</button>
+                  <button type="button" className={`rounded-md px-3 py-1.5 font-medium transition-colors ${perspective === "interviewer" ? "bg-card font-bold text-ink shadow-xs" : "text-muted hover:text-ink"}`} onClick={() => onPerspectiveChange("interviewer")} aria-pressed={perspective === "interviewer"} disabled={starting}>面试官视角</button>
+                </div>
+                {perspective === "candidate" && <div className="inline-flex rounded-lg border border-line bg-surface p-1 text-xs" role="group" aria-label="面试模式">
+                  <button type="button" className={`rounded-md px-3 py-1.5 font-medium transition-colors ${mode === "single" ? "bg-card font-bold text-ink shadow-xs" : "text-muted hover:text-ink"}`} onClick={() => onModeChange("single")} aria-pressed={mode === "single"} disabled={starting}>单轮模考</button>
+                  <button type="button" className={`rounded-md px-3 py-1.5 font-medium transition-colors ${mode === "series" ? "bg-card font-bold text-ink shadow-xs" : "text-muted hover:text-ink"}`} onClick={() => onModeChange("series")} aria-pressed={mode === "series"} disabled={starting}>进阶三轮连打</button>
+                </div>}
               </div>
             </div>
 
-            {mode === "series" && (
+            {perspective === "candidate" && mode === "series" && (
               <div className="rounded-xl border border-accent/25 bg-accent-wash p-3.5 text-xs leading-relaxed text-ink">
                 <span className="font-bold text-accent">三轮模拟安排：</span>
                 一面 · 技术面（深度攻坚）→ 二面 · 主管面（架构权衡与系统设计）→ 三面 · HR 面（动机与团队协作）。
@@ -129,7 +112,7 @@ export function InterviewStartForm({
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className={`grid grid-cols-1 gap-4 ${perspective === "candidate" ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
               <label className="block">
                 <span className={labelCls}>关联简历</span>
                 <select
@@ -146,7 +129,7 @@ export function InterviewStartForm({
                   ))}
                 </select>
               </label>
-              <div className="block">
+              {perspective === "candidate" && <div className="block">
                 <label htmlFor={roundsId} className={labelCls}>{mode === "series" ? "每轮题数" : "总题数"}</label>
                 <input
                   id={roundsId}
@@ -162,8 +145,8 @@ export function InterviewStartForm({
                   onChange={(event) => onRoundsChange(event.target.value === "" ? "" : Number(event.target.value))}
                 />
                 {!validRounds && <span id={roundsErrorId} className="mt-1 block text-xs text-danger">{INTERVIEW_ROUNDS_ERROR}</span>}
-              </div>
-              {mode === "single" && (
+              </div>}
+              {(perspective === "interviewer" || mode === "single") && (
                 <label className="block">
                   <span className={labelCls}>考官风格</span>
                   <select
@@ -198,7 +181,9 @@ export function InterviewStartForm({
 
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-line/60">
               <span className="text-xs text-faint">
-                {style === "mining" && mode === "single"
+                {perspective === "interviewer"
+                  ? "按面试官风格逐轮生成预测回答与追问分支"
+                  : style === "mining" && mode === "single"
                   ? "提示：访谈官将引导你梳理实际任务、行动、分工与已知结果"
                   : "提示：AI 将结合选定简历与 JD 针对性出题"}
               </span>
@@ -208,7 +193,7 @@ export function InterviewStartForm({
                     取消
                   </button>
                 )}
-                <button
+                {perspective === "candidate" && <button
                   type="button"
                   className={btnPrimary}
                   onClick={onStart}
@@ -221,7 +206,7 @@ export function InterviewStartForm({
                     : style === "mining"
                     ? "立即开启经历挖掘"
                     : "立即开启模拟实战"}
-                </button>
+                </button>}
               </div>
             </div>
 
@@ -245,12 +230,12 @@ export function InterviewStartForm({
           <div className="flex flex-col justify-between space-y-4 rounded-2xl border border-line bg-card p-6 shadow-card-subtle">
             <div className="space-y-3.5">
               <div className="flex items-center justify-between border-b border-line pb-2.5">
-                <h3 className="font-serif text-sm font-bold text-ink">考场战术与机制</h3>
+                <h3 className="font-serif text-sm font-bold text-ink">{perspective === "candidate" ? "考场战术与机制" : "图谱生成规则"}</h3>
                 <span className="rounded bg-accent-wash px-2 py-0.5 text-[10px] font-bold text-accent">
                   实战指引
                 </span>
               </div>
-              <ul className="space-y-3 text-xs leading-relaxed text-muted">
+              {perspective === "candidate" ? <ul className="space-y-3 text-xs leading-relaxed text-muted">
                 <li className="flex items-start gap-2.5">
                   <span className="shrink-0 whitespace-nowrap font-mono font-bold text-primary">01.</span>
                   <span><strong>逐题动态追问：</strong>面试官不仅就题论题，还会根据你的回答针对性追问技术底层与方案取舍。</span>
@@ -267,11 +252,18 @@ export function InterviewStartForm({
                   <span className="shrink-0 whitespace-nowrap font-mono font-bold text-accent">04.</span>
                   <span><strong>经历挖掘专线：</strong>只记得做过但说不清细节？选「经历挖掘」由访谈官逐层启发背景、行动、取舍与结果，产出待核实材料与简历草稿。</span>
                 </li>
-              </ul>
+              </ul> : <ul className="space-y-3 text-xs leading-relaxed text-muted">
+                <li><strong className="text-ink">逐轮补全：</strong>先生成主问题，再逐条扩展尚未完善的追问分支。</li>
+                <li><strong className="text-ink">回答分支：</strong>每道问题最多展示两种预测回答及对应追问。</li>
+                <li><strong className="text-ink">深度上限：</strong>追问最多延伸到第 3 层，整张图最多 7 道问题。</li>
+                <li><strong className="text-ink">事实边界：</strong>预测回答仅供演练，简历未确认的职责和结果会标为待确认或假设。</li>
+              </ul>}
             </div>
 
             <div className="rounded-xl border border-primary/20 bg-primary-soft/50 p-3.5 text-xs text-primary leading-relaxed">
-              💡 <strong>作答建议：</strong>先回应题目要点，再按需要说明依据与取舍；经历题写清实际分工和验证状态。STAR 可选，无需为凑结构或字数补写经历。
+              {perspective === "candidate"
+                ? <>💡 <strong>作答建议：</strong>先回应题目要点，再按需要说明依据与取舍；经历题写清实际分工和验证状态。STAR 可选，无需为凑结构或字数补写经历。</>
+                : <>💡 <strong>生成说明：</strong>图谱会保存在独立工作台的历史记录中，可随时载入并继续扩展；修改简历、JD 或风格后可重新生成。</>}
             </div>
           </div>
         </div>

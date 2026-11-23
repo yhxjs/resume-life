@@ -48,7 +48,10 @@ async function handlePost(req: Request) {
       { feature: LLM_FEATURES.jdPortraitGenerate },
       JD_PORTRAIT_SYSTEM_PROMPT,
       buildJdPortraitMessages(jd),
-      { signal: req.signal, requireJson: "strict" }
+      {
+        signal: req.signal,
+        requireJson: "strict"
+      }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);

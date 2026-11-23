@@ -119,7 +119,7 @@
   `nextCursor` 为 `null` 表示没有下一页。客户端在「加载更多」时把上一次的 `nextCursor` 原样回传。`/api/interviews` 与 `/api/interviews/series` 还返回独立统计的 `total`（不受关键词和分页游标影响），用于展示累计场次。
 - 参数非法（非数字、越界）返回 `400`。
 
-采用游标分页的列表：`/api/applications`、`/api/drills`、`/api/bank`、`/api/notebook`、`/api/interviews`、`/api/interviews/series`、`/api/projects/[id]/summary-history`。
+采用游标分页的列表：`/api/applications`、`/api/drills`、`/api/bank`、`/api/notebook`、`/api/interviews`、`/api/interviews/series`、`/api/interviews/question-graphs`、`/api/projects/[id]/summary-history`。
 
 历史记录接口 `/api/intros`、`/api/tools/jd-portraits`、`/api/tools/jargon-decodings`、`/api/tools/career-gap-remedies`、`/api/tools/salary-negotiations` 也按 `id` 降序分页，统一返回 `{ "items": […], "nextCursor": "…" | null, "total": 记录总数 }`，`total` 不受游标影响。未传分页参数时返回默认的前 50 条；读取全部历史记录需要逐页请求。
 
@@ -353,7 +353,7 @@
 
 `GET /api/resumes/[id]/versions` 返回 `{ versions, base_version_id, draft_revision }`；列表仅包含版本 ID、所属简历 ID、版本号、父节点、名称、说明和发布时间，不含 `snapshot`。正文和排版快照经 `GET /api/resumes/[id]/versions/[versionId]` 按需读取。`POST` 接受 `{ name, description?, draft_revision }`，发布成功后将草稿来源推进到新版本。`POST .../[versionId]/branch` 接受 `{ draft_revision }`，将历史版本载入草稿；并发修改返回 409，不覆盖新草稿。版本本身没有编辑或删除接口。
 
-数据库结构版本为 `7`，包含当前全部业务表、本机运行表、认证表、索引、触发器与搜索结构。空数据库在事务中初始化为 v7；完整 v1/v2/v3/v4/v5/v6 库经校验后，在事务中补齐所需的本机创建回执、真实面试复盘来源快照、项目材料表格来源表、简历导入来源运行表与岗位准备清单表，失败回滚。旧复盘不回填当前岗位资料，旧材料不按正文标签推断来源。已有 v7 数据库必须通过完整结构与外键校验，其他版本或结构不匹配时拒绝打开。加密备份 manifest 格式版本为 `1.0.0`，加密容器头版本为 `1`，接受数据库版本为 `1`、`2`、`3`、`4`、`5`、`6` 或 `7` 的完整业务备份；必须包含对应版本的全部业务表、序列、头像清单与结束计数。v1/v2/v3 恢复后复盘来源快照表为空，v4 起必须带该表清单及完整记录。v1/v2/v3/v4 恢复后项目材料表格来源表为空，v5/v6/v7 必须包含 `project_material_table_provenance` 清单及完整记录；旧版本不能夹带新表。来源记录须通过严格 JSON 结构、正文哈希及 UTF-16 标识范围校验，导出、暂存和恢复提交前均检查，失败不覆盖现库；合法来源 JSON 原样往返，无记录表示未知，明确的空标识数组仍保留。v6 业务表清单与 v5 相同；v7 新增 `application_preparation_plans`，v1–v6 备份恢复后该表为空。认证凭证、会话、创建回执及 `resume_import_source_receipts` 不纳入用户备份；恢复提交事务清理导入来源并更换世代，失败一并回滚。恢复前的本机原库快照仍可能包含运行数据。用户备份不包含上述运行表，不支持其他格式版本或缺字段的备份。
+数据库结构版本为 `8`，包含当前全部业务表、本机运行表、认证表、索引、触发器与搜索结构。空数据库在事务中初始化为 v8；完整 v1 至 v7 数据库经校验后，在事务中补齐所需的本机创建回执、真实面试复盘来源快照、项目材料表格来源表、简历导入来源运行表、岗位准备清单表与面试题目图谱历史表，失败回滚。旧复盘不回填当前岗位资料，旧材料不按正文标签推断来源。已有 v8 数据库必须通过完整结构与外键校验，其他版本或结构不匹配时拒绝打开。加密备份 manifest 格式版本为 `1.0.0`，加密容器头版本为 `1`，接受数据库版本为 `1` 至 `8` 的完整业务备份；必须包含对应版本的全部业务表、序列、头像清单与结束计数。v1/v2/v3 恢复后复盘来源快照表为空，v4 起必须带该表清单及完整记录。v1/v2/v3/v4 恢复后项目材料表格来源表为空，v5 起必须包含 `project_material_table_provenance` 清单及完整记录；旧版本不能夹带新表。v7 新增 `application_preparation_plans`，v1–v6 备份恢复后该表为空；v8 新增 `interview_question_graphs`，v1–v7 备份恢复后图谱历史为空。来源记录须通过严格 JSON 结构、正文哈希及 UTF-16 标识范围校验，导出、暂存和恢复提交前均检查，失败不覆盖现库；合法来源 JSON 原样往返，无记录表示未知，明确的空标识数组仍保留。认证凭证、会话、创建回执及 `resume_import_source_receipts` 不纳入用户备份；恢复提交事务清理导入来源并更换世代，失败一并回滚。恢复前的本机原库快照仍可能包含运行数据。用户备份不包含上述运行表，不支持其他格式版本或缺字段的备份。
 
 ### 项目目录删除与新建
 
@@ -469,6 +469,16 @@ DOCX 上传额外保存由服务端提取器生成的 `tableProvenance`，材料
 
 `POST /api/portfolio/preview` 接受与导出相同的 JSON 对象、版本选择和脱敏配置，经相同的领域组装与脱敏后返回 `{html,resumeHtml}`：`html` 为作品集预览，`resumeHtml` 为独立简历 HTML，不生成 ZIP、不上传或发布。此端点需要登录，并沿用上述请求校验与 400/404/413/415/422 错误；两份 HTML 合计受展开内容预算限制，超限返回 413，未知异常返回统一 500 与 `requestId`。
 
+### 面试题目图谱
+
+`POST /api/interviews/question-graph` 接受 `{action,resume_id,resume_version_id,jd,style}`，`action` 为 `start` 或 `expand`。简历与发布版 ID 必须为正安全整数且版本属于该简历；JD 必须非空，风格使用面试配置的固定枚举。接口沿用登录校验、请求体及模型输入预算，并以 SSE 返回结果。
+
+`start` 返回 `{question,branches,graph_id,revision:0}`；每条分支为 `{label,predicted_answer,followup_question}`，必须恰有两条，成功后立即保存为独立图谱历史记录。`expand` 另需 `graph_id`、当前 `revision` 和 `frontier` 数组，每项为 `{question_id,depth:2,question,parent_question,answer_scenario}`，最多两项，ID 不可重复且只能含 1–40 个 ASCII 字母、数字、下划线或连字符。可携带最多七项的 `known_questions`，返回 `{expansions:[{question_id,branches}],graph_id,revision}`，完整覆盖请求中的 ID，并在保存时将旧图加入可撤销快照。版本冲突返回 `409`。
+
+新题不得与本批其他题或提供的已有题重复；大小写、全半角、空白、末尾标点及指定排版字符的变化仍算重复。题目最多 800 字符，回答最多 1000 字符，分支标签最多 80 字符。无效模型结果通过 SSE error 拒绝，前端保留旧图并允许重试。未知异常使用统一脱敏错误及请求 ID。
+
+页面每次扩展一个第二层节点，完整图谱共三层七题。独立页面 `/interviews/question-graphs` 提供按更新时间游标分页的历史列表；`GET /api/interviews/question-graphs/[id]` 返回图谱、最多两个撤销快照和生成条件，`POST /api/interviews/question-graphs/[id]/undo` 接受 `{expected_revision}` 并恢复上一步。图谱历史纳入 v8 业务备份，不新增模拟面试记录或投递准备资料。载入历史后可继续扩展或撤销；若原发布版本已删除，仍可查看，但不能基于其他简历版本继续扩展。
+
 ### 进阶面试推进
 
 `POST /api/interviews/series/[id]/advance` 必须携带 JSON `{from_interview_id:number}`，绑定发起页面的上一轮面试 ID，不再接受无请求体的隐式“推进最新轮次”。ID 须为正安全整数，来源须属于该系列且为可继续推进的已结束轮次，并已有单轮报告。
@@ -481,7 +491,7 @@ DOCX 上传额外保存由服务端提取器生成的 `tableProvenance`，材料
 
 ### 路由列表
 
-共 109 个路由文件。下表按路径分组；同一路径的多个方法写在一起。
+共 113 个路由文件。下表按路径分组；同一路径的多个方法写在一起。
 
 | 路径 | 方法 |
 |---|---|
@@ -516,6 +526,10 @@ DOCX 上传额外保存由服务端提取器生成的 `tableProvenance`，材料
 | `/api/import/parse` | POST |
 | `/api/import/source/discard` | POST |
 | `/api/interviews` | GET, POST |
+| `/api/interviews/question-graph` | POST |
+| `/api/interviews/question-graphs` | GET |
+| `/api/interviews/question-graphs/[id]` | GET |
+| `/api/interviews/question-graphs/[id]/undo` | POST |
 | `/api/interviews/[id]` | GET, DELETE |
 | `/api/interviews/[id]/answer` | POST |
 | `/api/interviews/[id]/evaluator-report` | POST |
@@ -763,7 +777,7 @@ JD 画像、暗号解码、空窗报告与谈薪演练详情的删除确认均�
 
 `GET /api/tools/salary-negotiations/requests/[requestId]` 返回 `{request_id,status}`，状态为 `pending`、`failed`、`deleted` 或 `succeeded`；完成状态另含正安全整数 `id`。无效编号返回 400，未找到返回 404；404 只代表该次读取，不证明迟到请求不会执行。接口鉴权且禁止缓存，回执不返回输入原文或哈希。处理中回执不自动过期或重新执行，服务意外停止时可显式核对历史后另建新编号，但不会撤销原请求，原请求仍可能完成。
 
-回执保存在本机运行表 `salary_creation_requests`，只记录编号、输入哈希、状态、结果引用及时间；完成状态与演练/开场同事务提交。失败不留下演练空壳；删除演练将结果引用置空并保留防重墓碑。同一数据库文件下跨进程认领，重启后保留；备份导出排除此表，成功恢复清除本机回执并更换数据世代，恢复失败一并回滚。v1/v2/v3/v4/v5/v6 数据库在校验完整结构后，以事务补齐所需运行表、复盘来源快照与材料表格来源表和岗位准备清单表并升级到 v7；旧版用户备份仍可恢复，缺少的复盘或材料来源资料不回填。
+回执保存在本机运行表 `salary_creation_requests`，只记录编号、输入哈希、状态、结果引用及时间；完成状态与演练/开场同事务提交。失败不留下演练空壳；删除演练将结果引用置空并保留防重墓碑。同一数据库文件下跨进程认领，重启后保留；备份导出排除此表，成功恢复清除本机回执并更换数据世代，恢复失败一并回滚。v1 至 v7 数据库在校验完整结构后，以事务补齐所需运行表、复盘来源快照、材料表格来源表、岗位准备清单表与面试题目图谱表并升级到 v8；旧版用户备份仍可恢复，缺少的历史业务资料保持为空。
 
 新建页面先同步锁定提交与表单，在当前标签页的 `sessionStorage` 保存编号、规范化背景及文档数据世代；暂存失败不发送 POST。刷新或返回列表后恢复同一背景，只读核对原编号，不自动重发。每次核对都先以不缓存 GET 读取请求回执，必须匹配原编号与完成状态；即使 POST 已返回有效 ID，也不能跳过回执。初次核对时 POST 的 ID 与回执 ID 不同则保留锁并提示记录不符，不读取或导航至串入的记录；用户显式重读后按原编号重新取回实际结果，不缓存失败核对中的错误 ID。取得回执中的正安全整数 ID 后，继续使用不缓存的详情 GET 核对所属记录、公司类型、岗位、薪资、筹码、HR 风格、完整开场及一致的创建时间，再进入对战室。核对失败保留锁，不能用另一请求或同文历史认领。无法取得 ID 的网络、408、409、5xx 或协议异常仍保留原编号、背景和历史核对入口；超时不代表原请求已撤销。历史读取失败时不能放开新建，恢复后须用户显式确认。恢复操作同步检查当前阶段，旧的重读、历史核对和允许另建回调不能抢跑新 POST、解除后续命令锁或重复完成导航。核对成功或显式允许新建时移除当前请求的暂存，不误清其他请求；关闭标签页清除浏览器暂存，已提交的服务端请求不会被撤销。恢复后的新数据世代不采用旧暂存。切页中止本地等待，迟到结果不能导航或刷新新页。
 

@@ -63,7 +63,10 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       { feature: LLM_FEATURES.introRecomment, entity: { type: "intro", id: introId } },
       INTRO_COMMENT_SYSTEM_PROMPT,
       [{ role: "user", parts: buildCommentUserMessage({ jd: intro.jd, sentences }) }],
-      { signal: req.signal, requireJson: "strict" }
+      {
+        signal: req.signal,
+        requireJson: "strict"
+      }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);

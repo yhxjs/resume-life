@@ -58,6 +58,19 @@ async function handlePost(_req: Request, { params }: { params: Promise<{ id: str
   }
 
   const requestId = requestIdFrom(_req);
+  const parseGeneratedSummary = (content: string): ProjectSummary => {
+    const parsed: unknown = JSON.parse(content);
+    if (!isResumeOnly && isEmptyGeneratedProjectSummary(parsed)) {
+      throw new Error("当前材料没有可生成的可靠项目总结内容，请补充项目材料或档案后重试");
+    }
+    if (isResumeOnly) {
+      const resume = validateGeneratedProjectResume(parsed);
+      if (!resume) throw new Error(`模型输出必须符合简历字段上限（techStack ≤${SUMMARY_LIMITS.techStack} 字，brief ≤${SUMMARY_LIMITS.brief} 字，achievements 最多 ${SUMMARY_LIMITS.maxAchievements} 条且每条 ≤${SUMMARY_LIMITS.achievement} 字），成果不得重复`);
+      return { ...existingSummary, ...resume };
+    }
+    if (!isGeneratedProjectSummary(parsed)) throw new Error(`模型输出必须包含完整八字段项目总结，并符合字段与总量上限（五维字段每项 ≤${SUMMARY_LIMITS.dimension} 字，techStack ≤${SUMMARY_LIMITS.techStack} 字，brief ≤${SUMMARY_LIMITS.brief} 字，achievements 最多 ${SUMMARY_LIMITS.maxAchievements} 条且每条 ≤${SUMMARY_LIMITS.achievement} 字，文本总量 ≤${SUMMARY_LIMITS.totalText} 字），成果不得重复`);
+    return normalizeSummary(parsed);
+  };
 
   return createSseResponse(async (emitter) => {
     let raw: string;
@@ -69,7 +82,11 @@ async function handlePost(_req: Request, { params }: { params: Promise<{ id: str
         messages,
         // 字段与提案校验完成前不把模型正文作为可预览结果。
         () => {},
-        { signal: emitter.signal, requestId, requireJson: "strict" }
+        {
+          signal: emitter.signal,
+          requestId,
+          requireJson: "strict"
+        }
       );
     } catch (err) {
       if (err instanceof LlmConfigError) {
@@ -83,20 +100,7 @@ async function handlePost(_req: Request, { params }: { params: Promise<{ id: str
 
     let summary: ProjectSummary;
     try {
-      const parsed: unknown = JSON.parse(raw);
-      if (!isResumeOnly && isEmptyGeneratedProjectSummary(parsed)) {
-        emitter.sendError("当前材料没有可生成的可靠项目总结内容，请补充项目材料或档案后重试");
-        return;
-      }
-      if (isResumeOnly) {
-        const resume = validateGeneratedProjectResume(parsed);
-        if (!resume) throw new Error(`模型输出必须符合简历字段上限（techStack ≤${SUMMARY_LIMITS.techStack} 字，brief ≤${SUMMARY_LIMITS.brief} 字，achievements 最多 ${SUMMARY_LIMITS.maxAchievements} 条且每条 ≤${SUMMARY_LIMITS.achievement} 字），成果不得重复`);
-        // 五维保留原稿，三要素采用本次明确结果；空值也作为变更交给用户核对。
-        summary = { ...existingSummary, ...resume };
-      } else {
-        if (!isGeneratedProjectSummary(parsed)) throw new Error(`模型输出必须包含完整八字段项目总结，并符合字段与总量上限（五维字段每项 ≤${SUMMARY_LIMITS.dimension} 字，techStack ≤${SUMMARY_LIMITS.techStack} 字，brief ≤${SUMMARY_LIMITS.brief} 字，achievements 最多 ${SUMMARY_LIMITS.maxAchievements} 条且每条 ≤${SUMMARY_LIMITS.achievement} 字，文本总量 ≤${SUMMARY_LIMITS.totalText} 字），成果不得重复`);
-        summary = normalizeSummary(parsed);
-      }
+      summary = parseGeneratedSummary(raw);
     } catch (err) {
       emitter.sendError(`AI 总结结果异常：${errorMessage(err)}`);
       return;

@@ -133,7 +133,10 @@ async function handlePost(req: Request) {
         { feature: LLM_FEATURES.negotiationStart },
         SALARY_NEGOTIATION_OPENING_PROMPT,
         messages,
-        { signal: req.signal, requireJson: "strict" }
+        {
+          signal: req.signal,
+          requireJson: "strict"
+        }
       );
     } catch (err) {
       const message = err instanceof LlmConfigError ? err.message : errorMessage(err);

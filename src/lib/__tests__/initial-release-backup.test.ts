@@ -21,7 +21,7 @@ describe("首版备份契约", () => {
 
   it("manifest 要求序列与头像清单，不接受缺失字段", () => {
     expect(() => validateBackupSequences(undefined)).toThrow(/序列/);
-    const legacyTables = TABLES_CLEAR_ORDER.filter(table => table !== "application_interview_recap_contexts" && table !== "project_material_table_provenance" && table !== "application_preparation_plans");
+    const legacyTables = TABLES_CLEAR_ORDER.filter(table => table !== "application_interview_recap_contexts" && table !== "project_material_table_provenance" && table !== "application_preparation_plans" && table !== "interview_question_graphs");
     const manifest = { kind: "manifest", appName: "resume-life", backupVersion: BACKUP_CONTAINER_VERSION, dbVersion: 1, createdAt: "2026-09-30T00:00:00.000Z", tables: legacyTables, sequences: {}, files: [] };
     expect(validateManifest(manifest, TABLES_CLEAR_ORDER)).toEqual(manifest);
     const end = { kind: "end", stats: Object.fromEntries(legacyTables.map(table => [table, 0])), totalRecords: 0, files: 0 };

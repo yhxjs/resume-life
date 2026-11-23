@@ -57,11 +57,12 @@ describe("LLM 来源架构守卫", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("LLM_FEATURES 覆盖全部 32 个功能（含连接测试），且取值唯一", () => {
+  it("LLM_FEATURES 覆盖全部 33 个功能（含连接测试与题目图谱），且取值唯一", () => {
     const labels = Object.values(LLM_FEATURES);
-    expect(labels).toHaveLength(32);
-    expect(new Set(labels).size).toBe(32);
+    expect(labels).toHaveLength(33);
+    expect(new Set(labels).size).toBe(33);
     expect(labels).toContain("模型连接测试");
+    expect(labels).toContain("模拟面试题目图谱");
   });
 
   it("每个 EntityType 都在标题注册表中有条目", () => {

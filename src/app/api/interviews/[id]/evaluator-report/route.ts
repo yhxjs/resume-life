@@ -79,7 +79,10 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       raw = await safeChat("evaluate", { feature: LLM_FEATURES.interviewEvaluatorReport, entity: { type: "interview", id: interviewId } },
         buildInterviewEvaluatorPrompt(styleInfo.label),
         buildInterviewEvaluatorMessages({ jd: interview.jd, resumeContext, turnParts, reverseParts }),
-        { signal: req.signal, requireJson: "strict" });
+        {
+          signal: req.signal,
+          requireJson: "strict"
+        });
     } catch (err) {
       if (req.signal.aborted) return NextResponse.json({ error: "请求已取消" }, { status: 499 });
       const message = err instanceof LlmConfigError ? err.message : errorMessage(err);

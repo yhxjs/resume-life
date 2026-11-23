@@ -68,7 +68,10 @@ async function handlePost(
   let raw: string;
   try {
     const prompt = buildDrillEvaluation({ isBankDrill, direction: drill.direction, jd: drill.jd, projectContext, question: question.question, answer });
-    raw = await safeChat("evaluate", { feature: LLM_FEATURES.drillGrade, entity: { type: "drill", id: drillId } }, prompt.systemPrompt, prompt.messages, { signal: req.signal, requireJson: "strict" });
+    raw = await safeChat("evaluate", { feature: LLM_FEATURES.drillGrade, entity: { type: "drill", id: drillId } }, prompt.systemPrompt, prompt.messages, {
+      signal: req.signal,
+      requireJson: "strict"
+    });
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);
     return NextResponse.json({ error: message }, { status: err instanceof ModelInputBudgetError ? 413 : 502 });

@@ -107,6 +107,7 @@ export async function recommendEvidenceDrill(projectId: number, value: unknown, 
   if (typeof body.count !== "number" || !Number.isSafeInteger(body.count) || body.count < 1 || body.count > MAX_EVIDENCE_RECOMMENDATIONS) {
     throw new ApplicationInputError(`生成数量须为 1–${MAX_EVIDENCE_RECOMMENDATIONS} 的整数`);
   }
+  const count = body.count;
   signal.throwIfAborted();
   const snapshot = inTransaction(() => resolveEvidenceSnapshot(projectId, body));
   if (snapshot === null) return null;
@@ -119,8 +120,11 @@ export async function recommendEvidenceDrill(projectId: number, value: unknown, 
     let raw: string;
     try {
       raw = await safeChat("question", { feature: LLM_FEATURES.drillProject, entity: { type: "project", id: projectId } },
-        EVIDENCE_RECOMMENDATION_PROMPT, buildEvidenceRecommendationMessages(snapshot, body.count, questionBudget),
-        { signal, requireJson: "strict" });
+        EVIDENCE_RECOMMENDATION_PROMPT, buildEvidenceRecommendationMessages(snapshot, count, questionBudget),
+        {
+          signal,
+          requireJson: "strict"
+        });
     } catch (error) {
       signal.throwIfAborted();
       assertDataGeneration();

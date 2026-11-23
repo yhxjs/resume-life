@@ -105,7 +105,10 @@ async function handlePost(req: Request, { params }: RouteParams) {
         { feature: LLM_FEATURES.negotiationFinalize, entity: { type: "negotiation", id } },
         SALARY_NEGOTIATION_FINALIZE_PROMPT,
         messages,
-        { signal: req.signal, requireJson: "strict" }
+        {
+          signal: req.signal,
+          requireJson: "strict"
+        }
       );
     } catch (err) {
       const message = err instanceof LlmConfigError ? err.message : errorMessage(err);

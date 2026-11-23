@@ -3,6 +3,10 @@ import { isPreparationCompletion } from "./preparation-plan-types";
 import type { DatabaseSync } from "node:sqlite";
 import { BASIC_REORDERABLE_FIELD_KEYS } from "./modules";
 import { DocumentTableProvenanceError, parseDocumentTableProvenance } from "./document-table-provenance";
+import {
+  INTERVIEW_QUESTION_GRAPH_HISTORY_LIMIT,
+  parseInterviewQuestionGraphDocument,
+} from "./interview-question-graph";
 
 type Check = (value: unknown) => boolean;
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -192,6 +196,12 @@ const remedy = object({
   forbiddenList: strings, closingTips: strings,
 });
 
+const interviewQuestionGraphDocument: Check = (value) => {
+  try { parseInterviewQuestionGraphDocument(value); return true; } catch { return false; }
+};
+const interviewQuestionGraphHistory: Check = (value) => Array.isArray(value) &&
+  value.length <= INTERVIEW_QUESTION_GRAPH_HISTORY_LIMIT && value.every(interviewQuestionGraphDocument);
+
 /** 只有对应数据库列定义的空字符串默认值可跳过 JSON 解析。{} / [] 由各领域显式允许。 */
 const json = (check: Check, allowEmptyString = false): Check => (raw) => {
   if (typeof raw !== "string") return false;
@@ -243,6 +253,11 @@ const fields: Record<string, Record<string, Check>> = {
   interviews: { report: json(interviewReport, true), reverse_interview: json(reverseInterview, true), evaluator_report: json(evaluatorReport, true) },
   interview_turns: { scores: json(scores, true), retries: json(retries) },
   interview_series: { final_report: json(seriesReport, true) },
+  interview_question_graphs: {
+    style: oneOf("gentle", "stress", "deep", "manager", "hr", "mining"),
+    graph_json: json(interviewQuestionGraphDocument),
+    history_json: json(interviewQuestionGraphHistory),
+  },
   resume_diagnoses: {
     report: json(isStoredDiagnosisReport),
     resume_snapshot: json(isStoredDiagnosisSnapshot),
@@ -264,6 +279,16 @@ const fields: Record<string, Record<string, Check>> = {
 
 /** 返回损坏的列名，供备份入口附上表名与行标识；成功时不改写输入。 */
 export function invalidDomainColumn(table: string, row: Record<string, unknown>): string | undefined {
+  if (table === "interview_question_graphs") {
+    if (typeof row.question !== "string") return "question";
+    if (!Number.isSafeInteger(row.revision) || (row.revision as number) < 0) return "revision";
+    try {
+      const graph = parseInterviewQuestionGraphDocument(JSON.parse(String(row.graph_json)) as unknown);
+      if (graph.question !== row.question) return "question";
+    } catch {
+      return "graph_json";
+    }
+  }
   if (table === "applications") {
     if (row.submitted_at === null) {
       if (row.submitted_resume !== null || row.submitted_jd !== null) return "submitted_at";

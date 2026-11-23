@@ -83,7 +83,10 @@ async function handlePost(req: Request) {
       { feature: LLM_FEATURES.gapRemedyGenerate },
       CAREER_GAP_REMEDY_SYSTEM_PROMPT,
       buildCareerGapRemedyMessages({ scenarioType, targetRole, personaStyle, rawStory }),
-      { signal: req.signal, requireJson: "strict" }
+      {
+        signal: req.signal,
+        requireJson: "strict"
+      }
     );
   } catch (err) {
     const message =

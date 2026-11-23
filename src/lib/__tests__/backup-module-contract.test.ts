@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { invalidDomainColumn } from "../backup-domain";
 import { normalizeContent } from "../modules";
 import { DEFAULT_STYLE, normalizeStyle } from "../templates";
+import {
+  createInterviewQuestionGraphRoot,
+  INTERVIEW_QUESTION_GRAPH_HISTORY_LIMIT,
+  validateInterviewQuestionGraphStart,
+} from "../interview-question-graph";
 
 describe("基本信息持久化与备份契约", () => {
   const content = normalizeContent("basic", { name: "合成人物", gender: "女", age: "30", fieldOrder: ["phone", "age"] });
@@ -23,5 +28,27 @@ describe("基本信息持久化与备份契约", () => {
     for (const change of [{ contactSeparator: null }, { contactGap: "16" }, { contactGap: 33 }]) {
       expect(invalidDomainColumn("resume_templates", { style: JSON.stringify({ ...style, ...change }) })).toBe("style");
     }
+  });
+
+  it("只接受结构完整且主问题匹配的题目图谱备份记录", () => {
+    const graph = createInterviewQuestionGraphRoot(validateInterviewQuestionGraphStart({
+      question: "What was your contribution?",
+      branches: [
+        { label: "有证据", predicted_answer: "描述已确认的工作。", followup_question: "Which task did you complete?" },
+        { label: "待核对", predicted_answer: "具体参与范围仍待确认。", followup_question: "What record can verify it?" },
+      ],
+    }));
+    const history = Array.from({ length: INTERVIEW_QUESTION_GRAPH_HISTORY_LIMIT }, () => graph);
+    const row = {
+      question: graph.question, style: "deep", revision: 1,
+      graph_json: JSON.stringify(graph), history_json: JSON.stringify(history),
+    };
+    expect(invalidDomainColumn("interview_question_graphs", row)).toBeUndefined();
+    expect(invalidDomainColumn("interview_question_graphs", { ...row, question: "A different root?" })).toBe("question");
+    expect(invalidDomainColumn("interview_question_graphs", { ...row, history_json: "[{}]" })).toBe("history_json");
+    expect(invalidDomainColumn("interview_question_graphs", {
+      ...row,
+      history_json: JSON.stringify([...history, graph]),
+    })).toBe("history_json");
   });
 });

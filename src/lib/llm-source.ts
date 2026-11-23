@@ -19,6 +19,7 @@ export const LLM_FEATURES = {
   realInterviewReview: "真实面试逐题复盘",
   drillGrade: "练习作答评分",
   interviewCreate: "模拟面试出题",
+  interviewQuestionGraph: "模拟面试题目图谱",
   interviewEvaluatorReport: "面试官评估报表",
   interviewFinish: "面试总结报告",
   interviewReverse: "面试反问环节",

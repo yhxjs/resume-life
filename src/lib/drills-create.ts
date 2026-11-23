@@ -49,7 +49,7 @@ export async function createProjectDrill(body: { project_id?: unknown }, count: 
   let raw: string;
   try {
     raw = await safeChat("question", { feature: LLM_FEATURES.drillProject, entity: { type: "project", id: projectId } }, PROJECT_DRILL_QUESTION_PROMPT,
-      buildProjectDrillQuestionMessages(context, count), { signal, requireJson: "strict" });
+      buildProjectDrillQuestionMessages(context, count), { signal, requireJson: "strict"});
   } catch (err) {
     throw new HttpError(err instanceof ModelInputBudgetError ? 413 : 502, llmErrorMessage(err));
   }
@@ -90,7 +90,7 @@ export async function createBankDrill(
   let raw: string;
   try {
       raw = await safeChat("question", { feature: LLM_FEATURES.drillBank }, BANK_DRILL_QUESTION_PROMPT,
-        buildBankDrillQuestionMessages(direction, jd, bank, count), { signal, requireJson: "strict" });
+        buildBankDrillQuestionMessages(direction, jd, bank, count), { signal, requireJson: "strict"});
   } catch (err) {
     throw new HttpError(502, llmErrorMessage(err));
   }
@@ -166,7 +166,10 @@ export async function createInterviewDrill(
   let raw: string;
   try {
     raw = await safeChat("question", { feature: LLM_FEATURES.drillRemediation, entity: { type: "interview", id: interviewId } }, REMEDIATION_PROMPT,
-      buildInterviewRemediationMessages(context.parts), { signal, requireJson: "strict" });
+      buildInterviewRemediationMessages(context.parts), {
+        signal,
+        requireJson: "strict"
+      });
   } catch (err) {
     throw new HttpError(502, llmErrorMessage(err));
   }

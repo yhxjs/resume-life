@@ -95,7 +95,10 @@ async function handlePost(req: Request) {
         },
         RESUME_DEFENSE_SCAN_SYSTEM_PROMPT,
         buildResumeDefenseScanMessages(targetRole, modelResumeContent),
-        { signal: req.signal, requireJson: "strict" }
+        {
+          signal: req.signal,
+          requireJson: "strict"
+        }
       );
     } catch (err) {
       const msg =

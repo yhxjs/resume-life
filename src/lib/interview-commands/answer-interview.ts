@@ -69,7 +69,13 @@ export function prepareAnswerInterview(args: {
   return async (emitter) => {
     try {
       let raw: string;
-      try { raw = await safeChatStream("evaluate", { feature: LLM_FEATURES.seriesAnswerGrade, entity: { type: "interview", id: interviewId } }, systemPrompt, messages, () => {}, { signal: emitter.signal, requestId, requireJson: "strict" }); }
+      try {
+        raw = await safeChatStream("evaluate", { feature: LLM_FEATURES.seriesAnswerGrade, entity: { type: "interview", id: interviewId } }, systemPrompt, messages, () => {}, {
+          signal: emitter.signal,
+          requestId,
+          requireJson: "strict"
+        });
+      }
       catch (error) {
         if (error instanceof LlmConfigError || error instanceof DataGenerationConflictError) {
           emitter.sendError(error.message);

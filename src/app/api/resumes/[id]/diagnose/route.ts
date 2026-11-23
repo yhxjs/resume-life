@@ -116,7 +116,10 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       { feature: LLM_FEATURES.resumeDiagnose, entity: { type: "resume", id: numericId } },
       `${DIAGNOSIS_PRODUCTION_SYSTEM_PROMPT}\n所有非空文本必须包含可见内容，不用零宽、控制字符或纯标点占位；协议允许的空 gaps 与 suggestions 继续为空。`,
       buildDiagnosisMessages(jd, modelModules),
-      { signal: req.signal, requireJson: "strict" }
+      {
+        signal: req.signal,
+        requireJson: "strict"
+      }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);

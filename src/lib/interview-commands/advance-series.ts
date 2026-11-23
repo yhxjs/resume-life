@@ -62,7 +62,7 @@ export async function advanceSeries(seriesId: number, fromInterviewId: number, s
         { feature: LLM_FEATURES.seriesAdvance, entity: { type: "interview_series", id: seriesId } },
         SERIES_FIRST_PROMPT(interviewStyleOf(style).persona),
         buildSeriesAdvanceMessages({ roundNo: nextNo, jd: series.jd, resumeContext, priorParts: priorContext.parts }),
-        { signal, requireJson: "strict" },
+        { signal, requireJson: "strict"},
       );
     } catch (error) {
       const status = error instanceof ModelInputBudgetError ? 413 : 502;

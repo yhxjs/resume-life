@@ -41,7 +41,10 @@ async function handlePost(req: Request) {
       { feature: LLM_FEATURES.jargonDecode },
       JARGON_DECODER_SYSTEM_PROMPT,
       buildJargonDecoderMessages(text),
-      { signal: req.signal, requireJson: "strict" }
+      {
+        signal: req.signal,
+        requireJson: "strict"
+      }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);

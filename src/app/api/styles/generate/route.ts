@@ -24,7 +24,10 @@ async function handlePost(req: Request) {
       { feature: LLM_FEATURES.styleGenerate },
       STYLE_GENERATION_SYSTEM_PROMPT,
       buildStyleGenerationMessages(prompt),
-      { signal: req.signal, requireJson: "strict" }
+      {
+        signal: req.signal,
+        requireJson: "strict"
+      }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   InterviewStartForm,
   type InterviewStartMode,
+  type InterviewPerspective,
 } from "@/components/interviews/interview-start-form";
 import { InterviewHistory } from "@/components/interviews/interview-history";
 import { Loading, LoadError } from "@/components/common/ui-bits";
@@ -17,6 +18,7 @@ import { HttpError, jsonFetch } from "@/lib/fetcher";
 import type { Application } from "@/lib/applications-types";
 import { PreparationReturnLink } from "@/components/application/preparation-return-link";
 import { btnGhost } from "@/lib/ui";
+import { INTERVIEW_QUESTION_GRAPH_DRAFT_KEY } from "@/lib/interview-question-graph-draft";
 
 type InterviewApplication = Pick<Application, "id" | "company" | "role" | "jd" | "resume_id" | "resume_version_id">;
 const isRecordId = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -126,6 +128,7 @@ function InterviewsContent({ application, initialJd }: { application?: Interview
     deletion,
   } = useInterviewsPage(queryResumeId, queryResumeVersionId);
   const [mode, setMode] = useState<InterviewStartMode>("single");
+  const [perspective, setPerspective] = useState<InterviewPerspective>("candidate");
   const [jd, setJd] = useState(queryJd);
   const [rounds, setRounds] = useState<number | "">(DEFAULT_INTERVIEW_ROUNDS);
   const [style, setStyle] = useState<InterviewStyleKey>("gentle");
@@ -142,6 +145,22 @@ function InterviewsContent({ application, initialJd }: { application?: Interview
     resumes?.some((resume) => resume.id === application.resume_id && resume.versions.some((version) => version.id === application.resume_version_id)));
   const configurationError = application && resumes !== null && !boundMaterialsAvailable
     ? "投递绑定的简历或发布版不在当前列表中。请重新读取简历列表，或返回投递准备页确认。" : "";
+
+  function openQuestionGraphWorkspace() {
+    try {
+      window.sessionStorage.setItem(INTERVIEW_QUESTION_GRAPH_DRAFT_KEY, JSON.stringify({
+        resumeId: resumeId || null,
+        resumeVersionId: resumeVersionId || null,
+        jd,
+        style,
+      }));
+    } catch {
+      setError("无法暂存当前图谱设置；进入独立图谱页后请重新选择简历并填写岗位要求。");
+      return;
+    }
+    setError("");
+    router.push("/interviews/question-graphs?draft=interview");
+  }
 
   useLayoutEffect(() => {
     // 来源异步载入后，表单一旦可交互就必须持有所属页面，避免首个点击被丢弃。
@@ -208,12 +227,12 @@ function InterviewsContent({ application, initialJd }: { application?: Interview
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 wrap-anywhere">
-      {application && <div className="space-y-3"><PreparationReturnLink /><p className="text-sm text-muted">正在为 {application.company} · {application.role} 准备，JD 来自该投递，简历须与其绑定发布版一致。结果会自动加入投递准备页；如需调整资料，请返回编辑投递。</p></div>}
+      {application && <div className="space-y-3"><PreparationReturnLink /><p className="text-sm text-muted">正在为 {application.company} · {application.role} 准备，JD 来自该投递，简历须与其绑定发布版一致。{perspective === "candidate" ? "结果会自动加入投递准备页" : "题目图谱会保存到独立历史页，不会保存到投递准备页"}；如需调整资料，请返回编辑投递。</p></div>}
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-line pb-5">
         <div>
           <h1 className="font-serif text-[28px] sm:text-[32px] font-bold text-ink leading-tight">全真模拟面试</h1>
           <p className="mt-1 max-w-prose text-sm text-muted leading-relaxed">
-            输入岗位要求并选择简历，面试官逐题出题、根据回答动态深度追问；支持单轮高压模考与三轮进阶连打。
+            切换候选人实战与面试官出题视角；可逐题模考，也可按轮次完善最多三层的预测回答与追问图谱。
           </p>
         </div>
         {recordsLoaded && totalCount !== null && (
@@ -230,6 +249,7 @@ function InterviewsContent({ application, initialJd }: { application?: Interview
           resumesError={resumesError}
           onRetryResumes={reloadResumes}
           mode={mode}
+          perspective={perspective}
           resumeId={resumeId}
           resumeVersionId={resumeVersionId}
           jd={jd}
@@ -243,6 +263,13 @@ function InterviewsContent({ application, initialJd }: { application?: Interview
           displayedText={typewriter.displayedText}
           isTyping={typewriter.isTyping}
           onModeChange={setMode}
+          onPerspectiveChange={(nextPerspective) => {
+            if (nextPerspective === "interviewer") {
+              openQuestionGraphWorkspace();
+              return;
+            }
+            setPerspective(nextPerspective);
+          }}
           onResumeIdChange={setResumeId}
           onResumeVersionIdChange={setResumeVersionId}
           onJdChange={setJd}

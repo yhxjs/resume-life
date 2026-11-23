@@ -59,7 +59,10 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       { feature: LLM_FEATURES.introRegenerate, entity: { type: "intro", id: introId } },
       INTRO_SYSTEM_PROMPT,
       [{ role: "user", parts: buildGenerateUserMessage({ jd: intro.jd, resumeContext, kinds: [kind] }) }],
-      { signal: req.signal, requireJson: "strict" }
+      {
+        signal: req.signal,
+        requireJson: "strict"
+      }
     );
   } catch (err) {
     const message = err instanceof LlmConfigError ? err.message : errorMessage(err);
