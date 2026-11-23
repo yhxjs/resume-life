@@ -7,7 +7,7 @@ import { sha256, PICOMATCH_VERSION, UPSTREAM_SHA256, PATCHED_SHA256 } from "./pa
 
 const ADVISORY = "https://github.com/advisories/GHSA-fc5q-39xc-vjpf";
 const EXPIRES_AT = "2026-12-18T00:00:00Z";
-const REVIEWED_LOCK_SHA256 = "613776c19ff5e37b9c17f526b9fb555bd28a054ee8cace65f867f7941ff9eb60";
+const REVIEWED_LOCK_SHA256 = "c7560ee1686ca187ffcd511285a6acfac4ec62932765dcf6e817d1f3c520f53f";
 const REVIEWED_GRAPH_SHA256 = "2b6f4091938e0bc7fbce07cfe4d1e3b4a2e48d093911474e3e0b3a49ed4b370a";
 const SEVERITIES = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 };
 const readJson = file => JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
