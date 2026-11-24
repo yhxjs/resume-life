@@ -370,8 +370,9 @@ export function restoreAllData(
     db.exec("DELETE FROM resume_creation_requests");
     db.exec("DELETE FROM resume_import_source_receipts");
     // Foreign keys are disabled during restore: clear source-bound drafts explicitly.
-    // Keep MCP creation receipts as tombstones; the new data generation invalidates them.
+    // Keep creation/generation request tombstones; the new data generation invalidates them.
     db.exec("DELETE FROM mcp_drafts");
+    db.exec("UPDATE mcp_generation_requests SET response_json=NULL");
     // 逆序清空所有数据表。
     for (const table of TABLES_CLEAR_ORDER) {
       if (table === "settings" && preserveAiConfig) {

@@ -76,7 +76,7 @@ async function expectRejected(payload: BackupPayload) {
   expect((await import("./backup-fixture")).validateBackupPayload(payload).valid).toBe(false);
 }
 
-it.each([1, 2, 3, 4, 5, 6, 7, 8, 9])("辅助器与生产流均接受完整 v%s 清单，保留原载荷和未知来源", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])("辅助器与生产流均接受完整 v%s 清单，保留原载荷和未知来源", async version => {
   const payload = await payloadFor(version);
   const before = structuredClone(payload);
   const dbBefore = database.prepare(`SELECT * FROM ${contexts}`).all();
@@ -95,7 +95,7 @@ it.each([1, 2, 3, 4, 5, 6, 7, 8, 9])("辅助器与生产流均接受完整 v%s �
   }
 });
 
-it.each([1, 2, 3, 4, 5, 6, 7, 8, 9])("v%s 校验与恢复响应均按原清单计数，可通过设置页读取边界", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])("v%s 校验与恢复响应均按原清单计数，可通过设置页读取边界", async version => {
   const payload = await payloadFor(version);
   const { createEncryptedBackupStream, encodeBackupPasswordHeader } = await import("../backup-container");
   const { readBackupValidation, readBackupRestoreConfirmation } = await import("@/components/settings/backup-manager-utils");
@@ -145,14 +145,14 @@ it.each(["data", "stats", "both"])("v4 快照表缺少 %s 时与生产一致拒�
   await expectRejected(payload);
 });
 
-it.each([1, 2, 3, 4, 5, 6, 7, 8, 9])("v%s 不能借兼容规则省略其他业务表", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])("v%s 不能借兼容规则省略其他业务表", async version => {
   const payload = await payloadFor(version);
   delete payload.data.jd_portraits;
   delete payload.meta.stats.jd_portraits;
   await expectRejected(payload);
 });
 
-it.each([0, 10])("辅助器与生产流均拒绝未支持的数据库版本 %s", async version => {
+it.each([0, 11])("辅助器与生产流均拒绝未支持的数据库版本 %s", async version => {
   const payload = await payloadFor(4);
   payload.meta.dbVersion = version;
   await expectRejected(payload);
@@ -164,10 +164,14 @@ it("恢复清除 MCP 草稿并保留防重回执，恢复失败时一并回滚",
   const { createMcpApplication } = await import("../mcp-write");
   const input = { company: "备份之后新增", role: "开发", idempotencyKey: "restore-mcp-creation" };
   const created = createMcpApplication(input);
-  database.prepare("INSERT INTO mcp_drafts (kind, application_id, source_revision, payload, created_at, expires_at) VALUES ('jd', ?, ?, '{}', '', '2099-01-01T00:00:00.000Z')")
+  const draft = database.prepare("INSERT INTO mcp_drafts (kind, application_id, source_revision, payload, created_at, expires_at) VALUES ('jd', ?, ?, '{}', '', '2099-01-01T00:00:00.000Z')")
     .run(created.id, "a".repeat(64));
+  const generation = await import("../mcp-generation");
+  const { inTransaction } = await import("../db");
+  const response = { draftId: Number(draft.lastInsertRowid), expiresAt: "2099-01-01T00:00:00.000Z", result: { temporary: "model output" } };
+  inTransaction(() => generation.completeMcpGeneration(generation.beginMcpGeneration("restore-generation-key", { kind: "jd", applicationId: created.id }, "a".repeat(64)), response));
   (await import("../mcp-state")).recordMcpOperation({ requestId: "restore-test", tool: "create_application", targetId: created.id, durationMs: 1 });
-  for (const table of ["mcp_creation_receipts", "mcp_drafts", "mcp_operation_logs"]) {
+  for (const table of ["mcp_creation_receipts", "mcp_drafts", "mcp_operation_logs", "mcp_generation_requests"]) {
     expect(fixture.exportAllData().data).not.toHaveProperty(table);
   }
   try {
@@ -176,9 +180,12 @@ it("恢复清除 MCP 草稿并保留防重回执，恢复失败时一并回滚",
       if (++checks === 2) throw new Error("restore deadline");
     })).toThrow("restore deadline");
     expect(database.prepare("SELECT COUNT(*) AS n FROM mcp_drafts").get()).toEqual({ n: 1 });
+    expect(database.prepare("SELECT response_json FROM mcp_generation_requests").get()).toEqual({ response_json: JSON.stringify(response) });
     expect(createMcpApplication(input).id).toBe(created.id);
     expect(fixture.restoreAllData(staged, true).success).toBe(true);
     expect(database.prepare("SELECT COUNT(*) AS n FROM mcp_drafts").get()).toEqual({ n: 0 });
+    expect(database.prepare("SELECT response_json FROM mcp_generation_requests").get()).toEqual({ response_json: null });
+    expect(generation.getMcpGenerationRequest("restore-generation-key")).toMatchObject({ status: "invalidated", draftAvailable: false });
     expect(database.prepare("SELECT COUNT(*) AS n FROM mcp_creation_receipts").get()).toEqual({ n: 1 });
     expect(() => createMcpApplication(input)).toThrow("数据已恢复");
     expect(database.prepare("SELECT COUNT(*) AS n FROM applications").get()).toEqual({ n: 1 });

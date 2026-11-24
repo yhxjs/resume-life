@@ -1,22 +1,25 @@
 import * as z from "zod/v4";
-import type { toolAccess } from "./config.mjs";
+import { toolAccess } from "./config.mjs";
 import type { McpTools } from "./tools";
 import { boundMcpOutput } from "@/lib/mcp-output";
-import { getMcpApplicationStats, getMcpPriorities, getMcpRecord, listMcpCollection, readMcpRecordSection, MCP_RECORD_KINDS, type McpCollection, type McpRecordKind } from "@/lib/mcp-records";
+import { getMcpApplicationStats, getMcpPriorities, getMcpRecord, listMcpCollection, listMcpOperations, readMcpRecordSection, MCP_RECORD_KINDS, type McpCollection, type McpRecordKind } from "@/lib/mcp-records";
 import { createMcpApplication, createMcpPreparationTask, scheduleMcpInterview } from "@/lib/mcp-write";
-import { McpOperationError } from "@/lib/mcp-errors";
+import { McpOperationError, MCP_ERROR_CODES } from "@/lib/mcp-errors";
 
 export const id = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 export const revision = z.string().regex(/^[a-f0-9]{64}$/);
 export const page = { limit: z.number().int().min(1).max(50).optional(), cursor: z.string().max(200).optional() };
-export const key = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/).describe("本次创建的唯一幂等键；重试时使用同一键和原始参数");
+export const key = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/).describe("本次操作的唯一幂等键；重试时使用同一键和原始参数");
 export const read = { readOnlyHint: true, destructiveHint: false };
 export const write = { readOnlyHint: false, destructiveHint: false, idempotentHint: true };
+/** Updates can replace or clear existing data; creation tools remain additive. */
+export const edit = { ...write, destructiveHint: true };
 export function json(value: object) { return { content: [{ type: "text" as const, text: JSON.stringify(boundMcpOutput(value)) }] }; }
 
 const sourceTools: Record<McpRecordKind, (keyof typeof toolAccess)[]> = {
   resume: ["get_resume"], project: ["get_project"], project_material: ["list_project_materials"], application: ["get_application"],
   application_submission: ["get_application", "get_resume"], application_interview: ["list_application_interviews"],
+  application_interview_questions: ["get_application_interview_questions"],
   interview: ["get_interview"], interview_turn: ["get_interview"], practice_session: ["list_practice_sessions"], practice_question: ["get_practice_question"],
   interview_review: ["get_interview_review"], notebook: ["get_notebook_entry"], ai_draft: ["get_ai_draft"],
 };
@@ -30,8 +33,9 @@ export function registerRecordTools(tools: McpTools) {
     tools.register(name, { title, description: "按记录 ID 倒序分页，parentId 为所属项目、简历或投递 ID。长正文可使用 read_record_section 分段读取。",
       inputSchema: z.strictObject({ parentId: id, ...page }), annotations: read }, async ({ parentId, ...input }) => json(listMcpCollection(kind as McpCollection, parentId, input)));
   }
-  tools.register("list_mcp_operations", { title: "读取 MCP 操作记录", description: "读取最近保留的调用元数据：工具、目标 ID、结果、耗时和 requestId。",
-    inputSchema: z.strictObject(page), annotations: read }, async input => json(listMcpCollection("operation_logs", undefined, input)));
+  tools.register("list_mcp_operations", { title: "读取 MCP 操作记录", description: "读取最近调用元数据，可按错误回执中的 requestId、固定工具名、错误码、状态或目标 ID 筛选；多个条件同时满足。",
+    inputSchema: z.strictObject({ ...page, requestId: z.uuid().optional(), tool: z.enum([...Object.keys(toolAccess), "unknown"]).optional(), errorCode: z.enum(MCP_ERROR_CODES).optional(), status: z.enum(["success", "error"]).optional(), targetId: id.optional() }),
+    annotations: read }, async input => json(listMcpOperations(input)));
   for (const [name, kind, title, idSource] of [
     ["get_practice_question", "practice_question", "读取练习题详情", "list_practice_questions 返回的 id"],
     ["get_interview_review", "interview_review", "读取面试复盘详情", "list_interview_reviews 返回的 id"],

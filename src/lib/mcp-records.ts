@@ -6,11 +6,13 @@ import { loadResumeForModel } from "./resumes";
 import { getHomePriorities } from "./home-priorities";
 import { boundMcpOutput } from "./mcp-output";
 import { fitPage, pageParams, type PageInput } from "./mcp-read";
-import { McpOperationError } from "./mcp-errors";
+import { McpOperationError, type McpErrorCode } from "./mcp-errors";
+import { getMcpInterviewQuestionsRecord } from "./mcp-interview-questions";
+import { readMcpDraft } from "./mcp-generation";
 
 export const MCP_COLLECTIONS = ["project_materials", "resume_versions", "application_history", "preparation_tasks", "application_interviews", "operation_logs"] as const;
 export type McpCollection = typeof MCP_COLLECTIONS[number];
-export const MCP_RECORD_KINDS = ["resume", "project", "project_material", "application", "application_submission", "application_interview", "interview", "interview_turn", "practice_session", "practice_question", "interview_review", "notebook", "ai_draft"] as const;
+export const MCP_RECORD_KINDS = ["resume", "project", "project_material", "application", "application_submission", "application_interview", "application_interview_questions", "interview", "interview_turn", "practice_session", "practice_question", "interview_review", "notebook", "ai_draft"] as const;
 export type McpRecordKind = typeof MCP_RECORD_KINDS[number];
 
 const collections: Record<McpCollection, { sql: string; parent?: string }> = {
@@ -37,6 +39,19 @@ export function listMcpCollection(kind: McpCollection, parentId: number | undefi
   return fitPage(items, rows.length > limit ? String(items.at(-1)!.id) : null, item => String(item.id));
 }
 
+export function listMcpOperations(input: PageInput & { requestId?: string; tool?: string; errorCode?: McpErrorCode; status?: "success" | "error"; targetId?: number }) {
+  const { limit, idCursor } = pageParams(input);
+  const where = ["(? IS NULL OR id < ?)"];
+  const args: (number | string | null)[] = [idCursor, idCursor];
+  for (const [field, value] of [["request_id", input.requestId], ["tool", input.tool], ["error_code", input.errorCode], ["status", input.status], ["target_id", input.targetId]] as const) {
+    if (value !== undefined) { where.push(`${field} = ?`); args.push(value); }
+  }
+  const rows = getDb().prepare(`${collections.operation_logs.sql} WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`)
+    .all(...args, limit + 1) as { id: number; [key: string]: unknown }[];
+  const items = rows.slice(0, limit);
+  return fitPage(items, rows.length > limit ? String(items.at(-1)!.id) : null, item => String(item.id));
+}
+
 function record(kind: McpRecordKind, id: number, versionId?: number): object | null {
   const db = getDb();
   switch (kind) {
@@ -44,6 +59,7 @@ function record(kind: McpRecordKind, id: number, versionId?: number): object | n
     case "application": return getApplicationById(id);
     case "application_submission": return getApplicationSubmission(id);
     case "application_interview": return getApplicationInterviewById(id);
+    case "application_interview_questions": return getMcpInterviewQuestionsRecord(id);
     case "project": return db.prepare("SELECT id, name, summary, summary_updated_at, created_at, updated_at FROM projects WHERE id = ?").get(id) ?? null;
     case "project_material": return readProjectMaterialRecord(id);
     case "interview": return db.prepare("SELECT id, resume_id, resume_version_id, series_id, round_no, jd, rounds, style, status, report, reverse_interview, evaluator_report, created_at, finished_at FROM interviews WHERE id = ?").get(id) ?? null;
@@ -54,7 +70,7 @@ function record(kind: McpRecordKind, id: number, versionId?: number): object | n
       c.company, c.role, c.round_name, c.jd FROM application_interview_recaps r JOIN application_interviews i ON i.id = r.interview_id
       LEFT JOIN application_interview_recap_contexts c ON c.recap_id = r.id WHERE r.id = ?`).get(id) ?? null;
     case "notebook": return db.prepare("SELECT id, category_id, source, source_id, source_label, question, answer, comment, reference, scores, created_at, updated_at FROM notebook_entries WHERE id = ?").get(id) ?? null;
-    case "ai_draft": return db.prepare("SELECT id, kind, application_id, interview_id, source_revision, payload, created_at, expires_at FROM mcp_drafts WHERE id = ? AND expires_at > ?").get(id, new Date().toISOString()) ?? null;
+    case "ai_draft": return readMcpDraft(id);
   }
 }
 

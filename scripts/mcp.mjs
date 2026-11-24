@@ -1,4 +1,4 @@
-import { readMcpConfig } from "../src/mcp/config.mjs";
+import { readMcpConfig, permittedMcpTools, toolAccess } from "../src/mcp/config.mjs";
 import { Console } from "node:console";
 import fs from "node:fs";
 import path from "node:path";
@@ -47,9 +47,13 @@ async function main() {
   if (mode === "doctor") {
     const config = readMcpConfig();
     // This check intentionally does not open, initialize or migrate a database.
+    const enabledTools = permittedMcpTools(config);
     console.log(JSON.stringify({ ok: true, node: process.version, project: root, dataDirectory: directory,
       databaseExists: fs.existsSync(databasePath),
       writeEnabled: config.writeEnabled, llmEnabled: config.llmEnabled, timeoutMs: config.timeoutMs,
+      allowedTools: config.allowlist === null ? null : [...config.allowlist],
+      enabledTools, toolCount: enabledTools.length,
+      capabilities: Object.fromEntries(["read", "write", "llm"].map(access => [access, enabledTools.filter(name => toolAccess[name] === access)])),
       settingsKeyPresent: Boolean(process.env.RESUME_LIFE_SETTINGS_KEY) }, null, 2));
     return;
   }

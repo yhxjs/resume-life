@@ -487,7 +487,7 @@ describe("resume-life MCP server", () => {
 
   it("publishes output schemas, stable errors and metadata-only operation records", async () => {
     const listed = await client.listTools();
-    expect(listed.tools).toHaveLength(27);
+    expect(listed.tools).toHaveLength(30);
     expect(listed.tools.every(tool => tool.outputSchema?.type === "object")).toBe(true);
     const ok = await client.callTool({ name: "list_resumes", arguments: {} });
     expect(ok.structuredContent).toMatchObject({ ok: true, data: { items: [{ id: 1 }] }, meta: { requestId: expect.any(String) } });
@@ -931,7 +931,7 @@ describe("resume-life MCP server", () => {
       init!.signal!.addEventListener("abort", () => { aborted = true; reject(init!.signal!.reason); }, { once: true });
     }));
     const result = await client.callTool({ name: "analyze_application_jd", arguments: { applicationId: 1 } });
-    expect(result.structuredContent).toMatchObject({ error: { code: "TIMEOUT", retryable: true } });
+    expect(result.structuredContent).toMatchObject({ error: { code: "TIMEOUT", retryable: false } });
     expect(aborted).toBe(true);
     expect(db.prepare("SELECT status, error_code FROM llm_call_logs").all()).toEqual([{ status: "cancelled", error_code: "cancelled" }]);
     expect(db.prepare("SELECT COUNT(*) AS n FROM mcp_drafts").get()).toEqual({ n: 0 });
@@ -945,8 +945,8 @@ describe("resume-life MCP server", () => {
     const chat = vi.spyOn(llm, "chat");
     for (const [failure, code, retryable] of [
       [new llm.LlmHttpError(401, null), "CONFIGURATION", false], [new llm.LlmHttpError(403, null), "CONFIGURATION", false],
-      [new llm.LlmBusyError(), "BUSY", true], [new llm.LlmHttpError(429, null), "BUSY", true],
-      [new llm.LlmTimeoutError(), "TIMEOUT", true], [new LlmResponseError("private detail", "incomplete", "output_limit"), "MODEL_OUTPUT", false],
+      [new llm.LlmBusyError(), "BUSY", false], [new llm.LlmHttpError(429, null), "BUSY", false],
+      [new llm.LlmTimeoutError(), "TIMEOUT", false], [new LlmResponseError("private detail", "incomplete", "output_limit"), "MODEL_OUTPUT", false],
     ] as const) {
       chat.mockRejectedValueOnce(failure);
       const response = await client.callTool({ name: "analyze_application_jd", arguments: { applicationId: 1 } });

@@ -2,13 +2,14 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { readMcpConfig } from "./config.mjs";
 import { McpTools } from "./tools";
-import { registerRecordTools } from "./records";
+import { registerRecordTools, edit } from "./records";
 import { McpOperationError } from "@/lib/mcp-errors";
 import { ApplicationInputError } from "@/lib/applications";
 import { dataGeneration } from "@/lib/db";
 import { assertDataGeneration, DataGenerationConflictError, withDataGenerationScope } from "@/lib/data-generation";
 import { updateMcpApplication, setMcpPreparationStep } from "@/lib/mcp-write";
 import { registerWorkflowTools } from "./workflows";
+import { registerBusinessTools } from "./business-tools";
 import { wrapUntrustedData } from "@/lib/prompt-safety";
 import { PreparationInputError } from "@/lib/application-preparation";
 import { ResumeContextError, ResumeNotFoundError } from "@/lib/resume-errors";
@@ -184,7 +185,7 @@ export function createResumeLifeMcpServer(config = readMcpConfig()) {
         terminal_stage: z.enum(APPLICATION_TERMINAL_STAGES).optional(),
         terminal_reason: z.string().trim().min(1).max(1_000).optional(),
       }).refine(input => input.stage !== undefined || input.notes !== undefined || input.terminal_stage !== undefined || input.terminal_reason !== undefined, "至少提供一个待更新字段"),
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+      annotations: edit,
     }, async ({ id, ...input }) => jsonResult(updateMcpApplication(id, input, tools.permits("get_application"))));
 
     tools.register("set_preparation_step", {
@@ -193,7 +194,7 @@ export function createResumeLifeMcpServer(config = readMcpConfig()) {
       inputSchema: z.strictObject({ applicationId: positiveId, expectedRevision: z.string().regex(/^[a-f0-9]{64}$/), contextKey: z.string().regex(/^[a-f0-9]{64}$/),
         key: z.enum(MANUAL_PLAN_STEP_KEYS),
         done: z.boolean() }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+      annotations: edit,
     }, async ({ applicationId, ...input }) => jsonResult(setMcpPreparationStep(applicationId, input, tools.permits("get_preparation_plan"))));
   }
 
@@ -257,6 +258,7 @@ export function createResumeLifeMcpServer(config = readMcpConfig()) {
 
   registerRecordTools(tools);
   registerWorkflowTools(tools);
+  registerBusinessTools(tools);
   tools.install();
   return server;
 }

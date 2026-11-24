@@ -8,10 +8,20 @@ export const toolAccess = Object.freeze({
   get_notebook_entry: "read", get_ai_draft: "read", read_record_section: "read", get_today_priorities: "read", get_application_stats: "read",
   update_application: "write", set_preparation_step: "write", create_application: "write", create_preparation_task: "write",
   schedule_application_interview: "write", save_ai_draft: "write",
+  get_application_interview_questions: "read",
+  list_ai_drafts: "read", get_ai_generation_request: "read",
+  generate_preparation_plan: "write", update_preparation_task: "write", reschedule_application_interview: "write", save_application_interview_questions: "write",
   analyze_application_jd: "llm", diagnose_application_resume: "llm", draft_interview_review: "llm",
 });
 
 export class McpConfigurationError extends Error {}
+
+export function permittedMcpTools(config) {
+  return Object.entries(toolAccess).filter(([name, access]) =>
+    (config.allowlist === null || config.allowlist.has(name)) &&
+    (access === "read" || (access === "write" && config.writeEnabled) || (access === "llm" && config.llmEnabled)))
+    .map(([name]) => name);
+}
 
 export function readMcpConfig(env = process.env) {
   const raw = env.RESUME_LIFE_MCP_ALLOWED_TOOLS;

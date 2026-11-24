@@ -2,13 +2,16 @@
 export const MCP_DETAIL_BUDGET = 32_000;
 export const MCP_LIST_BUDGET = 24_000;
 
-function shorten(value: unknown, textLimit: number, arrayLimit: number): unknown {
+const CONTROL_FIELDS = new Set(["revision", "sourceRevision", "source_revision", "contextKey", "idempotencyKey", "requestId", "request_id", "nextCursor", "encoding"]);
+
+function shorten(value: unknown, textLimit: number, arrayLimit: number, field?: string): unknown {
   if (typeof value === "string") {
+    if (field && CONTROL_FIELDS.has(field) && value.length <= 256) return value;
     return value.length > textLimit ? `${value.slice(0, textLimit)}\n[内容已截断]` : value;
   }
   if (Array.isArray(value)) return value.slice(0, arrayLimit).map(item => shorten(item, textLimit, arrayLimit));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, shorten(item, textLimit, arrayLimit)]));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, shorten(item, textLimit, arrayLimit, key)]));
   }
   return value;
 }

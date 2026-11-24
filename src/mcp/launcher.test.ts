@@ -40,6 +40,21 @@ it("generates portable JSON and Codex configuration with the current executable"
   expect(toml).not.toContain("TEST_PRIVATE_SETTINGS_KEY");
 });
 
+it("doctor reports the same effective capability inventory as the stdio server", async () => {
+  const env = { RESUME_LIFE_MCP_WRITE_ENABLED: "true", RESUME_LIFE_MCP_LLM_ENABLED: "false", RESUME_LIFE_MCP_ALLOWED_TOOLS: "create_application,get_application,analyze_application_jd" };
+  const doctor = JSON.parse((await launch(["doctor"], env)).stdout);
+  expect(doctor.capabilities).toEqual({ read: ["get_application"], write: ["create_application"], llm: [] });
+  const client = new Client({ name: "doctor-inventory-test", version: "1" });
+  try {
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [launcher], cwd: directory,
+      env: { RESUME_LIFE_DATA_DIR: path.join(directory, "new-data"), ...env }, stderr: "ignore" }));
+    const names = (await client.listTools()).tools.map(tool => tool.name);
+    expect(names.sort()).toEqual([...doctor.enabledTools].sort());
+    expect(doctor.toolCount).toBe(names.length);
+  } finally { await client.close(); }
+  expect(fs.existsSync(path.join(directory, "new-data"))).toBe(false);
+});
+
 it.each([
   ["get_application_stats, get_application_stats", ["get_application_stats"], "300001", 331],
   ["", [], "600000", 630],

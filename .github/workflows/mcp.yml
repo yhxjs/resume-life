@@ -4,7 +4,9 @@ on:
     paths:
       - 'src/mcp/**'
       - 'src/lib/**'
-      - 'scripts/mcp.mjs'
+      - 'scripts/*mcp*.mjs'
+      - 'src/app/api/applications/**'
+      - 'docs/MCP.md'
       - 'package*.json'
       - 'tsconfig.json'
       - 'vitest*.mts'

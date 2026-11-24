@@ -12,12 +12,13 @@ import { sanitizeModulesForDiagnosis, validateGeneratedDiagnosis, type Diagnosis
 import { assertDiagnosisBudget, canArchiveDiagnosisSnapshot, findMatchingDiagnosisJob, saveDiagnosis } from "./diagnosis-history";
 import { buildInterviewReviewMessages, getInterviewReviewDraftInput, InterviewReviewError, INTERVIEW_REVIEW_SYSTEM_PROMPT, parseInterviewReviewResult, saveGeneratedInterviewReview } from "./application-interview-review";
 import { saveJdPortrait } from "./jd-portrait-store";
-import { McpOperationError } from "./mcp-errors";
+import { McpOperationError, classifyMcpError } from "./mcp-errors";
 import { mcpRevision } from "./mcp-revision";
 import { mcpCreateOnce } from "./mcp-state";
 import { boundMcpOutput } from "./mcp-output";
-import { assertOperationActive } from "./operation-deadline";
+import { assertOperationActive, OperationTimeoutError } from "./operation-deadline";
 import { assertDataGeneration } from "./data-generation";
+import { beginMcpGeneration, clearUnavailableMcpGenerationPayloads, completeMcpGeneration, failMcpGeneration, findMcpGenerationRequest, replayMcpGeneration } from "./mcp-generation";
 
 type Kind = "jd" | "diagnosis" | "review";
 type Draft = { id: number; kind: Kind; application_id: number; interview_id: number | null; source_revision: string; payload: string; expires_at: string };
@@ -101,40 +102,63 @@ function validatedResult(kind: Kind, input: ReturnType<typeof source>, raw: stri
   throw new McpOperationError("MODEL_OUTPUT", "模型结果不符合字段、长度或内容要求，未保存业务资料");
 }
 
-export async function generateMcpDraft(kind: Kind, applicationId: number, signal: AbortSignal, interviewId?: number) {
+export async function generateMcpDraft(kind: Kind, applicationId: number, signal: AbortSignal, interviewId?: number, idempotencyKey: string = randomUUID()) {
   signal.throwIfAborted();
-  const input = source(kind, applicationId, interviewId);
-  const revision = sourceRevision(kind, input);
-  const modules = input.resume?.modules.filter(module => module.type !== "basic") ?? [];
-  if (kind === "diagnosis" && !modules.length) throw new McpOperationError("INVALID_ARGUMENT", "所选简历版本没有可诊断的职业模块");
-  const archive = kind === "diagnosis" ? diagnosisArchive(input) : null;
-  if (archive) assertDiagnosisBudget(archive);
-  assertOperationActive();
-  const raw = kind === "jd"
-    ? await safeChat("question", { feature: LLM_FEATURES.jdPortraitGenerate }, JD_PORTRAIT_SYSTEM_PROMPT, buildJdPortraitMessages(input.application.jd), { signal, requireJson: "strict" })
-    : kind === "diagnosis"
-      ? await safeChat("evaluate", { feature: LLM_FEATURES.resumeDiagnose, entity: { type: "resume", id: input.application.resume_id! } }, DIAGNOSIS_PRODUCTION_SYSTEM_PROMPT,
-        buildDiagnosisMessages(input.application.jd, sanitizeModulesForDiagnosis(modules)), { signal, requireJson: "strict" })
-      : await safeChat("summary", { feature: LLM_FEATURES.realInterviewReview }, INTERVIEW_REVIEW_SYSTEM_PROMPT,
-        buildInterviewReviewMessages(input.review!.context, input.review!.questions), { signal, requireJson: "strict" });
-  signal.throwIfAborted();
-  assertDataGeneration();
-  const { result } = validatedResult(kind, input, raw);
-  if (archive) assertDiagnosisBudget({ ...archive, report: JSON.stringify(result) });
-  return inTransaction(() => {
-    signal.throwIfAborted();
-    recheckSource(kind, applicationId, interviewId, revision);
-    const db = getDb();
-    const createdAt = now();
-    db.prepare("DELETE FROM mcp_drafts WHERE expires_at <= ?").run(createdAt);
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    const inserted = db.prepare("INSERT INTO mcp_drafts (kind, application_id, interview_id, source_revision, payload, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(kind, applicationId, interviewId ?? null, revision, JSON.stringify(parseModelJson(raw)), createdAt, expiresAt);
-    db.exec("DELETE FROM mcp_drafts WHERE id < (SELECT id FROM mcp_drafts ORDER BY id DESC LIMIT 1 OFFSET 99)");
-    return boundMcpOutput({ draftId: Number(inserted.lastInsertRowid), applicationId, kind, sourceRevision: revision,
-      company: input.application.company, role: input.application.role, result, saved: false, expiresAt,
-      fullContent: { tool: "read_record_section", kind: "ai_draft", id: Number(inserted.lastInsertRowid) } });
+  const started = inTransaction(() => {
+    const signature = { kind, applicationId, interviewId };
+    const previous = findMcpGenerationRequest(idempotencyKey, signature);
+    if (previous) return { replay: true as const, response: replayMcpGeneration(previous) };
+    const input = source(kind, applicationId, interviewId);
+    const revision = sourceRevision(kind, input);
+    const modules = input.resume?.modules.filter(module => module.type !== "basic") ?? [];
+    if (kind === "diagnosis" && !modules.length) throw new McpOperationError("INVALID_ARGUMENT", "所选简历版本没有可诊断的职业模块");
+    const archive = kind === "diagnosis" ? diagnosisArchive(input) : null;
+    if (archive) assertDiagnosisBudget(archive);
+    return { replay: false as const, input, revision, modules, archive, request: beginMcpGeneration(idempotencyKey, signature, revision) };
   });
+  if (started.replay) return started.response;
+  const { input, revision, modules, archive, request } = started;
+  try {
+    assertOperationActive();
+    const raw = kind === "jd"
+      ? await safeChat("question", { feature: LLM_FEATURES.jdPortraitGenerate }, JD_PORTRAIT_SYSTEM_PROMPT, buildJdPortraitMessages(input.application.jd), { signal, requireJson: "strict" })
+      : kind === "diagnosis"
+        ? await safeChat("evaluate", { feature: LLM_FEATURES.resumeDiagnose, entity: { type: "resume", id: input.application.resume_id! } }, DIAGNOSIS_PRODUCTION_SYSTEM_PROMPT,
+          buildDiagnosisMessages(input.application.jd, sanitizeModulesForDiagnosis(modules)), { signal, requireJson: "strict" })
+        : await safeChat("summary", { feature: LLM_FEATURES.realInterviewReview }, INTERVIEW_REVIEW_SYSTEM_PROMPT,
+          buildInterviewReviewMessages(input.review!.context, input.review!.questions), { signal, requireJson: "strict" });
+    signal.throwIfAborted();
+    assertDataGeneration();
+    const { result } = validatedResult(kind, input, raw);
+    if (archive) assertDiagnosisBudget({ ...archive, report: JSON.stringify(result) });
+    return inTransaction(() => {
+      signal.throwIfAborted();
+      recheckSource(kind, applicationId, interviewId, revision);
+      const db = getDb();
+      const createdAt = now();
+      db.prepare("DELETE FROM mcp_drafts WHERE expires_at <= ?").run(createdAt);
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const inserted = db.prepare("INSERT INTO mcp_drafts (kind, application_id, interview_id, source_revision, payload, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(kind, applicationId, interviewId ?? null, revision, JSON.stringify(parseModelJson(raw)), createdAt, expiresAt);
+      db.exec("DELETE FROM mcp_drafts WHERE id < (SELECT id FROM mcp_drafts ORDER BY id DESC LIMIT 1 OFFSET 99)");
+      const response = boundMcpOutput({ draftId: Number(inserted.lastInsertRowid), applicationId, kind, sourceRevision: revision, idempotencyKey,
+        company: input.application.company, role: input.application.role, result, saved: false, savedRecord: null, expiresAt,
+        fullContent: { tool: "read_record_section", kind: "ai_draft", id: Number(inserted.lastInsertRowid) } });
+      completeMcpGeneration(request, response);
+      clearUnavailableMcpGenerationPayloads();
+      return response;
+    });
+  } catch (error) {
+    const failure = signal.aborted ? (signal.reason instanceof OperationTimeoutError ? "TIMEOUT" : "CANCELLED") : classifyMcpError(error).code;
+    failMcpGeneration(request, failure);
+    if (failure === "BUSY" || failure === "TIMEOUT") {
+      // The claimed key is never released, even when recording its failure cannot obtain a lock.
+      throw new McpOperationError(failure,
+        `${failure === "BUSY" ? "生成请求因服务或数据库繁忙未完成" : "生成请求超时未完成"}，请使用 get_ai_generation_request 查询请求状态；同一键不会重新调用模型，确认需要重新生成后请使用新键`,
+        { retryable: false, cause: error });
+    }
+    throw error;
+  }
 }
 
 /** Saving requires a separate write tool; it only accepts server-stored, validated draft content. */

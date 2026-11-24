@@ -189,3 +189,23 @@ export function createPreparationTask(applicationId: number, title: unknown, due
     return { id: Number(result.lastInsertRowid), title: title.trim(), done: false, due_time: normalizedDue, created_at };
   });
 }
+
+/** Web and MCP share validation and task ownership checks. */
+export function updatePreparationTask(applicationId: number, taskId: number, input: { title?: unknown; done?: unknown; due_time?: unknown }): void {
+  if (!Number.isSafeInteger(taskId) || taskId <= 0) throw new PreparationInputError("无效的待办 ID");
+  const updates: string[] = [];
+  const args: (number | string)[] = [];
+  if (typeof input.done === "boolean") { updates.push("done = ?"); args.push(input.done ? 1 : 0); }
+  if (input.due_time !== undefined) { updates.push("due_time = ?"); args.push(normalizePreparationDueTime(input.due_time)); }
+  if (typeof input.title === "string") {
+    if (!input.title.trim() || input.title.trim().length > 200) throw new PreparationInputError("待办内容需为 1–200 字");
+    updates.push("title = ?"); args.push(input.title.trim());
+  }
+  if (!updates.length) throw new PreparationInputError("未提供要更新的字段");
+  inTransaction(() => {
+    preparationApplication(applicationId);
+    const result = getDb().prepare(`UPDATE application_preparation_tasks SET ${updates.join(", ")} WHERE id = ? AND application_id = ?`)
+      .run(...args, taskId, applicationId);
+    if (!result.changes) throw new PreparationInputError("待办不存在或不属于此投递", 404);
+  });
+}

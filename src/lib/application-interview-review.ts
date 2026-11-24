@@ -201,9 +201,18 @@ function latestRecap(interviewId: number, applicationId: number): InterviewRecap
   return row ? mapRecap(row, applicationId) : null;
 }
 
-export function getInterviewReview(applicationId: number, interviewId: number, recapId?: number): InterviewReviewResponse {
+export function getInterviewQuestionInput(applicationId: number, interviewId: number) {
   const storedContext = readRound(applicationId, interviewId);
   const questions = readQuestions(interviewId);
+  let inputHash: string | null = null;
+  let materialError: string | null = null;
+  try { inputHash = hashReviewInput(modelRoundContext(storedContext), questions); }
+  catch (error) { if (!(error instanceof ResumeContextError)) throw error; materialError = error.message; }
+  return { round_name: storedContext.round_name, questions, input_hash: inputHash, material_error: materialError };
+}
+
+export function getInterviewReview(applicationId: number, interviewId: number, recapId?: number): InterviewReviewResponse {
+  const { questions, input_hash, material_error } = getInterviewQuestionInput(applicationId, interviewId);
   const latest = latestRecap(interviewId, applicationId);
   const history = getDb().prepare(`SELECT id, created_at, input_hash FROM application_interview_recaps
     WHERE interview_id = ? ORDER BY id DESC`).all(interviewId) as { id: number; created_at: string; input_hash: string }[];
@@ -215,15 +224,7 @@ export function getInterviewReview(applicationId: number, interviewId: number, r
     if (!row) throw new InterviewReviewError("复盘记录不存在", 404);
     selected = mapRecap(row, applicationId);
   }
-  let inputHash: string | null = null;
-  let materialError: string | null = null;
-  try {
-    inputHash = hashReviewInput(modelRoundContext(storedContext), questions);
-  } catch (error) {
-    if (!(error instanceof ResumeContextError)) throw error;
-    materialError = error.message;
-  }
-  return { questions, input_hash: inputHash, material_error: materialError, latest, selected, history };
+  return { questions, input_hash, material_error, latest, selected, history };
 }
 
 export function exportInterviewReview(applicationId: number, interviewId: number, recapId: unknown, action: unknown) {

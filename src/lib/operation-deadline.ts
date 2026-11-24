@@ -18,6 +18,11 @@ export function assertOperationActive(): void {
   if (scope?.deadline !== undefined && performance.now() >= scope.deadline) throw new OperationTimeoutError();
 }
 
+export function remainingOperationTimeMs(): number {
+  const deadline = limits.getStore()?.deadline;
+  return deadline === undefined ? 600_000 : Math.max(0, Math.ceil(deadline - performance.now()));
+}
+
 export function isSqliteBusy(error: unknown): boolean {
   if (!(error instanceof Error) || !("errcode" in error) || typeof error.errcode !== "number") return false;
   const primary = error.errcode & 0xff; // node:sqlite exposes the extended result code.

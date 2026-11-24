@@ -1,8 +1,8 @@
-import { ApplicationInputError, createApplication, createApplicationInterview, getApplicationById, updateApplication } from "@/lib/applications";
+import { ApplicationInputError, createApplication, createApplicationInterview, getApplicationById, getApplicationInterviewById, updateApplication, updateApplicationInterview } from "@/lib/applications";
 import type { ApplicationStage, ApplicationTerminalStage, CreateApplicationInput, CreateApplicationInterviewInput } from "@/lib/applications-types";
 import { getDb, inTransaction } from "@/lib/db";
-import { completePreparationStep, getPreparationPlan } from "@/lib/preparation-plan";
-import { createPreparationTask, normalizePreparationDueTime, PreparationInputError } from "@/lib/application-preparation";
+import { completePreparationStep, generatePreparationPlan, getPreparationPlan } from "@/lib/preparation-plan";
+import { createPreparationTask, updatePreparationTask, normalizePreparationDueTime, PreparationInputError } from "@/lib/application-preparation";
 import type { PlanStepKey } from "@/lib/preparation-plan-types";
 import { mcpRevision } from "@/lib/mcp-revision";
 import { McpOperationError } from "./mcp-errors";
@@ -38,6 +38,37 @@ export function scheduleMcpInterview(input: CreateApplicationInterviewInput & { 
     if (!interview_time) throw new McpOperationError("INVALID_ARGUMENT", "安排面试需提供带时区的面试时间");
     return createApplicationInterview(applicationId, { ...fields, interview_time });
   }, id => Boolean(getDb().prepare("SELECT 1 FROM application_interviews WHERE id = ? AND application_id = ?").get(id, applicationId)));
+}
+
+export function updateMcpPreparationTask(input: { applicationId: number; taskId: number; expectedRevision: string; done?: boolean; title?: string; dueTime?: string }) {
+  return inTransaction(() => {
+    assertMcpApplicationRevision(input.applicationId, input.expectedRevision);
+    updatePreparationTask(input.applicationId, input.taskId, { title: input.title, done: input.done, due_time: input.dueTime });
+    return { id: input.taskId };
+  });
+}
+
+export function rescheduleMcpInterview(input: { applicationId: number; interviewId: number; expectedRevision: string; interview_time: string }) {
+  return inTransaction(() => {
+    assertMcpApplicationRevision(input.applicationId, input.expectedRevision);
+    const round = getApplicationInterviewById(input.interviewId);
+    if (!round || round.application_id !== input.applicationId) throw new McpOperationError("NOT_FOUND", "面试轮次不存在或不属于此投递");
+    const interview_time = normalizePreparationDueTime(input.interview_time);
+    if (!interview_time) throw new McpOperationError("INVALID_ARGUMENT", "面试改期需提供带时区的面试时间");
+    updateApplicationInterview(input.interviewId, { interview_time });
+    return { id: input.interviewId };
+  });
+}
+
+export function generateMcpPreparationPlan(input: { applicationId: number; expectedRevision: string; contextKey: string }, returnDetails: boolean) {
+  return inTransaction(() => {
+    const current = getPreparationPlan(input.applicationId);
+    if (mcpRevision("preparation-plan", current) !== input.expectedRevision || current.contextKey !== input.contextKey) {
+      throw new McpOperationError("CONFLICT", "准备计划或岗位资料已更新，请重新读取后再生成");
+    }
+    const plan = generatePreparationPlan(input.applicationId, input.contextKey);
+    return returnDetails ? compactMcpPreparationPlan(plan) : { applicationId: input.applicationId, generated: true };
+  });
 }
 
 export function updateMcpApplication(id: number, input: {

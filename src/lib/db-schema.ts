@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createSearchIndexes, SEARCH_INDEX_OBJECT_NAMES } from "./search-index";
 
-export const CURRENT_DB_VERSION = 9;
+export const CURRENT_DB_VERSION = 10;
 
 /** Local MCP receipts/drafts/audit metadata are deliberately excluded from user backups. */
 const MCP_STATE_SCHEMA_SQL = `
@@ -33,6 +33,24 @@ CREATE TABLE IF NOT EXISTS mcp_drafts (
   payload TEXT NOT NULL,
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mcp_generation_requests (
+  request_key TEXT PRIMARY KEY NOT NULL,
+  input_hash TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('jd','diagnosis','review')),
+  application_id INTEGER NOT NULL,
+  interview_id INTEGER,
+  source_revision TEXT NOT NULL,
+  owner_token TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed')),
+  draft_id INTEGER UNIQUE,
+  response_json TEXT CHECK (response_json IS NULL OR json_valid(response_json)),
+  error_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  draft_expires_at TEXT
 );
 `;
 
@@ -752,7 +770,8 @@ export function validateDatabaseSchema(database: DatabaseSync, version = CURRENT
     !(version < 6 && table === "resume_import_source_receipts") &&
     !(version < 7 && table === "application_preparation_plans") &&
     !(version < 8 && table === "interview_question_graphs") &&
-    !(version < 9 && ["mcp_creation_receipts", "mcp_operation_logs", "mcp_drafts"].includes(table));
+    !(version < 9 && ["mcp_creation_receipts", "mcp_operation_logs", "mcp_drafts"].includes(table)) &&
+    !(version < 10 && table === "mcp_generation_requests");
   const expectedTables = [...EXPECTED_SCHEMA.keys()].filter(included);
   const actualTables = (database
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -815,7 +834,7 @@ export function rollbackIgnoringAutoRollback(
 
 export function initializeDatabase(database: DatabaseSync): void {
   const version = database.prepare("PRAGMA user_version").get() as { user_version: number };
-  if (![0, 1, 2, 3, 4, 5, 6, 7, 8, CURRENT_DB_VERSION].includes(version.user_version)) {
+  if (![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, CURRENT_DB_VERSION].includes(version.user_version)) {
     throw new Error(`不支持数据库版本 ${version.user_version}：仅支持数据库版本 ${CURRENT_DB_VERSION}`);
   }
   if (version.user_version !== 0) {
@@ -828,7 +847,7 @@ export function initializeDatabase(database: DatabaseSync): void {
     try {
       // 取得写锁后重验，支持多个进程同时打开同一份旧版本库。
       const locked = database.prepare("PRAGMA user_version").get() as { user_version: number };
-      if (![1, 2, 3, 4, 5, 6, 7, 8, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
+      if (![1, 2, 3, 4, 5, 6, 7, 8, 9, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
       validateDatabaseSchema(database, locked.user_version);
       database.exec(SALARY_REQUEST_SCHEMA_SQL);
       database.exec(RESUME_REQUEST_SCHEMA_SQL);
