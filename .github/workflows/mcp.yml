@@ -1,0 +1,35 @@
+name: MCP checks
+on:
+  pull_request:
+    paths:
+      - 'src/mcp/**'
+      - 'src/lib/**'
+      - 'scripts/mcp.mjs'
+      - 'package*.json'
+      - 'tsconfig.json'
+      - 'vitest*.mts'
+      - '.github/workflows/mcp.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mcp-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  mcp:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run test:mcp
+      - run: npx vitest run src/lib/__tests__/database-schema.test.ts src/lib/__tests__/backup-fixture-versions.integration.test.ts src/lib/__tests__/application-interview-review.integration.test.ts
+      - run: npm run typecheck

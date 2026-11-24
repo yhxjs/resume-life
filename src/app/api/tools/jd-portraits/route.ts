@@ -1,9 +1,10 @@
 import { ModelInputBudgetError } from "@/lib/llm-input-budget";
 import { withRouteErrorHandling } from "@/lib/api-route";
-import { PreparationInputError, resolvePreparationApplication, linkPreparationResource } from "@/lib/application-preparation";
+import { PreparationInputError, resolvePreparationApplication } from "@/lib/application-preparation";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
-import { getDb, inTransaction, now } from "@/lib/db";
+import { saveJdPortrait } from "@/lib/jd-portrait-store";
+import { getDb } from "@/lib/db";
 import { LlmConfigError } from "@/lib/llm";
 import { validateGeneratedJdPortrait } from "@/lib/jd-portrait";
 import { buildJdPortraitMessages, JD_PORTRAIT_SYSTEM_PROMPT } from "@/lib/jd-portrait-llm";
@@ -71,15 +72,8 @@ async function handlePost(req: Request) {
     );
   }
 
-  const db = getDb();
   try {
-    return inTransaction(() => {
-      if (applicationId !== null) resolvePreparationApplication(body, { jd });
-      const saved = db.prepare("INSERT INTO jd_portraits (jd, result, created_at) VALUES (?, ?, ?)").run(jd, JSON.stringify(result), now());
-      const id = Number(saved.lastInsertRowid);
-      if (applicationId !== null) linkPreparationResource(applicationId, "portrait", id);
-      return NextResponse.json({ id }, { status: 201 });
-    });
+    return NextResponse.json({ id: saveJdPortrait(jd, result, applicationId) }, { status: 201 });
   } catch (error) {
     if (error instanceof PreparationInputError) return NextResponse.json({ error: error.message }, { status: error.status });
     throw error;

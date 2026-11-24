@@ -9,6 +9,7 @@ import { parseHttpBaseUrl, type readModelSettingsRequest } from "./settings-requ
 import { proxyConfigFromSettings, type ProxyConfig } from "./proxy-config";
 import { proxyFetchInit } from "./proxy-dispatcher";
 import { EMPTY_USAGE, mergeUsage, parseNonStreamUsage, type LlmUsage } from "./llm-adapter";
+import { assertOperationActive, withCleanupLockBudget } from "./operation-deadline";
 import { acquireLlmLease, releaseLlmLease } from "./shared-budgets";
 import { observeLlmRequest, type LlmProgressObserver } from "./llm-request-progress";
 import {
@@ -127,7 +128,7 @@ export class LlmHttpError extends Error {
 export class LlmTimeoutError extends Error {}
 
 /** requireJson 校验失败：回复不是有效且键唯一的 JSON。未向客户端输出过内容时可重试 */
-class LlmInvalidJsonError extends Error {
+export class LlmInvalidJsonError extends Error {
   constructor() {
     super("AI 返回的内容不是有效 JSON，请重试或核对模型输出格式");
   }
@@ -540,7 +541,7 @@ async function runChatStream(
       try { void Promise.resolve(opts?.onUsage?.({ ...usage })).catch(() => {}); } catch {}
     }
     if (!source) return;
-    recordLlmCall({ source, task, model, apiFormat: format, status, errorCode, attempts, durationMs: Date.now() - startedAt, usage });
+    withCleanupLockBudget(() => recordLlmCall({ source, task, model, apiFormat: format, status, errorCode, attempts, durationMs: Date.now() - startedAt, usage }), 0);
   };
   const logLlm: LogFn = ({ status, errorCode, attempt }) =>
     // 与全站其他日志一样走 logServerEvent：字段受白名单约束、格式统一，并带上 requestId。
@@ -580,6 +581,7 @@ async function runChatStream(
   for (;;) {
     let attemptUsage: LlmUsage = EMPTY_USAGE;
     try {
+      assertOperationActive();
       signal?.throwIfAborted();
       const { content, usage } = await requestOnce({
         format,

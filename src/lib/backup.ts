@@ -139,8 +139,8 @@ export function readBackupSequences(database: DatabaseSync): BackupSequences {
   }>;
   const allowed = new Set<string>(AUTOINCREMENT_TABLES);
   for (const row of rows) {
-    // 认证是机器运行时状态，序列与会话一样不进入业务备份。
-    if (row.name === "auth_sessions") continue;
+    // 认证与 MCP 临时状态的序列均不进入业务备份。
+    if (row.name === "auth_sessions" || row.name === "mcp_drafts" || row.name === "mcp_operation_logs") continue;
     if (typeof row.name !== "string" || !allowed.has(row.name)) {
       throw new Error(`数据库序列无效：${String(row.name)}`);
     }
@@ -369,6 +369,9 @@ export function restoreAllData(
     db.exec("DELETE FROM salary_creation_requests");
     db.exec("DELETE FROM resume_creation_requests");
     db.exec("DELETE FROM resume_import_source_receipts");
+    // Foreign keys are disabled during restore: clear source-bound drafts explicitly.
+    // Keep MCP creation receipts as tombstones; the new data generation invalidates them.
+    db.exec("DELETE FROM mcp_drafts");
     // 逆序清空所有数据表。
     for (const table of TABLES_CLEAR_ORDER) {
       if (table === "settings" && preserveAiConfig) {

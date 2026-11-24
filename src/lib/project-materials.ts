@@ -44,14 +44,23 @@ export function listProjectMaterials(projectId: number, cursor: number | null, l
   return { ...createCursorPage(rows, limit, (item) => String(item.id)), total };
 }
 
-export function loadProjectMaterial(projectId: number, materialId: number): ProjectMaterialDetail | null {
-  const row = getDb().prepare("SELECT m.id, m.title, m.source, m.filename, m.content, m.created_at, p.provenance FROM project_materials m LEFT JOIN project_material_table_provenance p ON p.material_id = m.id WHERE m.id = ? AND m.project_id = ?")
-    .get(materialId, projectId) as (Omit<ProjectMaterialDetail, "revision" | "tableProvenance"> & { provenance: string | null }) | undefined;
+/** Web details and MCP sections must see the same text and verified layout markers. */
+export function readProjectMaterialRecord(materialId: number, projectId?: number) {
+  const row = getDb().prepare(`SELECT m.id, m.project_id, m.title, m.source, m.filename, m.content, m.created_at, p.provenance
+    FROM project_materials m LEFT JOIN project_material_table_provenance p ON p.material_id = m.id
+    WHERE m.id = ? AND (? IS NULL OR m.project_id = ?)`)
+    .get(materialId, projectId ?? null, projectId ?? null) as (Omit<ProjectMaterialDetail, "revision" | "tableProvenance"> & { project_id: number; provenance: string | null }) | undefined;
   if (!row) return null;
   const { provenance, ...material } = row;
   const tableProvenance = parseDocumentTableProvenance(provenance, material.content);
-  const result = { ...material, ...(tableProvenance === null ? {} : { tableProvenance }) };
-  return { ...result, revision: materialRevision(projectId, result) };
+  return { ...material, ...(tableProvenance === null ? {} : { tableProvenance }) };
+}
+
+export function loadProjectMaterial(projectId: number, materialId: number): ProjectMaterialDetail | null {
+  const record = readProjectMaterialRecord(materialId, projectId);
+  if (!record) return null;
+  const { project_id, ...material } = record;
+  return { ...material, revision: materialRevision(project_id, material) };
 }
 
 export function updateProjectMaterial(projectId: number, materialId: number, input: { title: string; content: string; expectedRevision: string }) {

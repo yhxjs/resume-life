@@ -1,3 +1,4 @@
+import { interviewEpochMs } from "./application-datetime";
 import { getDb } from "./db";
 import { addReviewDays, getReviewDate } from "./spaced-repetition";
 import { getReviewSummary } from "./spaced-repetition-cards";
@@ -52,10 +53,10 @@ export function getHomePriorities(reference = new Date(), timeZone?: string): Ho
     // 历史无时区时间沿用本地时间语义；筛选与展示统一解析，不能先用 SQLite 的 UTC 规则选一轮再过滤。
     const interviewTime = app.has_interviews
       ? (JSON.parse(app.scheduled_interviews) as string[]).reduce((nearest, value) => {
-        const time = Date.parse(value);
-        return time >= timestamp && time < nearest ? time : nearest;
+        const time = interviewEpochMs(value);
+        return time !== null && time >= timestamp && time < nearest ? time : nearest;
       }, Infinity)
-      : Date.parse(app.next_interview_at);
+      : interviewEpochMs(app.next_interview_at) ?? Infinity;
     const upcoming = interviewTime >= timestamp && interviewTime <= timestamp + 7 * DAY;
     const base = { id: `application-${app.id}`, title: `${app.company} · ${app.role}`, href: getHomeApplicationHref(app.id) };
     if (upcoming) {

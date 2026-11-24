@@ -1,3 +1,9 @@
+/** Historical wall times use the host's local time; an explicit offset identifies an absolute instant. */
+export function interviewEpochMs(value: unknown): number | null {
+  const time = typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isFinite(time) ? time : null;
+}
+
 export function toLocalDateTime(value: string): string {
   if (!value) return "";
   const date = new Date(value);

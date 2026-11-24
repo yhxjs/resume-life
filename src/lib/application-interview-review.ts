@@ -406,6 +406,31 @@ export function buildInterviewReviewMessages(context: {
   return [{ role: "user", parts }];
 }
 
+/** Shared input/persistence boundary for web generation and MCP's reviewable drafts. */
+export function getInterviewReviewDraftInput(applicationId: number, interviewId: number) {
+  const context = roundContext(applicationId, interviewId);
+  const questions = readQuestions(interviewId);
+  if (!questions.length) throw new InterviewReviewError("请先保存至少一题，再生成复盘");
+  return { context, questions, inputHash: hashReviewInput(context, questions) };
+}
+
+export function saveGeneratedInterviewReview(applicationId: number, interviewId: number,
+  input: ReturnType<typeof getInterviewReviewDraftInput>, result: InterviewReviewResult) {
+  return inTransaction(() => {
+    const current = getInterviewReviewDraftInput(applicationId, interviewId);
+    if (current.inputHash !== input.inputHash || JSON.stringify(current.context) !== JSON.stringify(input.context)) {
+      throw new InterviewReviewError("面试或投递资料已变化，请刷新后重新确认", 409);
+    }
+    const validated = parseInterviewReviewResult(JSON.stringify(result), current.questions);
+    const db = getDb();
+    const inserted = db.prepare(`INSERT INTO application_interview_recaps (interview_id, input_hash, questions, result, created_at)
+      VALUES (?, ?, ?, ?, ?)`).run(interviewId, input.inputHash, JSON.stringify(current.questions), JSON.stringify(validated), now());
+    db.prepare(`INSERT INTO application_interview_recap_contexts (recap_id, company, role, round_name, jd)
+      VALUES (?, ?, ?, ?, ?)`).run(inserted.lastInsertRowid, current.context.company, current.context.role, current.context.round_name, current.context.jd);
+    return Number(inserted.lastInsertRowid);
+  });
+}
+
 export async function confirmInterviewReview(applicationId: number, interviewId: number, expectedHash: unknown, signal?: AbortSignal) {
   if (typeof expectedHash !== "string" || !/^[a-f0-9]{64}$/.test(expectedHash)) throw new InterviewReviewError("逐题记录版本无效");
   if (signal?.aborted) throw new InterviewReviewError("请求已取消", 499);
@@ -438,12 +463,9 @@ export async function confirmInterviewReview(applicationId: number, interviewId:
       if (JSON.stringify(currentContext) !== JSON.stringify(context) || hashReviewInput(currentContext, readQuestions(interviewId)) !== expectedHash) {
         throw new InterviewReviewError("面试或投递资料已变化，请刷新后重新确认", 409);
       }
-      const duplicate = latestRecap(interviewId, applicationId);
-      if (duplicate?.input_hash !== expectedHash) {
-        const recapId = getDb().prepare(`INSERT INTO application_interview_recaps (interview_id, input_hash, questions, result, created_at)
-          VALUES (?, ?, ?, ?, ?)`).run(interviewId, expectedHash, JSON.stringify(questions), JSON.stringify(result), now());
-        getDb().prepare(`INSERT INTO application_interview_recap_contexts (recap_id, company, role, round_name, jd)
-          VALUES (?, ?, ?, ?, ?)`).run(recapId.lastInsertRowid, context.company, context.role, context.round_name, context.jd);
+      // Web confirmations reuse the first result for this input; MCP confirms a specific draft instead.
+      if (latestRecap(interviewId, applicationId)?.input_hash !== expectedHash) {
+        saveGeneratedInterviewReview(applicationId, interviewId, { context, questions, inputHash: expectedHash }, result);
       }
       return getInterviewReview(applicationId, interviewId);
     });

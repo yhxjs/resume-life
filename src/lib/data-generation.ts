@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { withSqliteLockBudget } from "./operation-deadline";
 import type { DatabaseSync } from "node:sqlite";
 
 export class DataGenerationConflictError extends Error {
@@ -16,8 +17,8 @@ export function trackDataGeneration(database: DatabaseSync): void {
   const current = scope.getStore();
   if (!current) return;
   if (!current.read) {
-    const statement = database.prepare("SELECT data_generation FROM runtime_state WHERE id = 1");
-    current.read = () => (statement.get() as { data_generation: string } | undefined)?.data_generation ?? null;
+    const statement = withSqliteLockBudget(database, () => database.prepare("SELECT data_generation FROM runtime_state WHERE id = 1"));
+    current.read = () => withSqliteLockBudget(database, () => (statement.get() as { data_generation: string } | undefined)?.data_generation ?? null);
   }
   assertDataGeneration();
 }

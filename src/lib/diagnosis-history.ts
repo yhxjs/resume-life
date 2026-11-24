@@ -1,4 +1,5 @@
-import { getDb } from "@/lib/db";
+import { getDb, inTransaction } from "@/lib/db";
+import { linkPreparationResource } from "@/lib/application-preparation";
 import { assertBackupRecordBytes } from "@/lib/backup-limits";
 import { isStoredDiagnosisReport, isStoredDiagnosisSnapshot, isStoredDiagnosisAdoptions } from "@/lib/backup-domain";
 import type { DiagnosisHistoryItem, DiagnosisHistoryResponse, DiagnosisRecord } from "@/lib/diagnosis";
@@ -59,6 +60,28 @@ export function loadDiagnosis(resumeId: number, diagnosisId: number): DiagnosisR
   const row = getDb().prepare("SELECT * FROM resume_diagnoses WHERE resume_id = ? AND id = ?")
     .get(resumeId, diagnosisId) as StoredDiagnosis | undefined;
   return row ? decode(row) : null;
+}
+
+/** 投递内沿用同一岗位的诊断历史；只在没有投递上下文时按 JD 匹配。 */
+export function findMatchingDiagnosisJob(resumeId: number, jd: string, applicationId: number | null) {
+  return getDb().prepare(`SELECT job_id, job_title FROM resume_diagnoses d WHERE resume_id = ? AND
+    ${applicationId === null ? "jd = ?" : "EXISTS (SELECT 1 FROM application_preparation_resources p WHERE p.application_id = ? AND p.diagnosis_id = d.id)"}
+    ORDER BY created_at DESC, id DESC LIMIT 1`).get(resumeId, applicationId ?? jd) as Pick<DiagnosisRecord, "job_id" | "job_title"> | undefined;
+}
+
+type NewDiagnosis = Pick<StoredDiagnosis, "job_id" | "job_title" | "jd" | "report" | "resume_snapshot" | "created_at"> & {
+  resume_id: number; resume_version_id: number;
+};
+
+export function saveDiagnosis(row: NewDiagnosis, applicationId: number | null): number {
+  return inTransaction(() => {
+    const saved = getDb().prepare(`INSERT INTO resume_diagnoses (resume_id, resume_version_id, job_id, job_title, jd, report, resume_snapshot, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(row.resume_id, row.resume_version_id, row.job_id, row.job_title, row.jd, row.report, row.resume_snapshot, row.created_at);
+    const id = Number(saved.lastInsertRowid);
+    if (applicationId !== null) linkPreparationResource(applicationId, "diagnosis", id);
+    return id;
+  });
 }
 
 /** 列表仅取轻量元信息；完整快照只加载选中版本和同岗位上一次版本。 */

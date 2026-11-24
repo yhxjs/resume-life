@@ -1,4 +1,4 @@
-import { ApplicationInputError, getApplicationById, listApplicationInterviews, listApplications } from "@/lib/applications";
+import { ApplicationInputError, getApplicationById, listApplications } from "@/lib/applications";
 import { encodeUpdatedAtCursor, parsePaginationParams, type UpdatedAtCursor } from "@/lib/cursor-pagination";
 import { escapeLike, getDb } from "@/lib/db";
 import { loadResumeForModel } from "@/lib/resumes";
@@ -21,7 +21,7 @@ const INTERVIEW_DETAIL_COLUMNS = `${INTERVIEW_IDENTITY_COLUMNS},
   i.jd, i.rounds, i.style, i.status, i.report, i.evaluator_report, i.created_at, i.finished_at,
   (SELECT COUNT(*) FROM interview_turns t WHERE t.interview_id = i.id) AS turn_count`;
 
-function fitPage<T extends object>(items: T[], originalCursor: string | null, cursorOf: (item: T) => string): { items: T[]; nextCursor: string | null } {
+export function fitPage<T extends object>(items: T[], originalCursor: string | null, cursorOf: (item: T) => string): { items: T[]; nextCursor: string | null } {
   const included: T[] = [];
   for (const row of items) {
     const item = boundMcpOutput(row, 12_000);
@@ -33,9 +33,9 @@ function fitPage<T extends object>(items: T[], originalCursor: string | null, cu
   return { items: included, nextCursor: originalCursor };
 }
 
-type PageInput = { limit?: number; cursor?: string };
+export type PageInput = { limit?: number; cursor?: string };
 
-function pageParams(input: PageInput, kind: "id" | "updatedAt" = "id") {
+export function pageParams(input: PageInput, kind: "id" | "updatedAt" = "id") {
   const params = new URLSearchParams();
   if (input.limit !== undefined) params.set("limit", String(input.limit));
   if (input.cursor !== undefined) params.set("cursor", input.cursor);
@@ -201,16 +201,18 @@ function encodeApplicationCursor(item: { updated_at: string; id: number }) {
 export function getMcpApplication(id: number) {
   const application = getApplicationById(id);
   if (!application) return null;
-  const db = getDb();
-  const history = db.prepare(`SELECT from_stage, to_stage, from_hiring_stage, to_hiring_stage, terminal_stage, changed_at, reason
-    FROM application_stage_history WHERE application_id = ? ORDER BY changed_at DESC, id DESC LIMIT 50`).all(id);
-  const customTasks = db.prepare(`SELECT id, title, done, due_time, created_at FROM application_preparation_tasks
-    WHERE application_id = ? ORDER BY done ASC, due_time ASC, id DESC LIMIT 100`).all(id);
+  // Derive all previews from the data used for revision. Extra reads can mix a concurrent Web edit into the same response.
+  const rounds = application.interviews ?? [];
+  const tasks = application.preparation_tasks ?? [];
+  const history = (application.stage_history ?? []).toSorted((a, b) =>
+    a.changed_at === b.changed_at ? b.id - a.id : a.changed_at < b.changed_at ? 1 : -1);
   return boundMcpOutput({ application: compactMcpApplication(application),
-    ...((application.stage_history?.length ?? 0) > 50 || (application.preparation_tasks?.length ?? 0) > 100 ||
-      (application.interviews?.length ?? 0) > 20 ? { truncated: true as const } : {}),
-    interviewRounds: listApplicationInterviews(id).slice(0, 20).map(item => ({ ...item, notes: limitedText(item.notes, 500), meeting_url: limitedText(item.meeting_url ?? "", 500) })),
-    history: (history as Array<Record<string, unknown>>).map(item => ({ ...item, reason: limitedText(item.reason, 500) })), customTasks });
+    submissionContent: application.submitted_at === null ? null : { tool: "read_record_section", kind: "application_submission", id },
+    ...(history.length > 50 || tasks.length > 100 || rounds.length > 20 ? { truncated: true as const } : {}),
+    interviewRounds: rounds.slice(0, 20).map(item => ({ ...item, notes: limitedText(item.notes, 500), meeting_url: limitedText(item.meeting_url ?? "", 500) })),
+    history: history.slice(0, 50).map(({ from_stage, to_stage, from_hiring_stage, to_hiring_stage, terminal_stage, changed_at, reason }) =>
+      ({ from_stage, to_stage, from_hiring_stage, to_hiring_stage, terminal_stage, changed_at, reason: limitedText(reason, 500) })),
+    customTasks: tasks.slice(0, 100) });
 }
 
 export function getMcpPreparationPlan(applicationId: number) {
@@ -280,17 +282,16 @@ export function getMcpInterview(id: number, input: PageInput = {}) {
 
 export function listMcpInterviewReviews(input: PageInput = {}) {
   const { limit, idCursor } = pageParams(input);
-  const rows = getDb().prepare(`SELECT rec.id, rec.interview_id, ai.application_id, a.company, a.role,
-      ai.round_name, rec.questions, rec.result, rec.created_at, ctx.jd
+  const rows = getDb().prepare(`SELECT rec.id, rec.interview_id, ai.application_id, ctx.company, ctx.role,
+      ctx.round_name, rec.questions, rec.result, rec.created_at, ctx.jd
     FROM application_interview_recaps rec JOIN application_interviews ai ON ai.id = rec.interview_id
-    JOIN applications a ON a.id = ai.application_id
     LEFT JOIN application_interview_recap_contexts ctx ON ctx.recap_id = rec.id
     WHERE (? IS NULL OR rec.id < ?) ORDER BY rec.id DESC LIMIT ?`).all(idCursor, idCursor, limit + 1) as
-    { id: number; interview_id: number; application_id: number; company: string; role: string; round_name: string;
+    { id: number; interview_id: number; application_id: number; company: string | null; role: string | null; round_name: string | null;
       questions: string; result: string; created_at: string; jd: string | null }[];
   const hasMore = rows.length > limit;
   const items = rows.slice(0, limit).map(row => ({ ...row, questions: parseJsonLimited(row.questions, 4_000),
-    result: parseJsonLimited(row.result, 4_000), jd: limitedText(row.jd ?? "", 2_000) }));
+    result: parseJsonLimited(row.result, 4_000), jd: row.jd === null ? null : limitedText(row.jd, 2_000) }));
   const last = rows[Math.min(limit, rows.length) - 1];
   return fitPage(items, hasMore && last ? String(last.id) : null, item => String(item.id));
 }
@@ -333,7 +334,8 @@ export function listMcpDrills(input: PageInput & { projectId?: number; q?: strin
   const { limit, idCursor } = pageParams(input);
   const page = listDrills(input.projectId ?? null, input.q?.slice(0, 100) ?? "", idCursor, limit);
   const items = page.items.map(item => ({ ...item, direction: limitedText(item.direction, 500),
-    jd: limitedText(item.jd, 1_000), focus: limitedText(item.focus, 500) }));
+    jd: limitedText(item.jd, 1_000), focus: limitedText(item.focus, 500),
+    fullContent: { tool: "read_record_section", kind: "practice_session", id: item.id } }));
   return fitPage(items, page.nextCursor, item => String(item.id));
 }
 

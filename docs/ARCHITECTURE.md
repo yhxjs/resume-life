@@ -58,9 +58,9 @@ PDF、DOCX 和图片导入在大小、页数、字符数及临时目录边界内
 
 ## 本机 MCP 接入
 
-`src/mcp/stdio.ts` 使用官方 TypeScript MCP SDK 提供 stdio Server；不新增 HTTP 端口或绕过业务领域模块。MCP 查询调用 `src/lib/mcp-read.ts` 与既有领域读取函数；所有工具、资源和提示词操作都在数据世代作用域内运行，写操作复用领域事务与并发校验。
+`scripts/mcp.mjs` 从自身位置定位项目，提供 serve/doctor/config，调用 `src/mcp/stdio.ts` 的官方 TypeScript MCP SDK stdio Server。`src/mcp/tools.ts` 保留 SDK 发现与传输，在 tools/call 入口统一白名单、输入预算/校验、结构化输出、错误码、超时取消和操作元数据；业务处理运行在数据世代作用域内。`mcp-read.ts`/`mcp-records.ts` 提供有界摘要、分页及修订令牌约束的完整 JSON 分段读取，写操作复用领域事务与并发校验。
 
-默认只注册只读能力。只有显式设置 `RESUME_LIFE_MCP_WRITE_ENABLED=true` 才注册有限投递/准备计划写工具；只有显式设置 `RESUME_LIFE_MCP_LLM_ENABLED=true` 才注册会调用当前配置模型的 JD 分析工具。stdio MCP 直接读取本机数据库，不使用浏览器会话 Cookie；OS 用户、文件权限和 Agent 配置是信任边界。远程 HTTP MCP 不在当前支持范围。详见 [MCP 接入](MCP.md)。
+默认注册 27 个业务只读工具；写入和模型调用通过独立开关启用，工具白名单进一步收窄权限，并同步约束 Resources/Prompts。`mcp-state.ts` 将创建回执与业务写入原子提交；`mcp-ai.ts` 将生成和保存分开，临时草稿绑定来源修订令牌，保存时复核后关联业务资料。v9 新增的 MCP 回执、操作日志和临时草稿均为本机运行表，不进入用户备份。stdio 直接读取本机数据库，OS 用户、文件权限和 Agent 配置是信任边界；功能范围仅为本机 stdio。详见 [MCP 接入](MCP.md)。
 
 ## 安全边界
 

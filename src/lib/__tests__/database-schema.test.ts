@@ -22,7 +22,7 @@ describe("当前版本数据库契约", () => {
       INSERT INTO applications (id,company,role,stage,jd,created_at,updated_at) VALUES (1,'现在公司','现在岗位','interviewing','现在 JD','','');
       INSERT INTO application_interviews (id,application_id,round_name,created_at,updated_at) VALUES (1,1,'现在轮次','','');
       INSERT INTO application_interview_recaps (id,interview_id,input_hash,questions,result,created_at) VALUES (1,1,'${"a".repeat(64)}','[]','{}','');
-      DROP TABLE application_preparation_plans; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE project_material_table_provenance; DROP TABLE application_interview_recap_contexts;
+      DROP TABLE application_preparation_plans; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE project_material_table_provenance; DROP TABLE application_interview_recap_contexts;
     `);
     if (version < 3) database.exec("DROP TABLE resume_creation_requests");
     if (version < 2) database.exec("DROP TABLE salary_creation_requests");
@@ -78,9 +78,9 @@ describe("当前版本数据库契约", () => {
     expect(database.prepare("SELECT * FROM application_interview_recap_contexts").all()).toEqual([]);
   });
 
-  it("完整 v2 库升级到 v8，保留已有谈薪回执和业务数据", () => {
+  it("完整 v2 库升级到 v9，保留已有谈薪回执和业务数据", () => {
     initializeDatabase(database);
-    database.exec("DROP TABLE application_preparation_plans; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE project_material_table_provenance; DROP TABLE application_interview_recap_contexts; DROP TABLE resume_creation_requests; PRAGMA user_version=2; INSERT INTO salary_creation_requests VALUES ('原编号','原哈希','failed',NULL,''); INSERT INTO resumes (title,created_at,updated_at) VALUES ('原简历','','')");
+    database.exec("DROP TABLE application_preparation_plans; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE project_material_table_provenance; DROP TABLE application_interview_recap_contexts; DROP TABLE resume_creation_requests; PRAGMA user_version=2; INSERT INTO salary_creation_requests VALUES ('原编号','原哈希','failed',NULL,''); INSERT INTO resumes (title,created_at,updated_at) VALUES ('原简历','','')");
     const previous = database.prepare("SELECT * FROM salary_creation_requests").all();
     initializeDatabase(database);
     expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: CURRENT_DB_VERSION });
@@ -91,7 +91,7 @@ describe("当前版本数据库契约", () => {
 
   it("v2 升级回执建表失败时保持原版本、结构与数据", () => {
     initializeDatabase(database);
-    database.exec("DROP TABLE application_preparation_plans; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE project_material_table_provenance; DROP TABLE application_interview_recap_contexts; DROP TABLE resume_creation_requests; PRAGMA user_version=2");
+    database.exec("DROP TABLE application_preparation_plans; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE project_material_table_provenance; DROP TABLE application_interview_recap_contexts; DROP TABLE resume_creation_requests; PRAGMA user_version=2");
     const before = database.prepare("SELECT * FROM sqlite_master ORDER BY name").all();
     const execute = database.exec.bind(database);
     vi.spyOn(database, "exec").mockImplementation(sql => {
@@ -102,9 +102,9 @@ describe("当前版本数据库契约", () => {
     expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
     expect(database.prepare("SELECT * FROM sqlite_master ORDER BY name").all()).toEqual(before);
   });
-  it("完整 v1 库原子升级到 v8，业务与登录数据保持原样", () => {
+  it("完整 v1 库原子升级到 v9，业务与登录数据保持原样", () => {
     initializeDatabase(database);
-    database.exec("DROP TABLE application_preparation_plans; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE project_material_table_provenance; DROP TABLE application_interview_recap_contexts; DROP TABLE resume_creation_requests; DROP TABLE salary_creation_requests; PRAGMA user_version=1; INSERT INTO resumes (title,created_at,updated_at) VALUES ('原稿','','')");
+    database.exec("DROP TABLE application_preparation_plans; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE project_material_table_provenance; DROP TABLE application_interview_recap_contexts; DROP TABLE resume_creation_requests; DROP TABLE salary_creation_requests; PRAGMA user_version=1; INSERT INTO resumes (title,created_at,updated_at) VALUES ('原稿','','')");
     const before = database.prepare("SELECT * FROM resumes").all();
     initializeDatabase(database);
     expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: CURRENT_DB_VERSION });
@@ -114,7 +114,7 @@ describe("当前版本数据库契约", () => {
 
   it.each([false, true])("v1 升级拒绝残缺结构或回滚失败写入（%s）", (broken) => {
     initializeDatabase(database);
-    database.exec("DROP TABLE application_preparation_plans; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE project_material_table_provenance; DROP TABLE application_interview_recap_contexts; DROP TABLE resume_creation_requests; DROP TABLE salary_creation_requests; PRAGMA user_version=1");
+    database.exec("DROP TABLE application_preparation_plans; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE project_material_table_provenance; DROP TABLE application_interview_recap_contexts; DROP TABLE resume_creation_requests; DROP TABLE salary_creation_requests; PRAGMA user_version=1");
     if (broken) database.exec("DROP INDEX idx_bank_entries_direction_id");
     else {
       const execute = database.exec.bind(database);
@@ -129,8 +129,8 @@ describe("当前版本数据库契约", () => {
     expect(database.prepare("SELECT * FROM sqlite_master ORDER BY name").all()).toEqual(before);
   });
 
-  it("创建完整 v8 结构并可重复打开，不回填或修改业务数据", () => {
-    expect(CURRENT_DB_VERSION).toBe(8);
+  it("创建完整 v9 结构并可重复打开，不回填或修改业务数据", () => {
+    expect(CURRENT_DB_VERSION).toBe(9);
     initializeDatabase(database);
     database.exec("INSERT INTO resumes (id, title, created_at, updated_at) VALUES (1, '演示简历', '', '')");
     const before = database.prepare("SELECT * FROM resumes").all();
@@ -140,23 +140,49 @@ describe("当前版本数据库契约", () => {
     expect(database.prepare("SELECT * FROM resume_versions").all()).toEqual([]);
     expect(() => validateDatabaseSchema(database)).not.toThrow();
     const tables = database.prepare("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string; sql: string }[];
-    const business = tables.filter(({ name }) => !name.startsWith("search_fts_") && name !== "runtime_state" && name !== "resume_import_source_receipts" && name !== "salary_creation_requests" && name !== "resume_creation_requests" && !name.startsWith("auth_"));
+    const business = tables.filter(({ name }) => !name.startsWith("search_fts_") && name !== "runtime_state" && name !== "resume_import_source_receipts" && name !== "salary_creation_requests" && name !== "resume_creation_requests" && !name.startsWith("auth_") && !name.startsWith("mcp_"));
     expect(business.map(({ name }) => name)).toEqual([...TABLES_CLEAR_ORDER].sort());
     expect(business.filter(({ sql }) => /\bAUTOINCREMENT\b/iu.test(sql)).map(({ name }) => name)).toEqual([...AUTOINCREMENT_TABLES].sort());
   });
 
   it("从完整 v7 库原子升级并创建题目图谱历史表", () => {
     initializeDatabase(database);
-    database.exec("INSERT INTO resumes (id, title, created_at, updated_at) VALUES (1, '保留简历', '', ''); DROP TABLE interview_question_graphs; PRAGMA user_version=7");
+    database.exec("INSERT INTO resumes (id, title, created_at, updated_at) VALUES (1, '保留简历', '', ''); DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; PRAGMA user_version=7");
     expect(() => validateDatabaseSchema(database, 7)).not.toThrow();
     initializeDatabase(database);
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: CURRENT_DB_VERSION });
     expect(database.prepare("SELECT title FROM resumes WHERE id=1").get()).toEqual({ title: "保留简历" });
     expect(database.prepare("PRAGMA table_info(interview_question_graphs)").all().map(row => (row as { name: string }).name)).toContain("history_json");
     expect(() => validateDatabaseSchema(database)).not.toThrow();
   });
 
-  it.each([0, 9, 10])("拒绝含业务表的不受支持版本 v%s，不改版本、表或数据", (version) => {
+  it("从完整 v8 库原子升级到 v9，创建本机 MCP 状态且不改业务数据", () => {
+    initializeDatabase(database);
+    database.exec("INSERT INTO resumes (title,created_at,updated_at) VALUES ('保留原稿','',''); DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; PRAGMA user_version=8");
+    const before = database.prepare("SELECT * FROM resumes").all();
+    expect(() => validateDatabaseSchema(database, 8)).not.toThrow();
+    initializeDatabase(database);
+    expect(database.prepare("SELECT * FROM resumes").all()).toEqual(before);
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+    expect(database.prepare("SELECT * FROM mcp_creation_receipts").all()).toEqual([]);
+    expect(() => validateDatabaseSchema(database)).not.toThrow();
+  });
+
+  it("v8 到 v9 建表失败时完整回滚", () => {
+    initializeDatabase(database);
+    database.exec("DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; PRAGMA user_version=8");
+    const before = database.prepare("SELECT * FROM sqlite_master ORDER BY name").all();
+    const execute = database.exec.bind(database);
+    vi.spyOn(database, "exec").mockImplementation(sql => {
+      if (sql === `PRAGMA user_version = ${CURRENT_DB_VERSION}`) throw new Error("migration failed");
+      execute(sql);
+    });
+    expect(() => initializeDatabase(database)).toThrow("migration failed");
+    expect(database.prepare("SELECT * FROM sqlite_master ORDER BY name").all()).toEqual(before);
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+  });
+
+  it.each([0, 10, 11])("拒绝含业务表的不受支持版本 v%s，不改版本、表或数据", (version) => {
     database.exec(`CREATE TABLE sentinel (value TEXT); INSERT INTO sentinel VALUES ('保留'); PRAGMA user_version = ${version}`);
     const schema = database.prepare("SELECT * FROM sqlite_master").all();
     expect(() => initializeDatabase(database)).toThrow(/版本|结构/);
@@ -169,7 +195,7 @@ describe("当前版本数据库契约", () => {
     "ALTER TABLE settings DROP COLUMN proxy_password",
     "DROP INDEX idx_bank_entries_direction_id",
     "DROP TABLE resume_creation_requests",
-    "DROP TABLE interview_question_graphs",
+    "DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs",
     "DROP TABLE application_interview_recap_contexts",
   ])("拒绝当前版本库的残缺结构且不自动修补：%s", (statement) => {
     initializeDatabase(database);

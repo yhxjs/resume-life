@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { logServerEvent } from "@/lib/server-errors";
 import { CURRENT_DB_VERSION, initializeDatabase, rollbackIgnoringAutoRollback, validateDatabaseSchema } from "./db-schema";
+import { interviewEpochMs } from "./application-datetime";
+import { assertOperationActive, withSqliteLockBudget } from "./operation-deadline";
 import { assertDataGeneration, trackDataGeneration } from "./data-generation";
 import { recoverPendingRestoreFiles } from "./backup-restore-files";
 
@@ -133,23 +135,26 @@ export function getDb(): DatabaseSync {
   try {
     // 初始化会申请写锁，等待策略必须先于争锁操作。
     opened.exec("PRAGMA busy_timeout = 5000");
-    tightenPrivateFile(DB_PATH);
-    initializeDatabase(opened);
-    opened.exec("PRAGMA journal_mode = WAL");
-    opened.exec("PRAGMA foreign_keys = ON");
-    // WAL 在不支持的文件系统（如网络盘）上不会报错、只会静默保持旧 journal 模式；
-    // 读回校验并显式留痕，避免「直到 health 长红才发现」。
-    const activeJournalMode =
-      opened.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined;
-    if (activeJournalMode?.journal_mode !== "wal") {
-      logServerEvent("warn", "db.journalMode", { context: { resource: "wal-not-active" } });
-    }
-    tightenPrivateFile(DB_PATH);
-    tightenPrivateFile(`${DB_PATH}-wal`);
-    tightenPrivateFile(`${DB_PATH}-shm`);
-    recoverPendingRestoreFiles(opened, path.join(DATA_DIR, "uploads"));
+    opened.function("interview_epoch_ms", { directOnly: true }, interviewEpochMs);
+    withSqliteLockBudget(opened, () => {
+      tightenPrivateFile(DB_PATH);
+      initializeDatabase(opened);
+      opened.exec("PRAGMA journal_mode = WAL");
+      opened.exec("PRAGMA foreign_keys = ON");
+      // WAL 在不支持的文件系统（如网络盘）上不会报错、只会静默保持旧 journal 模式；
+      // 读回校验并显式留痕，避免「直到 health 长红才发现」。
+      const activeJournalMode =
+        opened.prepare("PRAGMA journal_mode").get() as { journal_mode?: unknown } | undefined;
+      if (activeJournalMode?.journal_mode !== "wal") {
+        logServerEvent("warn", "db.journalMode", { context: { resource: "wal-not-active" } });
+      }
+      tightenPrivateFile(DB_PATH);
+      tightenPrivateFile(`${DB_PATH}-wal`);
+      tightenPrivateFile(`${DB_PATH}-shm`);
+      recoverPendingRestoreFiles(opened, path.join(DATA_DIR, "uploads"));
+      announceDataDirectory(opened, isNewDatabase);
+    });
     db = opened;
-    announceDataDirectory(opened, isNewDatabase);
   } catch (error) {
     opened.close();
     throw error;
@@ -219,15 +224,16 @@ export function inTransaction<T>(fn: () => T): T {
     // deferred 下若另一进程在两次读之间提交，升级会立刻得到 SQLITE_BUSY_SNAPSHOT
     // 且不受 busy_timeout 调解。项目其余写路径（initializeDatabase、restoreAllData）
     // 都已用 IMMEDIATE，这里保持一致。
-    database.exec("BEGIN IMMEDIATE");
+    withSqliteLockBudget(database, () => database.exec("BEGIN IMMEDIATE"));
   }
   txDepth++;
   try {
+    assertOperationActive();
     assertDataGeneration();
     const result = fn();
     if (isOuter) {
       assertDataGeneration();
-      database.exec("COMMIT");
+      withSqliteLockBudget(database, () => database.exec("COMMIT"));
     }
     return result;
   } catch (err) {

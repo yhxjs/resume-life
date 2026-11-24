@@ -1,6 +1,6 @@
 import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
-import { PreparationInputError, resolvePreparationApplication, linkPreparationResource } from "@/lib/application-preparation";
+import { PreparationInputError, resolvePreparationApplication } from "@/lib/application-preparation";
 import { resolveResumeVersionId, ResumeVersionError } from "@/lib/resume-versions";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
@@ -11,7 +11,7 @@ import { LlmConfigError } from "@/lib/llm";
 import { loadResume, loadResumeForModel } from "@/lib/resumes";
 import { ResumeContextError } from "@/lib/resume-errors";
 import { diagnosisValue, diagnosisValuesEqual, validateGeneratedDiagnosis, sanitizeModulesForDiagnosis, type DiagnosisReport, type DiagnosisSnapshot } from "@/lib/diagnosis";
-import { assertDiagnosisBudget, canArchiveDiagnosisSnapshot, diagnosisHistory, loadDiagnosis } from "@/lib/diagnosis-history";
+import { assertDiagnosisBudget, canArchiveDiagnosisSnapshot, diagnosisHistory, findMatchingDiagnosisJob, loadDiagnosis, saveDiagnosis } from "@/lib/diagnosis-history";
 import { BackupLimitError } from "@/lib/backup-limits";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
@@ -86,19 +86,18 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
     JOIN resume_diagnoses d ON d.id = p.diagnosis_id WHERE p.application_id = ? AND d.job_id = ? AND d.resume_id = ?`).get(applicationId, existingJob.job_id, numericId)) {
     return NextResponse.json({ error: "此诊断岗位未关联当前投递，请返回准备页选择资料" }, { status: 409 });
   }
-  const matchingJob = !existingJob && !body?.new_job ? db.prepare(`SELECT job_id, job_title FROM resume_diagnoses d WHERE resume_id = ? AND
-    ${applicationId === null ? "jd = ?" : "EXISTS (SELECT 1 FROM application_preparation_resources p WHERE p.application_id = ? AND p.diagnosis_id = d.id)"}
-    ORDER BY created_at DESC, id DESC LIMIT 1`)
-    .get(numericId, applicationId ?? jd) as { job_id: string; job_title: string } | undefined : undefined;
-  const jobId = existingJob?.job_id || matchingJob?.job_id || randomUUID();
-  const jobTitle = (typeof body?.job_title === "string" ? body.job_title.trim() : "") || existingJob?.job_title || matchingJob?.job_title || jd.split("\n")[0]!.slice(0, 60);
-  const ts = now();
+  const newJobId = randomUUID();
+  const requestedTitle = typeof body?.job_title === "string" ? body.job_title.trim() : "";
+  const selectJob = () => {
+    const job = existingJob ?? (body?.new_job ? undefined : findMatchingDiagnosisJob(numericId, jd, applicationId));
+    return { job_id: job?.job_id || newJobId, job_title: requestedTitle || job?.job_title || jd.split("\n")[0]!.slice(0, 60) };
+  };
   const snapshot: DiagnosisSnapshot = { title: data.resume.title, modules: data.modules.map(({ key, type, label, sort, content }) => ({ key, type, label, sort, content })) };
   if (!canArchiveDiagnosisSnapshot(snapshot)) {
     return NextResponse.json({ error: "所选版本无法保存完整诊断快照，请核对并修复简历后重新发布，或恢复有效备份后再诊断" }, { status: 422 });
   }
-  const stored = { id: Number.MAX_SAFE_INTEGER, resume_id: numericId, resume_version_id: resumeVersionId, job_id: jobId, job_title: jobTitle, jd,
-    report: "", resume_snapshot: JSON.stringify(snapshot), adoptions: "[]", created_at: ts };
+  const stored = { id: Number.MAX_SAFE_INTEGER, resume_id: numericId, resume_version_id: resumeVersionId, ...selectJob(), jd,
+    report: "", resume_snapshot: JSON.stringify(snapshot), adoptions: "[]", created_at: now() };
   try { assertDiagnosisBudget(stored); } catch (err) {
     if (!(err instanceof BackupLimitError)) throw err;
     return NextResponse.json({ error: "简历内容过大，无法保存完整诊断快照，请精简后再试" }, { status: 413 });
@@ -139,10 +138,6 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
   }
 
   stored.report = JSON.stringify(report);
-  try { assertDiagnosisBudget(stored); } catch (err) {
-    if (!(err instanceof BackupLimitError)) throw err;
-    return NextResponse.json({ error: "诊断报告与快照内容过大，无法完整保存，请精简简历后再试" }, { status: 413 });
-  }
   return inTransaction(() => {
     if (dataGeneration(db) !== generation) return NextResponse.json({ error: "数据已恢复，请刷新简历后重新诊断" }, { status: 409 });
     // 诊断目标由模块 key 和条目 ID 定位；与职业材料一起复核，且不把对象键顺序当作内容变化。
@@ -163,10 +158,13 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       if (error instanceof PreparationInputError || error instanceof ResumeVersionError) return NextResponse.json({ error: error.message }, { status: error.status });
       throw error;
     }
-    const saved = db.prepare(`INSERT INTO resume_diagnoses (resume_id, resume_version_id, job_id, job_title, jd, report, resume_snapshot, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(numericId, resumeVersionId, jobId, jobTitle, jd, stored.report, stored.resume_snapshot, ts);
-    const current = loadDiagnosis(numericId, Number(saved.lastInsertRowid))!;
-    if (applicationId !== null) linkPreparationResource(applicationId, "diagnosis", current.id);
+    // 等模型期间可能已有同一投递的诊断入库；用提交时的分组与时间支持历史比较。
+    Object.assign(stored, selectJob(), { created_at: now() });
+    try { assertDiagnosisBudget(stored); } catch (err) {
+      if (!(err instanceof BackupLimitError)) throw err;
+      return NextResponse.json({ error: "诊断报告与快照内容过大，无法完整保存，请精简简历后再试" }, { status: 413 });
+    }
+    const current = loadDiagnosis(numericId, saveDiagnosis(stored, applicationId))!;
     return NextResponse.json({ ...current, ...diagnosisHistory(numericId, current) });
   });
 }

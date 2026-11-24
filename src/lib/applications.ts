@@ -163,12 +163,21 @@ type RawApplicationInterviewRow = {
   updated_at: string;
 };
 
-// 看板及统计只读取快照时间，正文在用户回看时按需读取。
-const APPLICATION_COLUMNS = `a.id, a.company, a.role, a.salary_range, a.stage,
-  a.resume_id, a.resume_version_id, a.jd, a.interview_id, a.interview_series_id, a.next_interview_at,
-  a.notes, a.created_at, a.updated_at, a.submitted_at,
-  a.flow_status, a.batch_name, a.hiring_stage, a.stage_changed_at,
-  a.terminal_stage, a.terminal_reason, a.terminal_at`;
+// 看板和统计只取快照时间；正文仍按需读取。近期面试视图替换时间投影，不额外暴露 SQL 辅助列。
+function applicationColumns(nextTime = "a.next_interview_at") {
+  return `a.id, a.company, a.role, a.salary_range, a.stage,
+    a.resume_id, a.resume_version_id, a.jd, a.interview_id, a.interview_series_id, ${nextTime} AS next_interview_at,
+    a.notes, a.created_at, a.updated_at, a.submitted_at,
+    a.flow_status, a.batch_name, a.hiring_stage, a.stage_changed_at,
+    a.terminal_stage, a.terminal_reason, a.terminal_at`;
+}
+
+// A stored summary ages even when nobody edits the application. Use real upcoming rounds when they exist.
+const NEXT_ROUND_JOIN = `LEFT JOIN application_interviews next ON next.id = (SELECT r2.id FROM application_interviews r2
+  WHERE r2.application_id = a.id AND r2.status = 'scheduled' AND interview_epoch_ms(r2.interview_time) >= ?
+  ORDER BY interview_epoch_ms(r2.interview_time), r2.id LIMIT 1)`;
+const UPCOMING_TIME = `CASE WHEN next.id IS NOT NULL THEN next.interview_time
+  WHEN NOT EXISTS (SELECT 1 FROM application_interviews any_round WHERE any_round.application_id = a.id) THEN a.next_interview_at END`;
 
 /** 保留 PATCH 的“未提供”语义，非法类型显式返回 400。 */
 export function parseApplicationLifecycleInput(body: {
@@ -266,23 +275,29 @@ function captureSubmission(app: Application): void {
     .run(now(), data ? JSON.stringify(resumeSnapshot(data)) : null, app.jd, app.id);
 }
 
+type SubmissionRow = { submitted_at: string | null; submitted_resume: string | null; submitted_jd: string | null };
+
+function decodeSubmission(row: SubmissionRow): ApplicationVersions["submitted"] {
+  return row.submitted_at === null ? null : {
+    captured_at: row.submitted_at,
+    resume: row.submitted_resume === null ? null : JSON.parse(row.submitted_resume) as ApplicationResumeSnapshot,
+    jd: row.submitted_jd ?? "",
+  };
+}
+
+/** Only the immutable submitted material, even if the current resume has changed or been deleted. */
+export function getApplicationSubmission(id: number) {
+  const row = getDb().prepare("SELECT submitted_at, submitted_resume, submitted_jd FROM applications WHERE id = ?").get(id) as SubmissionRow | undefined;
+  return row ? { application_id: id, submitted: decodeSubmission(row) } : null;
+}
+
 export function getApplicationVersions(id: number): ApplicationVersions | null {
   return inTransaction(() => {
     const row = getDb().prepare(`SELECT resume_id, resume_version_id, jd, submitted_at, submitted_resume, submitted_jd
-      FROM applications WHERE id = ?`).get(id) as {
-        resume_id: number | null; resume_version_id: number | null; jd: string; submitted_at: string | null;
-        submitted_resume: string | null; submitted_jd: string | null;
-      } | undefined;
+      FROM applications WHERE id = ?`).get(id) as (SubmissionRow & { resume_id: number | null; resume_version_id: number | null; jd: string }) | undefined;
     if (!row) return null;
     const current = row.resume_id === null ? null : loadResume(row.resume_id, row.resume_version_id);
-    return {
-      submitted: row.submitted_at === null ? null : {
-        captured_at: row.submitted_at,
-        resume: row.submitted_resume === null ? null : JSON.parse(row.submitted_resume) as ApplicationResumeSnapshot,
-        jd: row.submitted_jd ?? "",
-      },
-      current: { resume: current ? resumeSnapshot(current) : null, jd: row.jd, warnings: current?.warnings ?? [] },
-    };
+    return { submitted: decodeSubmission(row), current: { resume: current ? resumeSnapshot(current) : null, jd: row.jd, warnings: current?.warnings ?? [] } };
   });
 }
 
@@ -322,7 +337,7 @@ function attachInterviews(apps: Application[]): Application[] {
   const placeholders = ids.map(() => "?").join(",");
   const rows = db
     .prepare(
-      `SELECT * FROM application_interviews WHERE application_id IN (${placeholders}) ORDER BY julianday(interview_time) IS NULL, julianday(interview_time), id ASC`
+      `SELECT * FROM application_interviews WHERE application_id IN (${placeholders}) ORDER BY interview_epoch_ms(interview_time) IS NULL, interview_epoch_ms(interview_time), id ASC`
     )
     .all(...ids) as RawApplicationInterviewRow[];
 
@@ -339,7 +354,8 @@ function attachInterviews(apps: Application[]): Application[] {
     app.interviews = list;
     app.interview_rounds_count = list.length;
     // 优先显示待面试（scheduled）中最近的，否则显示最后一个已完成的轮次
-    const pending = list.find((item) => item.status === "scheduled");
+    const pending = list.find(item => item.status === "scheduled" && item.interview_time === app.next_interview_at)
+      ?? list.find(item => item.status === "scheduled");
     const latest = pending || (list.length > 0 ? list[list.length - 1] : undefined);
     if (latest) {
       app.latest_round = latest.round_name;
@@ -385,9 +401,10 @@ export function listApplications(options?: {
   const cursorIndex = options?.stage && options.stage !== "all"
     ? "idx_applications_stage_updated_at_id"
     : "idx_applications_updated_at_id";
+  const upcomingFrom = options?.upcomingOnly ? Date.now() : undefined;
   let sql = `
     SELECT
-      ${APPLICATION_COLUMNS},
+      ${applicationColumns(upcomingFrom === undefined ? undefined : UPCOMING_TIME)},
       COALESCE(json_extract(rv.snapshot, '$.title'), r.title) AS resume_title, rv.version AS resume_version, rv.name AS resume_version_name,
       i.rounds AS interview_rounds,
       i.status AS interview_status,
@@ -398,9 +415,10 @@ export function listApplications(options?: {
     LEFT JOIN resume_versions rv ON a.resume_version_id = rv.id
     LEFT JOIN interviews i ON a.interview_id = i.id
     LEFT JOIN interview_series s ON a.interview_series_id = s.id
+    ${upcomingFrom === undefined ? "" : NEXT_ROUND_JOIN}
     WHERE 1=1
   `;
-  const params: (string | number | null)[] = [];
+  const params: (string | number | null)[] = upcomingFrom === undefined ? [] : [upcomingFrom];
 
   if (options?.stage && options.stage !== "all") {
     sql += ` AND a.stage = ?`;
@@ -413,10 +431,9 @@ export function listApplications(options?: {
     params.push(term, term, term);
   }
 
-  if (options?.upcomingOnly) {
-    const currentIso = new Date().toISOString();
-    sql += ` AND julianday(a.next_interview_at) >= julianday(?)`;
-    params.push(currentIso);
+  if (upcomingFrom !== undefined) {
+    sql += ` AND interview_epoch_ms(${UPCOMING_TIME}) >= ?`;
+    params.push(upcomingFrom);
   }
 
   if (options?.cursor) {
@@ -441,7 +458,7 @@ export function getApplicationById(id: number): Application | null {
     .prepare(
       `
     SELECT
-      ${APPLICATION_COLUMNS},
+      ${applicationColumns()},
       COALESCE(json_extract(rv.snapshot, '$.title'), r.title) AS resume_title, rv.version AS resume_version, rv.name AS resume_version_name,
       i.rounds AS interview_rounds,
       i.status AS interview_status,
@@ -660,7 +677,7 @@ export function listApplicationInterviews(applicationId: number): ApplicationInt
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT * FROM application_interviews WHERE application_id = ? ORDER BY julianday(interview_time) IS NULL, julianday(interview_time), id ASC`
+      `SELECT * FROM application_interviews WHERE application_id = ? ORDER BY interview_epoch_ms(interview_time) IS NULL, interview_epoch_ms(interview_time), id ASC`
     )
     .all(applicationId) as RawApplicationInterviewRow[];
   return rows.map(mapInterviewRow);
@@ -677,16 +694,15 @@ export function getApplicationInterviewById(id: number): ApplicationInterview | 
 export function syncApplicationNextInterview(applicationId: number): void {
   return inTransaction(() => {
     const db = getDb();
-    const nowIso = new Date().toISOString();
     // 查找还未完成的待面试（scheduled）且带时间的轮次，优先未过期的，其次最早的 scheduled
     const pendingRow = db
       .prepare(
         `SELECT interview_time FROM application_interviews
-         WHERE application_id = ? AND status = 'scheduled' AND interview_time != '' AND julianday(interview_time) IS NOT NULL
-         ORDER BY CASE WHEN julianday(interview_time) >= julianday(?) THEN 0 ELSE 1 END, julianday(interview_time), id
+         WHERE application_id = ? AND status = 'scheduled' AND interview_time != '' AND interview_epoch_ms(interview_time) IS NOT NULL
+         ORDER BY CASE WHEN interview_epoch_ms(interview_time) >= ? THEN 0 ELSE 1 END, interview_epoch_ms(interview_time), id
          LIMIT 1`
       )
-      .get(applicationId, nowIso) as { interview_time: string } | undefined;
+      .get(applicationId, Date.now()) as { interview_time: string } | undefined;
 
     const nextTime = pendingRow ? pendingRow.interview_time : "";
     db.prepare(`UPDATE applications SET next_interview_at = ?, updated_at = ? WHERE id = ?`).run(
@@ -825,7 +841,7 @@ export function deleteApplicationInterview(id: number): void {
   });
 }
 
-export function getApplicationStats(): ApplicationStats {
+export function getApplicationAggregateStats() {
   const db = getDb();
   // 统计从全量轻量履历读取，不受看板分页或当前搜索结果限制。
   const applications = attachStageHistory(db.prepare(`SELECT id, stage, batch_name, hiring_stage,
@@ -836,55 +852,32 @@ export function getApplicationStats(): ApplicationStats {
   const interviewRate = funnel.hiringSteps.find(s => s.stage === 'resume_screening')?.conversionRate ?? 0;
   const offerRate = funnel.winRate;
 
-  // 查询未来 7 天待办面试
-  const nowIso = new Date().toISOString();
-  const future7d = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  return { counts, totalActive, funnel, batchStats: calculateBatchFunnelMetrics(applications), rates: { appliedRate, interviewRate, offerRate } };
+}
 
-  const upcomingRows = db
-    .prepare(
-      `
-    WITH candidates AS (
-    SELECT
-      ${APPLICATION_COLUMNS},
-      CASE
-        WHEN EXISTS (SELECT 1 FROM application_interviews any_round WHERE any_round.application_id = a.id)
-          THEN (SELECT i2.interview_time FROM application_interviews i2
-                WHERE i2.application_id = a.id AND i2.status = 'scheduled' AND julianday(i2.interview_time) IS NOT NULL
-                  AND julianday(i2.interview_time) >= julianday(?)
-                ORDER BY julianday(i2.interview_time), i2.id LIMIT 1)
-        ELSE a.next_interview_at
-      END AS stats_next_interview_at,
-      COALESCE(json_extract(rv.snapshot, '$.title'), r.title) AS resume_title, rv.version AS resume_version, rv.name AS resume_version_name,
-      i.rounds AS interview_rounds,
-      i.status AS interview_status,
-      s.rounds AS interview_series_rounds_done,
-      s.status AS interview_series_status
-    FROM applications a
-    LEFT JOIN resumes r ON a.resume_id = r.id
-    LEFT JOIN resume_versions rv ON a.resume_version_id = rv.id
-    LEFT JOIN interviews i ON a.interview_id = i.id
-    LEFT JOIN interview_series s ON a.interview_series_id = s.id
-    WHERE a.stage != 'rejected'
-    )
-    SELECT * FROM candidates
-    WHERE julianday(stats_next_interview_at) BETWEEN julianday(?) AND julianday(?)
-    ORDER BY julianday(stats_next_interview_at), id
-  `
-    )
-    .all(nowIso, nowIso, future7d) as (RawApplicationRow & { stats_next_interview_at: string })[];
+/** Share scheduling semantics without loading private application or interview details for the stats tool. */
+function upcomingStatsRows(summary: boolean) {
+  const start = Date.now();
+  const end = start + 7 * 86_400_000;
+  const columns = summary ? `a.id, a.company, a.role, next.round_name, ${UPCOMING_TIME} AS next_interview_at` : `${applicationColumns(UPCOMING_TIME)},
+    COALESCE(json_extract(rv.snapshot, '$.title'), r.title) AS resume_title, rv.version AS resume_version, rv.name AS resume_version_name,
+    i.rounds AS interview_rounds, i.status AS interview_status, s.rounds AS interview_series_rounds_done, s.status AS interview_series_status`;
+  const joins = summary ? "" : `LEFT JOIN resumes r ON a.resume_id = r.id
+    LEFT JOIN resume_versions rv ON a.resume_version_id = rv.id LEFT JOIN interviews i ON a.interview_id = i.id
+    LEFT JOIN interview_series s ON a.interview_series_id = s.id`;
+  return getDb().prepare(`WITH candidates AS (
+    SELECT ${columns} FROM applications a ${joins} ${NEXT_ROUND_JOIN}
+    WHERE a.stage != 'rejected')
+    SELECT * FROM candidates WHERE interview_epoch_ms(next_interview_at) BETWEEN ? AND ?
+    ORDER BY interview_epoch_ms(next_interview_at), id`).all(start, start, end);
+}
 
-  const upcomingApplications = upcomingRows.map(row => ({ ...mapRow(row), next_interview_at: row.stats_next_interview_at }));
+export function getUpcomingInterviewSummaries() {
+  return upcomingStatsRows(true) as { id: number; company: string; role: string; round_name: string | null; next_interview_at: string }[];
+}
 
-  return {
-    counts,
-    totalActive,
-    funnel,
-    batchStats: calculateBatchFunnelMetrics(applications),
-    upcomingInterviews: attachInterviews(upcomingApplications),
-    rates: {
-      appliedRate,
-      interviewRate,
-      offerRate,
-    },
-  };
+export function getApplicationStats(): ApplicationStats {
+  const totals = getApplicationAggregateStats();
+  const rows = upcomingStatsRows(false) as RawApplicationRow[];
+  return { ...totals, upcomingInterviews: attachInterviews(rows.map(mapRow)) };
 }

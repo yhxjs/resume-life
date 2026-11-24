@@ -1,3 +1,4 @@
+import { assertOperationActive, withCleanupLockBudget, withSqliteLockBudget } from "./operation-deadline";
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -51,21 +52,23 @@ function openBudgetDatabase(): DatabaseSync {
   try {
     tightenFile(file);
     database.exec("PRAGMA busy_timeout = 5000");
-    database.exec("PRAGMA journal_mode = WAL");
-    database.exec("PRAGMA synchronous = NORMAL");
-    database.exec(`
-      CREATE TABLE IF NOT EXISTS budget_leases (
-        token TEXT PRIMARY KEY,
-        kind TEXT NOT NULL,
-        expires_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS budget_leases_expiry ON budget_leases(expires_at);
-      CREATE TABLE IF NOT EXISTS auth_budget_window (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        started_at INTEGER NOT NULL,
-        failures INTEGER NOT NULL
-      );
-    `);
+    withSqliteLockBudget(database, () => {
+      database.exec("PRAGMA journal_mode = WAL");
+      database.exec("PRAGMA synchronous = NORMAL");
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS budget_leases (
+          token TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS budget_leases_expiry ON budget_leases(expires_at);
+        CREATE TABLE IF NOT EXISTS auth_budget_window (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          started_at INTEGER NOT NULL,
+          failures INTEGER NOT NULL
+        );
+      `);
+    });
     tightenFile(file);
     tightenFile(`${file}-wal`);
     tightenFile(`${file}-shm`);
@@ -79,12 +82,13 @@ function openBudgetDatabase(): DatabaseSync {
 function withBudgetTransaction<T>(fn: (database: DatabaseSync, now: number) => T, clockNow?: number): T {
   const database = openBudgetDatabase();
   try {
-    database.exec("BEGIN IMMEDIATE");
+    withSqliteLockBudget(database, () => database.exec("BEGIN IMMEDIATE"));
     try {
+      assertOperationActive();
       const timestamp = clockNow ?? Date.now();
       database.prepare("DELETE FROM budget_leases WHERE expires_at <= ?").run(timestamp);
       const result = fn(database, timestamp);
-      database.exec("COMMIT");
+      withSqliteLockBudget(database, () => database.exec("COMMIT"));
       return result;
     } catch (error) {
       try { database.exec("ROLLBACK"); } catch { /* preserve the original budget error */ }
@@ -160,7 +164,7 @@ export function acquireLlmLease(options: { now?: number; maxConcurrent: number; 
 }
 
 export function releaseLlmLease(token: string): void {
-  releaseLease(LLM_KIND, token);
+  withCleanupLockBudget(() => releaseLease(LLM_KIND, token));
 }
 
 export function acquireBackupLease(options: { now?: number; maxConcurrent: number; leaseMs: number }): string | null {

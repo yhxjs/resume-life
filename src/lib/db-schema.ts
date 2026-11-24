@@ -1,7 +1,40 @@
 import { DatabaseSync } from "node:sqlite";
 import { createSearchIndexes, SEARCH_INDEX_OBJECT_NAMES } from "./search-index";
 
-export const CURRENT_DB_VERSION = 8;
+export const CURRENT_DB_VERSION = 9;
+
+/** Local MCP receipts/drafts/audit metadata are deliberately excluded from user backups. */
+const MCP_STATE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS mcp_creation_receipts (
+  tool TEXT NOT NULL,
+  request_key TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  target_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (tool, request_key)
+);
+CREATE TABLE IF NOT EXISTS mcp_operation_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  target_id INTEGER,
+  status TEXT NOT NULL CHECK (status IN ('success','error')),
+  error_code TEXT,
+  duration_ms INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mcp_drafts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK (kind IN ('jd','diagnosis','review')),
+  application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+  interview_id INTEGER REFERENCES application_interviews(id) ON DELETE CASCADE,
+  source_revision TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+`;
 
 const PREPARATION_PLAN_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS application_preparation_plans (
@@ -639,6 +672,7 @@ ${RESUME_IMPORT_SOURCE_SCHEMA_SQL}
 ${SALARY_REQUEST_SCHEMA_SQL}
 ${RESUME_REQUEST_SCHEMA_SQL}
 ${PREPARATION_PLAN_SCHEMA_SQL}
+${MCP_STATE_SCHEMA_SQL}
 `;
 
 const INDEX_STATEMENT = /CREATE (?:UNIQUE )?INDEX IF NOT EXISTS[\s\S]*?;\s*/g;
@@ -717,7 +751,8 @@ export function validateDatabaseSchema(database: DatabaseSync, version = CURRENT
     !(version < 5 && table === "project_material_table_provenance") &&
     !(version < 6 && table === "resume_import_source_receipts") &&
     !(version < 7 && table === "application_preparation_plans") &&
-    !(version < 8 && table === "interview_question_graphs");
+    !(version < 8 && table === "interview_question_graphs") &&
+    !(version < 9 && ["mcp_creation_receipts", "mcp_operation_logs", "mcp_drafts"].includes(table));
   const expectedTables = [...EXPECTED_SCHEMA.keys()].filter(included);
   const actualTables = (database
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -780,7 +815,7 @@ export function rollbackIgnoringAutoRollback(
 
 export function initializeDatabase(database: DatabaseSync): void {
   const version = database.prepare("PRAGMA user_version").get() as { user_version: number };
-  if (![0, 1, 2, 3, 4, 5, 6, 7, CURRENT_DB_VERSION].includes(version.user_version)) {
+  if (![0, 1, 2, 3, 4, 5, 6, 7, 8, CURRENT_DB_VERSION].includes(version.user_version)) {
     throw new Error(`不支持数据库版本 ${version.user_version}：仅支持数据库版本 ${CURRENT_DB_VERSION}`);
   }
   if (version.user_version !== 0) {
@@ -793,7 +828,7 @@ export function initializeDatabase(database: DatabaseSync): void {
     try {
       // 取得写锁后重验，支持多个进程同时打开同一份旧版本库。
       const locked = database.prepare("PRAGMA user_version").get() as { user_version: number };
-      if (![1, 2, 3, 4, 5, 6, 7, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
+      if (![1, 2, 3, 4, 5, 6, 7, 8, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
       validateDatabaseSchema(database, locked.user_version);
       database.exec(SALARY_REQUEST_SCHEMA_SQL);
       database.exec(RESUME_REQUEST_SCHEMA_SQL);
@@ -802,6 +837,7 @@ export function initializeDatabase(database: DatabaseSync): void {
       database.exec(RESUME_IMPORT_SOURCE_SCHEMA_SQL);
       database.exec(PREPARATION_PLAN_SCHEMA_SQL);
       database.exec(INTERVIEW_QUESTION_GRAPH_SCHEMA_SQL);
+      database.exec(MCP_STATE_SCHEMA_SQL);
       validateDatabaseSchema(database);
       database.exec(`PRAGMA user_version = ${CURRENT_DB_VERSION}`);
       database.exec("COMMIT");
