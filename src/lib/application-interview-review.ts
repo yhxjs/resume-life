@@ -75,7 +75,7 @@ type RoundContext = {
 type QuestionRow = InterviewReviewQuestion & { position: number };
 type RecapRow = Omit<InterviewRecap, "application_id" | "questions" | "result" | "exports" | "source_context"> & { questions: string; result: string };
 
-const REVIEW_RESULT_MAX_TEXT_CHARS = 4000;
+export const REVIEW_RESULT_MAX_TEXT_CHARS = 4000;
 export const REVIEW_RESUME_SUGGESTION_MAX_CHARS = 180;
 
 export const INTERVIEW_REVIEW_SYSTEM_PROMPT = `你是求职者的面试复盘教练。依据求职者事后整理的逐题记录，提炼有依据的卡点、练习题与简历建议。

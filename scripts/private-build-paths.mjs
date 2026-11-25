@@ -1,4 +1,5 @@
 export const PRIVATE_BUILD_PATHS = [
+  "./data/**/*",
   "./.git/**/*",
   "./.claude/**/*",
   "./.impeccable/**/*",

@@ -4,6 +4,7 @@ import { PRIVATE_BUILD_PATHS } from "./scripts/private-build-paths.mjs";
 
 // 与运行期同一套解析规则（见 src/lib/db.ts）：显式配置优先，否则用项目内的 data/。
 // 两者必须一致，否则这里排除的不是真正会被写入的目录。
+// 默认 data/ 也由 PRIVATE_BUILD_PATHS 排除，切换目录后仍不打包旧数据。
 const dataDirectory = process.env.RESUME_LIFE_DATA_DIR
   ? path.resolve(process.env.RESUME_LIFE_DATA_DIR)
   : path.join(process.cwd(), "data");

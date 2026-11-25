@@ -97,7 +97,7 @@ export function validateManifest(value: Record<string, unknown>, tables: readonl
   if (value.backupVersion !== BACKUP_CONTAINER_VERSION) {
     throw new BackupStagingError(`不支持此备份版本：仅接受格式 ${BACKUP_CONTAINER_VERSION} 的加密备份`);
   }
-  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, CURRENT_DB_VERSION].includes(value.dbVersion as number)) {
+  if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, CURRENT_DB_VERSION].includes(value.dbVersion as number)) {
     throw new BackupStagingError(`备份数据库版本不匹配：${String(value.dbVersion)} !== ${CURRENT_DB_VERSION}`);
   }
   // 各版本必须完整声明对应表集合，即使新增的来源表为空也不能省略。

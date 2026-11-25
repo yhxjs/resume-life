@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { BackupPayload } from "./backup-fixture";
+import { CURRENT_DB_VERSION } from "../db-schema";
 
 const contexts = "application_interview_recap_contexts";
 let directory: string;
@@ -36,6 +37,7 @@ afterEach(() => {
 async function payloadFor(version: number): Promise<BackupPayload> {
   const payload = (await import("./backup-fixture")).exportAllData();
   payload.meta.dbVersion = version;
+  if (version < 11) { delete payload.data.notebook_notes; delete payload.meta.stats.notebook_notes; delete payload.meta.sequences.notebook_notes; }
   if (version < 7) {
     delete payload.data.application_preparation_plans;
     delete payload.meta.stats.application_preparation_plans;
@@ -76,7 +78,7 @@ async function expectRejected(payload: BackupPayload) {
   expect((await import("./backup-fixture")).validateBackupPayload(payload).valid).toBe(false);
 }
 
-it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])("辅助器与生产流均接受完整 v%s 清单，保留原载荷和未知来源", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])("辅助器与生产流均接受完整 v%s 清单，保留原载荷和未知来源", async version => {
   const payload = await payloadFor(version);
   const before = structuredClone(payload);
   const dbBefore = database.prepare(`SELECT * FROM ${contexts}`).all();
@@ -95,7 +97,7 @@ it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])("辅助器与生产流均接受完整 v
   }
 });
 
-it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])("v%s 校验与恢复响应均按原清单计数，可通过设置页读取边界", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])("v%s 校验与恢复响应均按原清单计数，可通过设置页读取边界", async version => {
   const payload = await payloadFor(version);
   const { createEncryptedBackupStream, encodeBackupPasswordHeader } = await import("../backup-container");
   const { readBackupValidation, readBackupRestoreConfirmation } = await import("@/components/settings/backup-manager-utils");
@@ -145,14 +147,14 @@ it.each(["data", "stats", "both"])("v4 快照表缺少 %s 时与生产一致拒�
   await expectRejected(payload);
 });
 
-it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])("v%s 不能借兼容规则省略其他业务表", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])("v%s 不能借兼容规则省略其他业务表", async version => {
   const payload = await payloadFor(version);
   delete payload.data.jd_portraits;
   delete payload.meta.stats.jd_portraits;
   await expectRejected(payload);
 });
 
-it.each([0, 11])("辅助器与生产流均拒绝未支持的数据库版本 %s", async version => {
+it.each([0, CURRENT_DB_VERSION + 1])("辅助器与生产流均拒绝未支持的数据库版本 %s", async version => {
   const payload = await payloadFor(4);
   payload.meta.dbVersion = version;
   await expectRejected(payload);

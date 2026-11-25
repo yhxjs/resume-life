@@ -20,6 +20,7 @@ export const TABLES_CLEAR_ORDER = [
   "application_interview_questions",
   "review_attempts",
   "review_cards",
+  "notebook_notes",
   "application_preparation_resources",
   "application_preparation_tasks",
   "application_preparation_plans",
@@ -65,7 +66,8 @@ export function backupTablesForDbVersion(version: number, tables: readonly strin
   return tables.filter(table => !(version < 4 && table === "application_interview_recap_contexts") &&
     !(version < 5 && table === "project_material_table_provenance") &&
     !(version < 7 && table === "application_preparation_plans") &&
-    !(version < 8 && table === "interview_question_graphs"));
+    !(version < 8 && table === "interview_question_graphs") &&
+    !(version < 11 && table === "notebook_notes"));
 }
 
 /** 拥有 AUTOINCREMENT 自增主键的表清单 */
@@ -75,6 +77,7 @@ export const AUTOINCREMENT_TABLES = [
   "application_interview_questions",
   "review_attempts",
   "review_cards",
+  "notebook_notes",
   "application_preparation_resources",
   "application_preparation_tasks",
   "resume_diagnoses",

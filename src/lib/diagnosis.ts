@@ -58,6 +58,8 @@ export type DiagnosisAdoption = {
 export type DiagnosisRecord = {
   /** 读取失败的存储字段；对应占位值不可用于采纳或快照比较。原数据库保留不变。 */
   corruptedFields?: ("report" | "resume_snapshot" | "adoptions")[];
+  /** 完整读取保留损坏字段及因此被隐藏的报告原稿；默认网页展示不附带。 */
+  raw_fields?: Partial<Record<"report" | "resume_snapshot" | "adoptions", string>>;
   id: number;
   resume_version_id?: number | null;
   job_id: string;

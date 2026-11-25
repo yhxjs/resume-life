@@ -56,10 +56,13 @@ function decode(row: StoredDiagnosis): DiagnosisRecord {
   };
 }
 
-export function loadDiagnosis(resumeId: number, diagnosisId: number): DiagnosisRecord | null {
+export function loadDiagnosis(resumeId: number, diagnosisId: number, preserveInvalid = false): DiagnosisRecord | null {
   const row = getDb().prepare("SELECT * FROM resume_diagnoses WHERE resume_id = ? AND id = ?")
     .get(resumeId, diagnosisId) as StoredDiagnosis | undefined;
-  return row ? decode(row) : null;
+  if (!row) return null;
+  const value = decode(row);
+  return { ...value, ...(preserveInvalid && value.corruptedFields?.length
+    ? { raw_fields: { report: row.report, ...Object.fromEntries(value.corruptedFields.map(field => [field, row[field]])) } } : {}) };
 }
 
 /** 投递内沿用同一岗位的诊断历史；只在没有投递上下文时按 JD 匹配。 */

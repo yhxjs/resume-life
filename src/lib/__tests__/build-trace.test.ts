@@ -65,12 +65,13 @@ describe("findSensitiveTraceEntries", () => {
     const excludes = nextConfig.outputFileTracingExcludes?.["/*"] ?? [];
     const excluded = (filename: string) => excludes.some((pattern) => path.matchesGlob(filename, pattern.replace(/^\.\//, "")));
     for (const filename of privatePaths) expect(excluded(filename), filename).toBe(true);
+    expect(excluded("data/resume-life.db")).toBe(true);
     for (const filename of ["eng.traineddata", "chi_sim.traineddata", "public/logo.png", "public/favicon.ico"]) {
       expect(excluded(filename), filename).toBe(false);
     }
   });
 
-  it("设置了 RESUME_LIFE_DATA_DIR 时检查的是该目录，而不是项目内的 data/", () => {
+  it("设置自定义数据目录后，仍拒绝项目默认 data/ 中的旧数据库进入部署清单", () => {
     const externalDataDirectory = path.resolve("fixture-external-data");
     const previous = process.env.RESUME_LIFE_DATA_DIR;
     process.env.RESUME_LIFE_DATA_DIR = externalDataDirectory;
@@ -81,7 +82,7 @@ describe("findSensitiveTraceEntries", () => {
       const projectDataEntry = traceEntry("data/resume-life.db");
 
       expect(findSensitiveTraceEntries(tracePath, [externalEntry, projectDataEntry], projectRoot))
-        .toEqual([externalEntry]);
+        .toEqual([externalEntry, projectDataEntry]);
     } finally {
       if (previous === undefined) delete process.env.RESUME_LIFE_DATA_DIR;
       else process.env.RESUME_LIFE_DATA_DIR = previous;

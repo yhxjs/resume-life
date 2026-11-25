@@ -63,7 +63,7 @@ async function legacy(records: BackupRecord[], version: number): Promise<BackupR
   const tables = backupTablesForDbVersion(version, manifest.tables);
   const removed = records.filter(record => record.kind === "row" && !tables.includes(record.table)).length;
   return records.filter(record => record.kind !== "row" || tables.includes(record.table)).map(record => {
-    if (record.kind === "manifest") return { ...record, dbVersion: version, tables };
+    if (record.kind === "manifest") return { ...record, dbVersion: version, tables, sequences: Object.fromEntries(Object.entries(record.sequences).filter(([table]) => tables.includes(table))) };
     if (record.kind === "end") return { ...record, stats: Object.fromEntries(tables.map(name => [name, record.stats[name]!])), totalRecords: record.totalRecords - removed };
     return record;
   });
@@ -76,7 +76,7 @@ it.each([1, 2, 3, 4])("v%s migration preserves material IDs and text without inv
     initializeDatabase(old);
     old.exec("INSERT INTO projects (id,name,created_at,updated_at) VALUES (3,'旧项目','','')");
     old.prepare("INSERT INTO project_materials (id,project_id,title,content,created_at) VALUES (17,3,'旧材料',?,'')").run(text);
-    old.exec(`DROP TABLE application_preparation_plans; DROP TABLE mcp_generation_requests; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE ${table}`);
+    old.exec(`DROP TABLE application_preparation_plans; DROP TABLE mcp_generation_progress; DROP TABLE notebook_notes; DROP TABLE mcp_generation_requests; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE ${table}`);
     if (version < 4) old.exec("DROP TABLE application_interview_recap_contexts");
     if (version < 3) old.exec("DROP TABLE resume_creation_requests");
     if (version < 2) old.exec("DROP TABLE salary_creation_requests");
@@ -92,7 +92,7 @@ it.each([1, 2, 3, 4])("v%s migration preserves material IDs and text without inv
 });
 
 it("v4 migration rolls back the new table and version together on failure", () => {
-  database.exec(`DROP TABLE application_preparation_plans; DROP TABLE mcp_generation_requests; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE ${table}; PRAGMA user_version=4`);
+  database.exec(`DROP TABLE application_preparation_plans; DROP TABLE mcp_generation_progress; DROP TABLE notebook_notes; DROP TABLE mcp_generation_requests; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; DROP TABLE resume_import_source_receipts; DROP TABLE ${table}; PRAGMA user_version=4`);
   const before = database.prepare("SELECT * FROM sqlite_master ORDER BY name").all();
   const execute = database.exec.bind(database);
   vi.spyOn(database, "exec").mockImplementation(sql => {

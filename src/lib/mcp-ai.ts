@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getDb, inTransaction, now } from "./db";
 import { getApplicationById, type Application } from "./applications";
 import { loadResumeForModel } from "./resumes";
@@ -14,11 +14,12 @@ import { buildInterviewReviewMessages, getInterviewReviewDraftInput, InterviewRe
 import { saveJdPortrait } from "./jd-portrait-store";
 import { McpOperationError, classifyMcpError } from "./mcp-errors";
 import { mcpRevision } from "./mcp-revision";
+import { mcpDraftResultSchema } from "./mcp-draft-format";
 import { mcpCreateOnce } from "./mcp-state";
 import { boundMcpOutput } from "./mcp-output";
 import { assertOperationActive, OperationTimeoutError } from "./operation-deadline";
 import { assertDataGeneration } from "./data-generation";
-import { beginMcpGeneration, clearUnavailableMcpGenerationPayloads, completeMcpGeneration, failMcpGeneration, findMcpGenerationRequest, replayMcpGeneration } from "./mcp-generation";
+import { beginMcpGeneration, clearUnavailableMcpGenerationPayloads, completeMcpGeneration, failMcpGeneration, findMcpGenerationRequest, replayMcpGeneration, setMcpGenerationPhase, type McpGenerationRequest } from "./mcp-generation";
 
 type Kind = "jd" | "diagnosis" | "review";
 type Draft = { id: number; kind: Kind; application_id: number; interview_id: number | null; source_revision: string; payload: string; expires_at: string };
@@ -102,6 +103,63 @@ function validatedResult(kind: Kind, input: ReturnType<typeof source>, raw: stri
   throw new McpOperationError("MODEL_OUTPUT", "模型结果不符合字段、长度或内容要求，未保存业务资料");
 }
 
+/** 同一来源令牌与提示格式供外部模型使用；本工具自身不调用模型。 */
+export function getMcpAiWorkflowContext(kind: Kind, applicationId: number, interviewId?: number, complete = false) {
+  const input = source(kind, applicationId, interviewId);
+  const modules = input.resume?.modules.filter(module => module.type !== "basic") ?? [];
+  if (kind === "diagnosis") {
+    if (!modules.length) throw new McpOperationError("INVALID_ARGUMENT", "所选简历版本没有可诊断的职业模块");
+    assertDiagnosisBudget(diagnosisArchive(input));
+  }
+  const context = { application: input.application,
+    ...(input.resume ? { resume: diagnosisSnapshot(input.resume), diagnosisModules: sanitizeModulesForDiagnosis(modules) } : {}),
+    ...(input.review ? { review: input.review } : {}) };
+  const value = { kind, applicationId, interviewId: interviewId ?? null, sourceRevision: sourceRevision(kind, input), context,
+    resultSchema: mcpDraftResultSchema(kind, modules.map(module => module.key), input.review?.questions.length),
+    outputInstructions: kind === "jd" ? JD_PORTRAIT_SYSTEM_PROMPT : kind === "diagnosis" ? DIAGNOSIS_PRODUCTION_SYSTEM_PROMPT : INTERVIEW_REVIEW_SYSTEM_PROMPT,
+    fullContent: { tool: "read_record_section", kind: "ai_workflow_context", id: applicationId, workflowKind: kind, ...(interviewId === undefined ? {} : { interviewId }) } };
+  return complete ? value : boundMcpOutput(value);
+}
+
+function storeDraft(kind: Kind, applicationId: number, interviewId: number | undefined, revision: string,
+  raw: string, input: Source, result: object, request: McpGenerationRequest) {
+  const db = getDb();
+  const createdAt = now();
+  db.prepare("DELETE FROM mcp_drafts WHERE expires_at <= ?").run(createdAt);
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const inserted = db.prepare("INSERT INTO mcp_drafts (kind, application_id, interview_id, source_revision, payload, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(kind, applicationId, interviewId ?? null, revision, raw, createdAt, expiresAt);
+  db.exec("DELETE FROM mcp_drafts WHERE id < (SELECT id FROM mcp_drafts ORDER BY id DESC LIMIT 1 OFFSET 99)");
+  const response = boundMcpOutput({ draftId: Number(inserted.lastInsertRowid), applicationId, kind, sourceRevision: revision, idempotencyKey: request.request_key,
+    company: input.application.company, role: input.application.role, result, saved: false, savedRecord: null, expiresAt,
+    fullContent: { tool: "read_record_section", kind: "ai_draft", id: Number(inserted.lastInsertRowid) } });
+  completeMcpGeneration(request, response);
+  clearUnavailableMcpGenerationPayloads();
+  return response;
+}
+
+export function submitMcpDraft(input: { kind: Kind; applicationId: number; interviewId?: number; expectedSourceRevision: string; idempotencyKey: string; result: unknown }) {
+  const raw = JSON.stringify(input.result);
+  const canonical = JSON.stringify(input.result, (_key, value: unknown) => value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value);
+  return inTransaction(() => {
+    const signature = { kind: input.kind, applicationId: input.applicationId, interviewId: input.interviewId,
+      submission: { sourceRevision: input.expectedSourceRevision, payloadHash: createHash("sha256").update(canonical).digest("hex") } };
+    const previous = findMcpGenerationRequest(input.idempotencyKey, signature);
+    if (previous) return replayMcpGeneration(previous);
+    const context = recheckSource(input.kind, input.applicationId, input.interviewId, input.expectedSourceRevision);
+    let result: object;
+    try { result = validatedResult(input.kind, context, raw).result; }
+    catch (error) {
+      if (error instanceof McpOperationError && error.code === "MODEL_OUTPUT") throw new McpOperationError("INVALID_ARGUMENT", "提交草稿不符合结果格式，请按 get_ai_workflow_context 返回的格式修正");
+      throw error;
+    }
+    if (input.kind === "diagnosis") assertDiagnosisBudget({ ...diagnosisArchive(context), report: JSON.stringify(result) });
+    const request = beginMcpGeneration(input.idempotencyKey, signature, input.expectedSourceRevision);
+    return storeDraft(input.kind, input.applicationId, input.interviewId, input.expectedSourceRevision, raw, context, result, request);
+  });
+}
+
 export async function generateMcpDraft(kind: Kind, applicationId: number, signal: AbortSignal, interviewId?: number, idempotencyKey: string = randomUUID()) {
   signal.throwIfAborted();
   const started = inTransaction(() => {
@@ -129,24 +187,13 @@ export async function generateMcpDraft(kind: Kind, applicationId: number, signal
           buildInterviewReviewMessages(input.review!.context, input.review!.questions), { signal, requireJson: "strict" });
     signal.throwIfAborted();
     assertDataGeneration();
+    setMcpGenerationPhase(request, "validating");
     const { result } = validatedResult(kind, input, raw);
     if (archive) assertDiagnosisBudget({ ...archive, report: JSON.stringify(result) });
     return inTransaction(() => {
       signal.throwIfAborted();
       recheckSource(kind, applicationId, interviewId, revision);
-      const db = getDb();
-      const createdAt = now();
-      db.prepare("DELETE FROM mcp_drafts WHERE expires_at <= ?").run(createdAt);
-      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-      const inserted = db.prepare("INSERT INTO mcp_drafts (kind, application_id, interview_id, source_revision, payload, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(kind, applicationId, interviewId ?? null, revision, JSON.stringify(parseModelJson(raw)), createdAt, expiresAt);
-      db.exec("DELETE FROM mcp_drafts WHERE id < (SELECT id FROM mcp_drafts ORDER BY id DESC LIMIT 1 OFFSET 99)");
-      const response = boundMcpOutput({ draftId: Number(inserted.lastInsertRowid), applicationId, kind, sourceRevision: revision, idempotencyKey,
-        company: input.application.company, role: input.application.role, result, saved: false, savedRecord: null, expiresAt,
-        fullContent: { tool: "read_record_section", kind: "ai_draft", id: Number(inserted.lastInsertRowid) } });
-      completeMcpGeneration(request, response);
-      clearUnavailableMcpGenerationPayloads();
-      return response;
+      return storeDraft(kind, applicationId, interviewId, revision, JSON.stringify(parseModelJson(raw)), input, result, request);
     });
   } catch (error) {
     const failure = signal.aborted ? (signal.reason instanceof OperationTimeoutError ? "TIMEOUT" : "CANCELLED") : classifyMcpError(error).code;
@@ -161,7 +208,7 @@ export async function generateMcpDraft(kind: Kind, applicationId: number, signal
   }
 }
 
-/** Saving requires a separate write tool; it only accepts server-stored, validated draft content. */
+/** Saving requires a separate write tool and always revalidates stored draft content and source. */
 export function saveMcpDraft(draftId: number, expectedRevision: string) {
   return inTransaction(() => {
     const db = getDb();

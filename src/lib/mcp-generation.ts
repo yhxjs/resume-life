@@ -5,7 +5,8 @@ import { McpOperationError, type McpErrorCode } from "./mcp-errors";
 import { remainingOperationTimeMs, withCleanupLockBudget } from "./operation-deadline";
 
 export type McpDraftKind = "jd" | "diagnosis" | "review";
-type GenerationInput = { kind: McpDraftKind; applicationId: number; interviewId?: number };
+type GenerationInput = { kind: McpDraftKind; applicationId: number; interviewId?: number; submission?: { sourceRevision: string; payloadHash: string } };
+export type McpGenerationPhase = "generating" | "validating" | "ready" | "failed";
 export type McpGenerationRequest = {
   request_key: string; input_hash: string; generation: string; kind: McpDraftKind; application_id: number; interview_id: number | null;
   source_revision: string; owner_token: string; status: "pending" | "succeeded" | "failed"; draft_id: number | null;
@@ -13,7 +14,9 @@ export type McpGenerationRequest = {
 };
 type DraftRow = { id: number; kind: McpDraftKind; application_id: number; interview_id: number | null; source_revision: string; created_at: string; expires_at: string; payload?: string };
 const targets = { jd: "jd_portraits", diagnosis: "resume_diagnoses", review: "application_interview_recaps" } as const;
-const fingerprint = (input: GenerationInput) => createHash("sha256").update(JSON.stringify([input.kind, input.applicationId, input.interviewId ?? null])).digest("hex");
+const fingerprint = (input: GenerationInput) => createHash("sha256").update(JSON.stringify(input.submission
+  ? ["submit_ai_draft", input.kind, input.applicationId, input.interviewId ?? null, input.submission.sourceRevision, input.submission.payloadHash]
+  : [input.kind, input.applicationId, input.interviewId ?? null])).digest("hex");
 
 export function findMcpGenerationRequest(key: string, input?: GenerationInput) {
   if (!/^[A-Za-z0-9._:-]{8,128}$/.test(key)) throw new McpOperationError("INVALID_ARGUMENT", "生成请求幂等键需为 8–128 位字母、数字或 ._:-");
@@ -31,7 +34,20 @@ export function beginMcpGeneration(key: string, input: GenerationInput, sourceRe
     VALUES (?,?,?,?,?,?,?,?,'pending',?,?,?)`)
     .run(key, fingerprint(input), dataGeneration() ?? "initial", input.kind, input.applicationId, input.interviewId ?? null, sourceRevision, owner,
       timestamp, timestamp, new Date(Date.now() + remainingOperationTimeMs()).toISOString());
+  getDb().prepare("INSERT INTO mcp_generation_progress (request_key,origin,phase,updated_at) VALUES (?,?,?,?)")
+    .run(key, input.submission ? "external" : "server", input.submission ? "validating" : "generating", timestamp);
   return findMcpGenerationRequest(key)!;
+}
+
+/** 阶段记录仅供诊断；记录失败不能改变生成结果或释放幂等键。 */
+export function setMcpGenerationPhase(request: McpGenerationRequest, phase: McpGenerationPhase) {
+  try {
+    withCleanupLockBudget(() => inTransaction(() => {
+      getDb().prepare(`UPDATE mcp_generation_progress SET phase=?,updated_at=? WHERE request_key=? AND EXISTS
+        (SELECT 1 FROM mcp_generation_requests r WHERE r.request_key=? AND r.owner_token=? AND r.generation=? AND r.status='pending')`)
+        .run(phase, now(), request.request_key, request.request_key, request.owner_token, request.generation);
+    }), 0);
+  } catch { console.error("[mcp] 生成阶段记录暂不可用"); }
 }
 
 export function savedMcpDraftRecord(draftId: number, kind: McpDraftKind) {
@@ -47,6 +63,7 @@ export function completeMcpGeneration(request: McpGenerationRequest, response: {
     WHERE request_key=? AND owner_token=? AND generation=? AND status='pending'`)
     .run(response.draftId, JSON.stringify(response), response.expiresAt, now(), request.request_key, request.owner_token, request.generation);
   if (!result.changes) throw new McpOperationError("CONFLICT", "生成请求状态已变化，请查询请求状态");
+  getDb().prepare("UPDATE mcp_generation_progress SET phase='ready',updated_at=? WHERE request_key=?").run(now(), request.request_key);
 }
 
 export function failMcpGeneration(request: McpGenerationRequest, errorCode: McpErrorCode) {
@@ -54,15 +71,27 @@ export function failMcpGeneration(request: McpGenerationRequest, errorCode: McpE
     withCleanupLockBudget(() => inTransaction(() => {
       getDb().prepare("UPDATE mcp_generation_requests SET status='failed',error_code=?,updated_at=? WHERE request_key=? AND owner_token=? AND generation=? AND status='pending'")
         .run(errorCode, now(), request.request_key, request.owner_token, request.generation);
+      getDb().prepare(`UPDATE mcp_generation_progress SET phase='failed',updated_at=? WHERE request_key=? AND EXISTS
+        (SELECT 1 FROM mcp_generation_requests r WHERE r.request_key=? AND r.owner_token=? AND r.status='failed')`)
+        .run(now(), request.request_key, request.request_key, request.owner_token);
     }), 0);
   } catch { console.error("[mcp] 生成请求状态写入失败"); }
 }
 
 /** Expired payloads can be discarded; request tombstones still prevent another paid call. */
-export function clearUnavailableMcpGenerationPayloads() {
-  getDb().prepare(`UPDATE mcp_generation_requests SET response_json=NULL WHERE response_json IS NOT NULL AND
-    NOT EXISTS (SELECT 1 FROM mcp_drafts d WHERE d.id=mcp_generation_requests.draft_id AND d.expires_at > ?)`)
-    .run(now());
+export function clearUnavailableMcpGenerationPayloads(limit = 1000) {
+  return Number(getDb().prepare(`UPDATE mcp_generation_requests SET response_json=NULL WHERE request_key IN
+    (SELECT request_key FROM mcp_generation_requests r WHERE response_json IS NOT NULL AND
+    NOT EXISTS (SELECT 1 FROM mcp_drafts d WHERE d.id=r.draft_id AND d.expires_at > ?) LIMIT ?)`)
+    .run(now(), limit).changes);
+}
+
+export function maintainMcpState(limit = 100) {
+  return inTransaction(() => {
+    const removedDrafts = Number(getDb().prepare("DELETE FROM mcp_drafts WHERE id IN (SELECT id FROM mcp_drafts WHERE expires_at <= ? ORDER BY id LIMIT ?)").run(now(), limit).changes);
+    const clearedResponses = clearUnavailableMcpGenerationPayloads(limit);
+    return { removedDrafts, clearedResponses };
+  });
 }
 
 export function replayMcpGeneration(request: McpGenerationRequest): object {
@@ -85,8 +114,15 @@ export function getMcpGenerationRequest(key: string) {
   const valid = row.generation === (dataGeneration() ?? "initial");
   const draftAvailable = valid && row.draft_id !== null && Boolean(getDb().prepare("SELECT 1 FROM mcp_drafts WHERE id=? AND expires_at > ?").get(row.draft_id, now()));
   const savedRecord = valid && row.draft_id !== null ? savedMcpDraftRecord(row.draft_id, row.kind) : null;
+  const progress = getDb().prepare("SELECT origin,phase,updated_at FROM mcp_generation_progress WHERE request_key=?").get(key) as
+    { origin: "server" | "external"; phase: McpGenerationPhase; updated_at: string } | undefined;
+  const status = !valid ? "invalidated" : row.status === "pending" && row.lease_expires_at <= now() ? "interrupted" : row.status;
   return { idempotencyKey: row.request_key, kind: row.kind, applicationId: row.application_id, interviewId: row.interview_id,
-    sourceRevision: row.source_revision, status: !valid ? "invalidated" : row.status === "pending" && row.lease_expires_at <= now() ? "interrupted" : row.status,
+    sourceRevision: row.source_revision, status, origin: progress?.origin ?? "server",
+    phase: status === "invalidated" || status === "interrupted" ? status : row.status === "succeeded"
+      ? savedRecord ? "saved" : draftAvailable ? "ready" : row.draft_expires_at !== null && row.draft_expires_at <= now() ? "expired" : "unavailable"
+      : row.status === "failed" ? "failed" : progress?.phase ?? "generating",
+    phaseUpdatedAt: progress?.updated_at ?? row.updated_at,
     draftId: valid ? row.draft_id : null, draftAvailable, expiresAt: row.draft_expires_at, saved: savedRecord !== null, savedRecord,
     errorCode: row.error_code, createdAt: row.created_at, updatedAt: row.updated_at };
 }

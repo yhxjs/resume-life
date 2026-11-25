@@ -12,6 +12,25 @@ export const toolAccess = Object.freeze({
   list_ai_drafts: "read", get_ai_generation_request: "read",
   generate_preparation_plan: "write", update_preparation_task: "write", reschedule_application_interview: "write", save_application_interview_questions: "write",
   analyze_application_jd: "llm", diagnose_application_resume: "llm", draft_interview_review: "llm",
+  list_application_preparation_resources: "read", list_resume_diagnoses: "read", get_resume_diagnosis: "read", get_jd_portrait: "read", get_intro: "read", get_interview_series: "read",
+  get_ai_workflow_context: "read", list_review_cards: "read", get_review_card: "read", get_review_submission: "read", get_mcp_status: "read",
+  set_preparation_resource: "write", update_application_interview: "write", submit_ai_draft: "write",
+  bookmark_practice_question: "write", save_notebook_note: "write", submit_review: "write", maintain_mcp_state: "write",
+});
+
+export const MCP_SERVER_VERSION = "1.1.0";
+
+const reads = Object.keys(toolAccess).filter(name => toolAccess[name] === "read");
+const preparationWrites = ["create_application", "update_application", "generate_preparation_plan", "set_preparation_step",
+  "create_preparation_task", "update_preparation_task", "schedule_application_interview", "reschedule_application_interview",
+  "update_application_interview", "save_application_interview_questions", "set_preparation_resource"];
+const preset = (tools, writeEnabled) => Object.freeze({ tools: Object.freeze(tools), writeEnabled, llmEnabled: false });
+
+/** Named presets generate concrete allowlists. External-model collaboration does not enable server model calls. */
+export const mcpPresets = Object.freeze({
+  readonly: preset(reads, false),
+  preparation: preset([...reads.filter(name => !["get_ai_workflow_context", "get_ai_draft", "list_ai_drafts", "get_ai_generation_request"].includes(name)), ...preparationWrites], true),
+  collaboration: preset([...reads, ...Object.keys(toolAccess).filter(name => toolAccess[name] === "write")], true),
 });
 
 export class McpConfigurationError extends Error {}

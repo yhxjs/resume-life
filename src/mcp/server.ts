@@ -1,6 +1,6 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { readMcpConfig } from "./config.mjs";
+import { readMcpConfig, MCP_SERVER_VERSION } from "./config.mjs";
 import { McpTools } from "./tools";
 import { registerRecordTools, edit } from "./records";
 import { McpOperationError } from "@/lib/mcp-errors";
@@ -10,6 +10,9 @@ import { assertDataGeneration, DataGenerationConflictError, withDataGenerationSc
 import { updateMcpApplication, setMcpPreparationStep } from "@/lib/mcp-write";
 import { registerWorkflowTools } from "./workflows";
 import { registerBusinessTools } from "./business-tools";
+import { registerMaterialTools } from "./material-tools";
+import { registerReviewTools } from "./review-tools";
+import { registerMaintenanceTools } from "./maintenance-tools";
 import { wrapUntrustedData } from "@/lib/prompt-safety";
 import { PreparationInputError } from "@/lib/application-preparation";
 import { ResumeContextError, ResumeNotFoundError } from "@/lib/resume-errors";
@@ -69,7 +72,7 @@ function parsePositiveId(value: string | string[] | undefined): number {
 }
 
 export function createResumeLifeMcpServer(config = readMcpConfig()) {
-  const server = new McpServer({ name: "resume-life", version: "1.0.0" }, { maxToolInputElements: 1_000 });
+  const server = new McpServer({ name: "resume-life", version: MCP_SERVER_VERSION }, { maxToolInputElements: 1_000 });
   const tools = new McpTools(server, config);
 
   tools.register("search_records", {
@@ -176,15 +179,16 @@ export function createResumeLifeMcpServer(config = readMcpConfig()) {
 
   {
     tools.register("update_application", {
-      title: "更新投递阶段或备注",
-      description: "写入投递阶段、备注或终止信息。expectedRevision 必须为刚读取的 application.revision；首次转为 rejected 必须提供 terminal_stage 和 terminal_reason。",
+      title: "更新投递资料与阶段",
+      description: "写入阶段、备注、终止信息、JD 或发布简历绑定，保留首次投递快照。expectedRevision 必须为刚读取的 application.revision；首次转为 rejected 必须提供 terminal_stage 和 terminal_reason。",
       inputSchema: z.strictObject({
         id: positiveId, expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
         stage: z.enum(APPLICATION_STAGES).optional(),
         notes: z.string().max(20_000).optional(),
         terminal_stage: z.enum(APPLICATION_TERMINAL_STAGES).optional(),
         terminal_reason: z.string().trim().min(1).max(1_000).optional(),
-      }).refine(input => input.stage !== undefined || input.notes !== undefined || input.terminal_stage !== undefined || input.terminal_reason !== undefined, "至少提供一个待更新字段"),
+        jd: z.string().max(20_000).optional(), resume_id: positiveId.nullable().optional(), resume_version_id: positiveId.nullable().optional(),
+      }).refine(input => Object.keys(input).some(key => key !== "id" && key !== "expectedRevision"), "至少提供一个待更新字段"),
       annotations: edit,
     }, async ({ id, ...input }) => jsonResult(updateMcpApplication(id, input, tools.permits("get_application"))));
 
@@ -259,6 +263,9 @@ export function createResumeLifeMcpServer(config = readMcpConfig()) {
   registerRecordTools(tools);
   registerWorkflowTools(tools);
   registerBusinessTools(tools);
+  registerMaterialTools(tools);
+  registerReviewTools(tools);
+  registerMaintenanceTools(tools);
   tools.install();
   return server;
 }

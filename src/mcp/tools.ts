@@ -2,13 +2,14 @@ import { readMcpConfig, permittedMcpTools, toolAccess } from "./config.mjs";
 import { randomUUID } from "node:crypto";
 import { McpServer, type CallToolResult, type ServerContext, type ToolAnnotations } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { assertOperationActive, isSqliteBusy, OperationTimeoutError, withOperationLimits, withSqliteLockBudget } from "@/lib/operation-deadline";
+import { assertOperationActive, isSqliteBusy, OperationTimeoutError, withOperationLimits, withSqliteLockBudget, withoutWaitingForLock } from "@/lib/operation-deadline";
 import { assertDataGeneration, withDataGenerationScope } from "@/lib/data-generation";
 import { dataGeneration, getDb } from "@/lib/db";
 import { McpOperationError, classifyMcpError, type McpErrorCode } from "@/lib/mcp-errors";
 import { recordMcpOperation } from "@/lib/mcp-state";
 import { logServerError } from "@/lib/server-errors";
 import { toolOutputSchema } from "./output-schemas";
+import { maintainMcpState } from "@/lib/mcp-generation";
 
 type ToolConfig<T extends z.ZodType> = { title: string; description: string; inputSchema: T; annotations: ToolAnnotations };
 const schemaJson = (schema: ReturnType<typeof toolOutputSchema>) => z.toJSONSchema(schema);
@@ -35,7 +36,26 @@ function inputWithinBudget(input: unknown): boolean {
 export class McpTools {
   private entries = new Map<string, Entry>();
   private enabledNames: Set<string>;
-  constructor(private server: McpServer, private config = readMcpConfig()) { this.enabledNames = new Set(permittedMcpTools(config)); }
+  private maintenanceTimer?: ReturnType<typeof setTimeout>;
+  private closed = false;
+  constructor(private server: McpServer, private config = readMcpConfig()) {
+    this.enabledNames = new Set(permittedMcpTools(config));
+    const close = server.server.onclose;
+    server.server.onclose = () => { this.closed = true; clearTimeout(this.maintenanceTimer); close?.(); };
+  }
+
+  /** Start after the first database operation; discovery and doctor never initialize a database. */
+  private scheduleMaintenance(delay = 1000) {
+    if (this.closed || this.maintenanceTimer) return;
+    this.maintenanceTimer = setTimeout(() => {
+      this.maintenanceTimer = undefined;
+      if (this.closed) return;
+      try { withoutWaitingForLock(() => maintainMcpState()); }
+      catch (error) { logServerError("mcp.maintenance", error); }
+      this.scheduleMaintenance(60_000);
+    }, delay);
+    this.maintenanceTimer.unref();
+  }
 
   permits(...names: (keyof typeof toolAccess)[]): boolean {
     return names.every(name => this.enabledNames.has(name));
@@ -60,6 +80,7 @@ export class McpTools {
       const started = performance.now();
       const entry = this.entries.get(request.params.name);
       let errorCode: McpErrorCode | undefined;
+      let databaseUsed = false;
       const timeout = new AbortController();
       const signal = AbortSignal.any([ctx.mcpReq.signal, timeout.signal]);
       const timer = setTimeout(() => timeout.abort(new OperationTimeoutError()), this.config.timeoutMs);
@@ -77,6 +98,7 @@ export class McpTools {
         const result = await withOperationLimits({ deadline: started + this.config.timeoutMs, signal }, async () => {
           assertOperationActive();
           const db = getDb();
+          databaseUsed = true;
           try {
             // Cover the initial generation read and synchronous handler work even in rollback-journal mode.
             // Restore busy_timeout as soon as the handler yields; later async writes obtain a fresh budget.
@@ -111,6 +133,7 @@ export class McpTools {
         // Unknown names are caller-controlled and must never become log text.
         recordMcpOperation({ requestId, tool: entry ? request.params.name : "unknown", targetId,
           errorCode, durationMs: performance.now() - started });
+        if (databaseUsed) this.scheduleMaintenance();
       }
     });
   }

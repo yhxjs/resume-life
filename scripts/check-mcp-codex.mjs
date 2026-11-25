@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { toolAccess } from "../src/mcp/config.mjs";
+import { mcpPresets, toolAccess } from "../src/mcp/config.mjs";
+import { examplePortrait, runApplicationWorkflow } from "../examples/mcp/workflow.mjs";
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -19,16 +20,23 @@ const readTools = Object.keys(toolAccess).filter(name => toolAccess[name] === "r
 const env = { ...process.env, RESUME_LIFE_DATA_DIR: path.join(temporary, "data"), RESUME_LIFE_MCP_WRITE_ENABLED: "false",
   RESUME_LIFE_MCP_LLM_ENABLED: "false", RESUME_LIFE_MCP_ALLOWED_TOOLS: readTools.join(","), RESUME_LIFE_MCP_TIMEOUT_MS: "120000" };
 
-async function configuration(format, allowed = readTools) {
-  return (await execute(process.execPath, [launcher, "config", format], { cwd: temporary,
+async function configuration(format, allowed = readTools, preset) {
+  return (await execute(process.execPath, [launcher, "config", format, ...(preset ? [preset] : [])], { cwd: temporary,
     env: { ...env, RESUME_LIFE_MCP_ALLOWED_TOOLS: allowed.join(",") }, timeout: 15_000, windowsHide: true })).stdout;
 }
 
 function toolData(result) {
-  assert.equal(result.isError ?? false, false);
+  assert.equal(result.isError ?? false, false, JSON.stringify(result.structuredContent));
   assert.equal(result.structuredContent?.ok, true);
   assert.deepEqual(result.structuredContent.data, JSON.parse(result.content.find(item => item.type === "text").text));
   return result.structuredContent.data;
+}
+
+function toolError(result, code) {
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent?.ok, false);
+  assert.equal(result.structuredContent.error.code, code);
+  assert.equal(typeof result.structuredContent.meta.requestId, "string");
 }
 
 async function startCodex(config, name) {
@@ -116,9 +124,45 @@ async function main() {
     assert.deepEqual(toolData(await write.call("create_application", args)), first);
     const page = toolData(await write.call("list_applications", { limit: 50 }));
     assert.equal(page.items.filter(item => item.company === args.company).length, 1);
-    console.log(JSON.stringify({ ok: true, client: version, readTools: readTools.length, writeTools: allowed,
-      outsideProjectDirectory: true, structuredOutput: true, idempotentCreation: true }, null, 2));
   } finally { await write.stop(); }
+  const collaboration = await configuration("codex", [...mcpPresets.collaboration.tools], "collaboration");
+  const host = await startCodex(collaboration, "workflow-client");
+  let result;
+  try {
+    assert.deepEqual(host.tools.map(tool => tool.name).sort(), [...mcpPresets.collaboration.tools].sort());
+    for (const tool of host.tools) assert.equal(tool.outputSchema?.oneOf?.length, 2, `${tool.name} output contract`);
+    result = await runApplicationWorkflow(async (name, args) => toolData(await host.call(name, args)), { prefix: "codex-full-workflow" });
+  } finally { await host.stop(); }
+  const recovered = await startCodex(collaboration, "reconnected-client");
+  try {
+    const applicationId = result.applicationId;
+    const receipt = toolData(await recovered.call("get_ai_generation_request", { idempotencyKey: "codex-full-workflow:portrait" }));
+    assert.equal(receipt.phase, "saved");
+    assert.deepEqual(receipt.savedRecord, { id: result.portraitId, kind: "jd" });
+    assert.equal(toolData(await recovered.call("get_jd_portrait", { id: result.portraitId })).result.role, examplePortrait.role);
+    const staleRevision = toolData(await recovered.call("get_application", { id: applicationId })).application.revision;
+    toolData(await recovered.call("update_application", { id: applicationId, expectedRevision: staleRevision, notes: "备份前已保存内容。" }));
+    toolError(await recovered.call("update_application", { id: applicationId, expectedRevision: staleRevision, notes: "过期修改" }), "CONFLICT");
+    const beforeRestore = toolData(await recovered.call("get_application", { id: applicationId })).application.revision;
+    const source = toolData(await recovered.call("get_ai_workflow_context", { kind: "jd", applicationId }));
+    const backup = JSON.parse((await execute(process.execPath, [path.join(root, "scripts/check-mcp-backup-fixture.mjs"), temporary, String(applicationId)],
+      { cwd: temporary, env, timeout: 45_000, windowsHide: true })).stdout);
+    assert.equal(backup.restored, true);
+    const invalidated = toolData(await recovered.call("get_ai_generation_request", { idempotencyKey: "codex-full-workflow:portrait" }));
+    assert.equal(invalidated.phase, "invalidated");
+    assert.equal(invalidated.draftAvailable, false);
+    assert.equal(invalidated.savedRecord, null);
+    toolError(await recovered.call("update_application", { id: applicationId, expectedRevision: beforeRestore, notes: "恢复前版本" }), "CONFLICT");
+    toolError(await recovered.call("create_application", { company: "MCP 示例公司", role: "软件工程师", stage: "applied", jd: "维护本地 SQLite 数据库与工具集成。", idempotencyKey: "codex-full-workflow:application" }), "CONFLICT");
+    toolError(await recovered.call("submit_ai_draft", { kind: "jd", applicationId, expectedSourceRevision: source.sourceRevision,
+      idempotencyKey: "codex-after-restore-stale", result: examplePortrait }), "CONFLICT");
+    assert.equal(toolData(await recovered.call("get_interview_review", { id: result.reviewId })).id, result.reviewId);
+    const tasks = toolData(await recovered.call("list_preparation_tasks", { parentId: applicationId }));
+    assert.ok(tasks.items.some(item => item.id === result.taskId && item.done));
+    console.log(JSON.stringify({ ok: true, client: version, readTools: readTools.length, collaborationTools: host.tools.length,
+      outsideProjectDirectory: true, structuredOutput: true, idempotentCreation: true, preparationPlan: true,
+      interviewQuestions: true, externalDrafts: true, reconnect: true, revisionConflict: true, backupRestore: backup }, null, 2));
+  } finally { await recovered.stop(); }
 }
 
 try { await main(); }

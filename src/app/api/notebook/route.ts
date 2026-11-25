@@ -1,25 +1,14 @@
 import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
-import { linkNotebookToApplications } from "@/lib/application-preparation";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { createCursorPage, parsePaginationParams } from "@/lib/cursor-pagination";
-import { escapeLike, getDb, inTransaction, now } from "@/lib/db";
+import { escapeLike, getDb } from "@/lib/db";
 import { safeScores } from "@/lib/scores";
 import { logServerError, requestIdFrom } from "@/lib/server-errors";
-import { errorMessage } from "@/lib/error-message";
-import { enrollNotebookReview } from "@/lib/spaced-repetition-enrollment";
 import { getReviewMastery } from "@/lib/spaced-repetition";
-import { getNotebookReviewLink } from "@/lib/spaced-repetition-cards";
-
-type Snapshot = {
-  question: string;
-  answer: string;
-  comment: string;
-  reference: string;
-  scores: string;
-  source_label: string | null;
-};
+import { createNotebookFavorite, NotebookMutationError } from "@/lib/notebook-storage";
+import { ApplicationInputError } from "@/lib/applications";
 
 type EntryRow = {
   id: number;
@@ -102,96 +91,15 @@ async function handleGet(req: Request) {
 }
 
 async function handlePost(req: Request) {
-  const parsedBody = await parseApiJson<unknown>(req);
-  if (!parsedBody.ok) return parsedBody.response;
-  const body = parsedBody.data as {
-    source?: unknown;
-    source_id?: unknown;
-    category_id?: unknown;
-  } | null;
-  const source = body?.source;
-  const sourceId = body?.source_id;
-  if ((source !== "drill" && source !== "interview") || typeof sourceId !== "number" || !Number.isSafeInteger(sourceId) || sourceId <= 0) {
-    return NextResponse.json({ error: "无效的收藏请求" }, { status: 400 });
-  }
-
-  let categoryId: number | null = null;
-  if (body?.category_id !== null && body?.category_id !== undefined) {
-    if (typeof body.category_id !== "number" || !Number.isSafeInteger(body.category_id) || body.category_id <= 0) {
-      return NextResponse.json({ error: "无效的分类" }, { status: 400 });
-    }
-    categoryId = body.category_id;
-  }
-
-  const db = getDb();
-  if (categoryId !== null) {
-    const cat = db.prepare("SELECT id FROM notebook_categories WHERE id = ?").get(categoryId);
-    if (!cat) return NextResponse.json({ error: "分类不存在" }, { status: 400 });
-  }
-
-  // 收藏即快照：复制源题全部内容，源记录删除后错题本不受影响
-  let snapshot: Snapshot | undefined;
-  if (source === "drill") {
-    snapshot = db
-      .prepare(
-        `SELECT dq.question, dq.answer, dq.comment, dq.reference, dq.scores,
-                COALESCE(p.name, NULLIF(d.direction, ''), substr(d.jd, 1, 30), '') AS source_label
-         FROM drill_questions dq
-         JOIN drills d ON d.id = dq.drill_id
-         LEFT JOIN projects p ON p.id = d.project_id
-         WHERE dq.id = ?`
-      )
-      .get(sourceId) as Snapshot | undefined;
-  } else {
-    snapshot = db
-      .prepare(
-        `SELECT t.question, t.answer, t.comment, t.reference, t.scores, r.title AS source_label
-         FROM interview_turns t
-         JOIN interviews i ON i.id = t.interview_id
-         JOIN resumes r ON r.id = i.resume_id
-         WHERE t.id = ?`
-      )
-      .get(sourceId) as Snapshot | undefined;
-  }
-  if (!snapshot) {
-    return NextResponse.json({ error: "原题目不存在，可能已被删除" }, { status: 404 });
-  }
-
-  const ts = now();
+  const parsed = await parseApiJson<unknown>(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.data as { source?: unknown; source_id?: unknown; category_id?: unknown } | null;
   try {
-    return inTransaction(() => {
-    const result = db
-      .prepare(
-        `INSERT INTO notebook_entries
-           (category_id, source, source_id, source_label, question, answer, comment, reference, scores, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        categoryId,
-        source,
-        sourceId,
-        snapshot.source_label,
-        snapshot.question,
-        snapshot.answer,
-        snapshot.comment,
-        snapshot.reference,
-        snapshot.scores,
-        ts,
-        ts
-      );
-      const id = Number(result.lastInsertRowid);
-      enrollNotebookReview(db, id, ts);
-      if (source === "interview") linkNotebookToApplications(id, sourceId);
-      const review = getNotebookReviewLink(id);
-      if (!review) throw new Error("收藏复习卡创建失败");
-      return NextResponse.json({ id, review }, { status: 201 });
-    });
-  } catch (err) {
-    const message = errorMessage(err);
-    if (message.includes("UNIQUE")) {
-      return NextResponse.json({ error: "该题已在错题本中" }, { status: 409 });
-    }
-    const requestId = logServerError("notebook.create", err, { requestId: requestIdFrom(req), status: 500 });
+    return NextResponse.json(createNotebookFavorite({ source: body?.source, sourceId: body?.source_id, categoryId: body?.category_id }), { status: 201 });
+  } catch (error) {
+    if (error instanceof ApplicationInputError) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (error instanceof NotebookMutationError) return NextResponse.json({ error: error.message }, { status: error.status });
+    const requestId = logServerError("notebook.create", error, { requestId: requestIdFrom(req), status: 500 });
     return NextResponse.json({ error: "收藏题目失败，请稍后重试", requestId }, { status: 500 });
   }
 }

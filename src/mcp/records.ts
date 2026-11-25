@@ -22,7 +22,14 @@ const sourceTools: Record<McpRecordKind, (keyof typeof toolAccess)[]> = {
   application_interview_questions: ["get_application_interview_questions"],
   interview: ["get_interview"], interview_turn: ["get_interview"], practice_session: ["list_practice_sessions"], practice_question: ["get_practice_question"],
   interview_review: ["get_interview_review"], notebook: ["get_notebook_entry"], ai_draft: ["get_ai_draft"],
+  resume_diagnosis: ["get_resume_diagnosis"], jd_portrait: ["get_jd_portrait"], intro: ["get_intro"], interview_series: ["get_interview_series"],
+  ai_workflow_context: ["get_ai_workflow_context"], review_card: ["get_review_card"], review_attempt: ["get_review_card"], review_submission: ["get_review_submission"],
 };
+
+export function assertWorkflowRead(tools: McpTools, kind: "jd" | "diagnosis" | "review") {
+  if (!tools.permits("get_application") || (kind !== "jd" && !tools.permits("get_resume")) ||
+    (kind === "review" && !tools.permits("get_application_interview_questions"))) throw new McpOperationError("FORBIDDEN", "AI 上下文所需的岗位、简历或逐题读取能力未授权");
+}
 
 export function registerRecordTools(tools: McpTools) {
   for (const [name, kind, title] of [
@@ -46,9 +53,10 @@ export function registerRecordTools(tools: McpTools) {
       inputSchema: z.strictObject({ id }), annotations: read }, async ({ id }) => json(getMcpRecord(kind, id)));
   }
   tools.register("read_record_section", { title: "分段读取完整资料", description: "返回完整记录 JSON 的连续片段。首次 offset=0；后续使用 nextOffset 和 revision 作为 expectedRevision，直到 nextOffset=null。拼接 text 后解析 JSON；资料变化时从头重读。",
-    inputSchema: z.strictObject({ kind: z.enum(MCP_RECORD_KINDS), id, versionId: id.optional(), offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    inputSchema: z.strictObject({ kind: z.enum(MCP_RECORD_KINDS), id, versionId: id.optional(), workflowKind: z.enum(["jd", "diagnosis", "review"]).optional(), interviewId: id.optional(), requestId: z.uuid().optional(), timeZone: z.string().max(100).optional(), offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
       length: z.number().int().min(1).max(4000).optional(), expectedRevision: revision.optional() }), annotations: read }, async input => {
     if (!tools.permits(...sourceTools[input.kind])) throw new McpOperationError("FORBIDDEN", "对应资料读取工具未在白名单内");
+    if (input.kind === "ai_workflow_context" && input.workflowKind) assertWorkflowRead(tools, input.workflowKind);
     return json(readMcpRecordSection(input));
   });
   tools.register("get_today_priorities", { title: "读取今日优先事项", description: "复用首页优先事项，返回近期面试、资料缺口和到期复习。可指定 IANA 时区。",

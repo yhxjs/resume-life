@@ -146,7 +146,7 @@ it("API 拒绝无效编号、请求体与过期上下文，内部故障返回 re
 
 it("v6 原子升级且保留旧数据，失败时表与版本一并回滚", async () => {
   const { initializeDatabase, validateDatabaseSchema, CURRENT_DB_VERSION } = await import("../db-schema");
-  db.exec("DROP TABLE application_preparation_plans; DROP TABLE mcp_generation_requests; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; PRAGMA user_version=6");
+  db.exec("DROP TABLE application_preparation_plans; DROP TABLE mcp_generation_progress; DROP TABLE notebook_notes; DROP TABLE mcp_generation_requests; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; PRAGMA user_version=6");
   expect(() => validateDatabaseSchema(db, 6)).not.toThrow();
   const original = db.exec.bind(db);
   const spy = vi.spyOn(db, "exec").mockImplementation(sql => {
@@ -185,14 +185,19 @@ it("清单包含在备份中，旧备份恢复为空清单，删除岗位会级�
   const chunks: Buffer[] = [];
   for await (const chunk of createBackupRecordStream(db)) chunks.push(chunk);
   const records = Buffer.concat(chunks).toString("utf8").trim().split("\n").map(line => JSON.parse(line));
-  const legacyRecords = records.filter(record => record.table !== "application_preparation_plans" && record.table !== "interview_question_graphs").map(record => {
-    if (record.kind === "manifest") return { ...record, dbVersion: 6, tables: backupTablesForDbVersion(6, record.tables) };
+  const legacyRecords = records.filter(record => record.table !== "application_preparation_plans" && record.table !== "interview_question_graphs" && record.table !== "notebook_notes").map(record => {
+    if (record.kind === "manifest") {
+      const tables = backupTablesForDbVersion(6, record.tables);
+      return { ...record, dbVersion: 6, tables, sequences: Object.fromEntries(Object.entries(record.sequences).filter(([table]) => tables.includes(table))) };
+    }
     if (record.kind === "end") {
       const count = record.stats.application_preparation_plans;
       const graphCount = record.stats.interview_question_graphs;
+      const noteCount = record.stats.notebook_notes;
       delete record.stats.application_preparation_plans;
       delete record.stats.interview_question_graphs;
-      return { ...record, totalRecords: record.totalRecords - count - graphCount };
+      delete record.stats.notebook_notes;
+      return { ...record, totalRecords: record.totalRecords - count - graphCount - noteCount };
     }
     return record;
   });

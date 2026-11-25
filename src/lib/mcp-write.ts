@@ -1,5 +1,5 @@
 import { ApplicationInputError, createApplication, createApplicationInterview, getApplicationById, getApplicationInterviewById, updateApplication, updateApplicationInterview } from "@/lib/applications";
-import type { ApplicationStage, ApplicationTerminalStage, CreateApplicationInput, CreateApplicationInterviewInput } from "@/lib/applications-types";
+import type { ApplicationStage, ApplicationTerminalStage, CreateApplicationInput, CreateApplicationInterviewInput, UpdateApplicationInterviewInput } from "@/lib/applications-types";
 import { getDb, inTransaction } from "@/lib/db";
 import { completePreparationStep, generatePreparationPlan, getPreparationPlan } from "@/lib/preparation-plan";
 import { createPreparationTask, updatePreparationTask, normalizePreparationDueTime, PreparationInputError } from "@/lib/application-preparation";
@@ -49,14 +49,21 @@ export function updateMcpPreparationTask(input: { applicationId: number; taskId:
 }
 
 export function rescheduleMcpInterview(input: { applicationId: number; interviewId: number; expectedRevision: string; interview_time: string }) {
+  return updateMcpInterview(input);
+}
+
+export function updateMcpInterview(input: UpdateApplicationInterviewInput & { applicationId: number; interviewId: number; expectedRevision: string }) {
+  const { applicationId, interviewId, expectedRevision, ...fields } = input;
   return inTransaction(() => {
-    assertMcpApplicationRevision(input.applicationId, input.expectedRevision);
-    const round = getApplicationInterviewById(input.interviewId);
-    if (!round || round.application_id !== input.applicationId) throw new McpOperationError("NOT_FOUND", "面试轮次不存在或不属于此投递");
-    const interview_time = normalizePreparationDueTime(input.interview_time);
-    if (!interview_time) throw new McpOperationError("INVALID_ARGUMENT", "面试改期需提供带时区的面试时间");
-    updateApplicationInterview(input.interviewId, { interview_time });
-    return { id: input.interviewId };
+    assertMcpApplicationRevision(applicationId, expectedRevision);
+    const round = getApplicationInterviewById(interviewId);
+    if (!round || round.application_id !== applicationId) throw new McpOperationError("NOT_FOUND", "面试轮次不存在或不属于此投递");
+    if (fields.interview_time !== undefined) {
+      fields.interview_time = normalizePreparationDueTime(fields.interview_time);
+      if (!fields.interview_time) throw new McpOperationError("INVALID_ARGUMENT", "面试改期需提供带时区的面试时间");
+    }
+    updateApplicationInterview(interviewId, fields);
+    return { id: interviewId };
   });
 }
 
@@ -77,11 +84,14 @@ export function updateMcpApplication(id: number, input: {
   notes?: string;
   terminal_stage?: ApplicationTerminalStage;
   terminal_reason?: string;
+  jd?: string;
+  resume_id?: number | null;
+  resume_version_id?: number | null;
 }, returnDetails: boolean) {
   if (typeof input.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.expectedRevision)) {
     throw new ApplicationInputError("更新投递时必须提供读取到的 revision，避免覆盖较新的修改");
   }
-  if (input.stage === undefined && input.notes === undefined && input.terminal_stage === undefined && input.terminal_reason === undefined) {
+  if ([input.stage, input.notes, input.terminal_stage, input.terminal_reason, input.jd, input.resume_id, input.resume_version_id].every(value => value === undefined)) {
     throw new ApplicationInputError("请至少提供一个待更新字段");
   }
   return inTransaction(() => {
@@ -98,6 +108,9 @@ export function updateMcpApplication(id: number, input: {
       ...(input.notes !== undefined ? { notes: input.notes } : {}),
       ...(input.terminal_stage !== undefined ? { terminal_stage: input.terminal_stage } : {}),
       ...(input.terminal_reason !== undefined ? { terminal_reason: input.terminal_reason } : {}),
+      ...(input.jd !== undefined ? { jd: input.jd } : {}),
+      ...(input.resume_id !== undefined ? { resume_id: input.resume_id } : {}),
+      ...(input.resume_version_id !== undefined ? { resume_version_id: input.resume_version_id } : {}),
     });
     return returnDetails ? compactMcpApplication(updated) : { id };
   });

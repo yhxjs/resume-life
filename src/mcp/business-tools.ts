@@ -1,7 +1,8 @@
 import * as z from "zod/v4";
 import type { McpTools } from "./tools";
 import { id, revision, read, edit, json } from "./records";
-import { generateMcpPreparationPlan, rescheduleMcpInterview, updateMcpPreparationTask } from "@/lib/mcp-write";
+import { generateMcpPreparationPlan, rescheduleMcpInterview, updateMcpPreparationTask, updateMcpInterview } from "@/lib/mcp-write";
+import { INTERVIEW_ROUND_STATUSES } from "@/lib/applications-types";
 import { getMcpInterviewQuestions, saveMcpInterviewQuestions } from "@/lib/mcp-interview-questions";
 
 export function registerBusinessTools(tools: McpTools) {
@@ -18,6 +19,14 @@ export function registerBusinessTools(tools: McpTools) {
     description: "为投递的真实面试轮次改期，使用最新 get_application 的 revision 和带时区 ISO 时间；同步更新投递的下一场面试时间。只返回轮次 ID。",
     inputSchema: z.strictObject({ applicationId: id, interviewId: id, expectedRevision: revision, interview_time: z.string().min(1).max(40) }), annotations: edit },
   async input => json(rescheduleMcpInterview(input)));
+  tools.register("update_application_interview", { title: "更新真实面试轮次",
+    description: "更新状态、轮次名称、时间、地点、会议链接、提醒或备注；使用最新 get_application 的 revision，同步投递的下一场待面试时间。只返回轮次 ID。",
+    inputSchema: z.strictObject({ applicationId: id, interviewId: id, expectedRevision: revision, status: z.enum(INTERVIEW_ROUND_STATUSES).optional(),
+      round_name: z.string().trim().min(1).max(200).optional(), interview_time: z.string().min(1).max(40).optional(), interviewer: z.string().max(200).optional(),
+      location: z.string().max(200).optional(), meeting_url: z.union([z.literal(""), z.url({ protocol: /^https?$/ }).max(2000)]).optional(),
+      reminder_minutes: z.number().int().min(0).max(10080).optional(), notes: z.string().max(20_000).optional() })
+      .refine(input => Object.keys(input).some(key => !["applicationId", "interviewId", "expectedRevision"].includes(key)), "至少提供一个待更新字段"), annotations: edit },
+  async input => json(updateMcpInterview(input)));
   tools.register("get_application_interview_questions", { title: "读取真实面试逐题记录",
     description: "读取真实面试轮次已保存的提问、回答、卡点和反馈，返回提交所需 revision；长内容用 fullContent 分段读全。",
     inputSchema: z.strictObject({ applicationId: id, interviewId: id }), annotations: read },

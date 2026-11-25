@@ -2,19 +2,7 @@ import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction } from "@/lib/db";
-import { parseJdPortraitResult } from "@/lib/jd-portrait";
-
-/** 加载画像记录；result JSON 损坏时 result 为 null（详情页提示数据异常） */
-function loadJdPortrait(id: number) {
-  const db = getDb();
-  const row = db
-    .prepare("SELECT id, jd, result, created_at FROM jd_portraits WHERE id = ?")
-    .get(id) as
-    | { id: number; jd: string; result: string; created_at: string }
-    | undefined;
-  if (!row) return null;
-  return { ...row, result: parseJdPortraitResult(row.result) };
-}
+import { loadJdPortrait } from "@/lib/jd-portrait-store";
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

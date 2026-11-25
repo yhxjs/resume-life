@@ -1,6 +1,15 @@
 import { getDb, inTransaction, now } from "./db";
 import { linkPreparationResource, resolvePreparationApplication } from "./application-preparation";
-import type { JdPortraitResult } from "./jd-portrait";
+import { parseJdPortraitResult, type JdPortraitResult } from "./jd-portrait";
+
+export function loadJdPortrait(id: number, preserveInvalid = false) {
+  const row = getDb().prepare("SELECT id,jd,result,created_at FROM jd_portraits WHERE id=?").get(id) as
+    { id: number; jd: string; result: string; created_at: string } | undefined;
+  if (!row) return null;
+  const result = parseJdPortraitResult(row.result);
+  return { ...row, result, ...(preserveInvalid && result === null
+    ? { read_error: "历史画像格式无效，保留原始结果供核对", raw_result: row.result } : {}) };
+}
 
 /** Recheck the destination and commit the portrait and its preparation link together for both clients. */
 export function saveJdPortrait(jd: string, result: JdPortraitResult, applicationId: number | null): number {

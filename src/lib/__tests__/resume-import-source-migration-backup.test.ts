@@ -33,7 +33,7 @@ afterEach(() => {
 });
 function downgrade(db: DatabaseSync, version: number) {
   if (version < 7) db.exec("DROP TABLE application_preparation_plans");
-  if (version < 8) db.exec("DROP TABLE mcp_generation_requests; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs");
+  if (version < 8) db.exec("DROP TABLE mcp_generation_progress; DROP TABLE notebook_notes; DROP TABLE mcp_generation_requests; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs");
   db.exec(`DROP TABLE ${table}`);
   if (version < 5) db.exec("DROP TABLE project_material_table_provenance");
   if (version < 4) db.exec("DROP TABLE application_interview_recap_contexts");
@@ -89,7 +89,7 @@ async function exported(version = CURRENT_DB_VERSION): Promise<BackupRecord[]> {
   const tables = (await import("../backup")).backupTablesForDbVersion(version, manifest.tables);
   const removed = records.filter(record => record.kind === "row" && !tables.includes(record.table)).length;
   return records.filter(record => record.kind !== "row" || tables.includes(record.table)).map(record => {
-    if (record.kind === "manifest") return { ...record, dbVersion: version, tables };
+    if (record.kind === "manifest") return { ...record, dbVersion: version, tables, sequences: Object.fromEntries(Object.entries(record.sequences).filter(([table]) => tables.includes(table))) };
     if (record.kind === "end") return { ...record, stats: Object.fromEntries(tables.map(name => [name, record.stats[name]!])), totalRecords: record.totalRecords - removed };
     return record;
   });

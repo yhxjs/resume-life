@@ -6,6 +6,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { mcpPresets } from "./config.mjs";
 
 const execute = promisify(execFile);
 const launcher = path.resolve("scripts/mcp.mjs");
@@ -38,6 +39,27 @@ it("generates portable JSON and Codex configuration with the current executable"
   const toml = (await launch(["config", "codex"])).stdout;
   expect(toml).toContain("[mcp_servers.resume-life.env]");
   expect(toml).not.toContain("TEST_PRIVATE_SETTINGS_KEY");
+});
+
+it.each(["readonly", "preparation", "collaboration"] as const)("generates the %s preset with its exact capability inventory", async preset => {
+  const generated = JSON.parse((await launch(["config", "json", preset], { RESUME_LIFE_MCP_ALLOWED_TOOLS: undefined })).stdout).mcpServers["resume-life"];
+  expect(generated.env.RESUME_LIFE_MCP_WRITE_ENABLED).toBe(String(mcpPresets[preset].writeEnabled));
+  expect(generated.env.RESUME_LIFE_MCP_LLM_ENABLED).toBe("false");
+  expect(generated.env.RESUME_LIFE_MCP_ALLOWED_TOOLS.split(",")).toEqual(mcpPresets[preset].tools);
+  const client = new Client({ name: "preset-check", version: "1" });
+  try {
+    await client.connect(new StdioClientTransport({ ...generated, cwd: directory, stderr: "ignore" }));
+    expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual([...mcpPresets[preset].tools].sort());
+    expect(fs.existsSync(path.join(directory, "new-data"))).toBe(false);
+  } finally { await client.close(); }
+}, 20_000);
+
+it("narrows named presets using an existing allowlist and rejects unknown presets", async () => {
+  const generated = JSON.parse((await launch(["config", "json", "collaboration"], { RESUME_LIFE_MCP_ALLOWED_TOOLS: "get_application,analyze_application_jd" })).stdout).mcpServers["resume-life"];
+  expect(generated.env.RESUME_LIFE_MCP_ALLOWED_TOOLS).toBe("get_application");
+  const empty = JSON.parse((await launch(["config", "json", "collaboration"], { RESUME_LIFE_MCP_ALLOWED_TOOLS: "" })).stdout).mcpServers["resume-life"];
+  expect(empty.env.RESUME_LIFE_MCP_ALLOWED_TOOLS).toBe("");
+  await expect(launch(["config", "json", "unknown"])).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("预设") });
 });
 
 it("doctor reports the same effective capability inventory as the stdio server", async () => {

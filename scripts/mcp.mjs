@@ -1,4 +1,4 @@
-import { readMcpConfig, permittedMcpTools, toolAccess } from "../src/mcp/config.mjs";
+import { readMcpConfig, permittedMcpTools, toolAccess, mcpPresets, MCP_SERVER_VERSION } from "../src/mcp/config.mjs";
 import { Console } from "node:console";
 import fs from "node:fs";
 import path from "node:path";
@@ -12,8 +12,8 @@ const mode = process.argv[2] ?? "serve";
 const fail = (message) => { console.error(`[mcp] ${message}`); process.exitCode = 1; };
 
 async function main() {
-  if (!["serve", "doctor", "config"].includes(mode) || process.argv.length > (mode === "config" ? 4 : 3)) {
-    throw new Error("用法：node scripts/mcp.mjs [serve|doctor|config [json|codex]]");
+  if (!["serve", "doctor", "config"].includes(mode) || process.argv.length > (mode === "config" ? 5 : 3)) {
+    throw new Error("用法：node scripts/mcp.mjs [serve|doctor|config [json|codex] [readonly|preparation|collaboration]]");
   }
   const [major, minor] = process.versions.node.split(".").map(Number);
   if (major !== 24 || minor < 21) throw new Error("需要 Node.js 24.21.0 或更新的 24.x。");
@@ -48,7 +48,7 @@ async function main() {
     const config = readMcpConfig();
     // This check intentionally does not open, initialize or migrate a database.
     const enabledTools = permittedMcpTools(config);
-    console.log(JSON.stringify({ ok: true, node: process.version, project: root, dataDirectory: directory,
+    console.log(JSON.stringify({ ok: true, serverVersion: MCP_SERVER_VERSION, availablePresets: Object.keys(mcpPresets), node: process.version, project: root, dataDirectory: directory,
       databaseExists: fs.existsSync(databasePath),
       writeEnabled: config.writeEnabled, llmEnabled: config.llmEnabled, timeoutMs: config.timeoutMs,
       allowedTools: config.allowlist === null ? null : [...config.allowlist],
@@ -60,14 +60,18 @@ async function main() {
   if (mode === "config") {
     const format = process.argv[3] ?? "json";
     const { allowlist, timeoutMs } = readMcpConfig();
+    const presetName = process.argv[4];
+    if (presetName !== undefined && !Object.hasOwn(mcpPresets, presetName)) throw new Error("配置预设仅支持 readonly、preparation 或 collaboration。");
+    const profile = presetName === undefined ? undefined : mcpPresets[presetName];
+    const selected = profile ? profile.tools.filter(name => allowlist === null || allowlist.has(name)) : allowlist === null ? null : [...allowlist];
     const hostPath = value => value.split(path.sep).join("/");
     const command = hostPath(process.execPath);
     const args = [hostPath(path.join(root, "scripts/mcp.mjs"))];
     // Carry restrictions into a desktop Host even when it does not inherit this shell's environment.
     const env = { RESUME_LIFE_DATA_DIR: hostPath(directory),
-      RESUME_LIFE_MCP_WRITE_ENABLED: "false", RESUME_LIFE_MCP_LLM_ENABLED: "false",
+      RESUME_LIFE_MCP_WRITE_ENABLED: String(profile?.writeEnabled ?? false), RESUME_LIFE_MCP_LLM_ENABLED: "false",
       RESUME_LIFE_MCP_TIMEOUT_MS: String(timeoutMs),
-      ...(allowlist === null ? {} : { RESUME_LIFE_MCP_ALLOWED_TOOLS: [...allowlist].join(",") }) };
+      ...(selected === null ? {} : { RESUME_LIFE_MCP_ALLOWED_TOOLS: selected.join(",") }) };
     const clientTimeoutSec = Math.ceil(timeoutMs / 1000) + 30;
     if (format === "json") console.log(JSON.stringify({ mcpServers: { "resume-life": { command, args, env } } }, null, 2));
     else if (format === "codex") console.log(`[mcp_servers.resume-life]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\nstartup_timeout_sec = 30\ntool_timeout_sec = ${clientTimeoutSec}\n\n[mcp_servers.resume-life.env]\n${Object.entries(env).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join("\n")}`);
@@ -84,4 +88,4 @@ async function main() {
 }
 
 main().catch(error => fail(error instanceof Error && error.message.startsWith("用法") ? error.message :
-  error instanceof Error && /^(需要|RESUME_LIFE|数据目录|项目依赖|当前 Node|配置格式)/.test(error.message) ? error.message : "启动失败，请检查运行时、依赖和 .env.local 格式。"));
+  error instanceof Error && /^(需要|RESUME_LIFE|数据目录|项目依赖|当前 Node|配置格式|配置预设)/.test(error.message) ? error.message : "启动失败，请检查运行时、依赖和 .env.local 格式。"));

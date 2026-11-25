@@ -21,6 +21,7 @@ function isWithin(parentPath, candidatePath) {
 export function findSensitiveTraceEntries(tracePath, entries, projectRoot = process.cwd()) {
   // 与运行期同一套解析规则（见 src/lib/db.ts）：显式配置优先，否则用项目内的 data/。
   // 否则设置了 RESUME_LIFE_DATA_DIR 时，这里检查的并不是真正会被写入的目录。
+  // 默认 data/ 仍由 PRIVATE_BUILD_PATHS 检查，不能因切换目录而进入部署清单。
   const dataDirectory = process.env.RESUME_LIFE_DATA_DIR
     ? path.resolve(process.env.RESUME_LIFE_DATA_DIR)
     : path.resolve(projectRoot, "data");

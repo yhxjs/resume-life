@@ -6,6 +6,11 @@ on:
       - 'src/lib/**'
       - 'scripts/*mcp*.mjs'
       - 'src/app/api/applications/**'
+      - 'src/app/api/notebook/**'
+      - 'src/app/api/reviews/**'
+      - 'src/app/api/intros/**'
+      - 'src/app/api/tools/jd-portraits/**'
+      - 'examples/mcp/**'
       - 'docs/MCP.md'
       - 'package*.json'
       - 'tsconfig.json'
@@ -33,5 +38,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:mcp
-      - run: npx vitest run src/lib/__tests__/database-schema.test.ts src/lib/__tests__/backup-fixture-versions.integration.test.ts src/lib/__tests__/application-interview-review.integration.test.ts
+      - run: >-
+          npx vitest run src/lib/__tests__/database-schema.test.ts
+          src/lib/__tests__/backup-fixture-versions.integration.test.ts
+          src/lib/__tests__/notebook-notes-backup.integration.test.ts
+          src/lib/__tests__/application-interview-review.integration.test.ts
+          src/lib/__tests__/notebook-favorite.test.ts src/lib/__tests__/reviews.integration.test.ts
+          src/lib/__tests__/docs-capability-contract.test.ts
+      - run: npm run example:mcp
       - run: npm run typecheck
