@@ -2,7 +2,8 @@ import { ModelInputBudgetError } from "@/lib/llm-input-budget";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
-import { getDb, inTransaction, now } from "@/lib/db";
+import { getDb, inTransaction } from "@/lib/db";
+import { createCareerGapRemedy } from "@/lib/career-tool-store";
 import { LlmConfigError } from "@/lib/llm";
 import {
   validateGeneratedRemedyResult,
@@ -113,16 +114,12 @@ async function handlePost(req: Request) {
     );
   }
 
-  const db = getDb();
-  const res = inTransaction(() => {
+  const id = inTransaction(() => {
     req.signal.throwIfAborted();
-    return db.prepare(
-      "INSERT INTO resignation_gap_remedies (scenario_type, raw_story, target_role, persona_style, result, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    )
-    .run(scenarioType, rawStory, targetRole, personaStyle, JSON.stringify(result), now());
+    return createCareerGapRemedy({ scenarioType, rawStory, targetRole, personaStyle }, result);
   });
 
-  return NextResponse.json({ id: Number(res.lastInsertRowid) }, { status: 201 });
+  return NextResponse.json({ id }, { status: 201 });
 }
 
 export const GET = withRouteErrorHandling("GET /api/tools/career-gap-remedies", handleGet);

@@ -4,7 +4,8 @@ import { resolveResumeVersionId, ResumeVersionError } from "@/lib/resume-version
 import { parseApiJson } from "@/lib/api-request";
 import { checkModelField } from "@/lib/llm-input-budget";
 import { NextResponse } from "next/server";
-import { getDb, inTransaction, now } from "@/lib/db";
+import { getDb, inTransaction } from "@/lib/db";
+import { createIntroRecord } from "@/lib/intro-store";
 import { LlmConfigError, LlmTimeoutError } from "@/lib/llm";
 import { LlmResponseError } from "@/lib/llm-adapter";
 import { IntroResumeContextError, loadIntroResumeContext } from "@/lib/intro-resume-context";
@@ -168,8 +169,6 @@ async function handlePost(req: Request) {
       return;
     }
 
-    const db = getDb();
-    const ts = now();
     let id: number;
     const contextConflict = "参考简历或所选发布版本已变化或删除，请核对材料后重新生成";
     try {
@@ -180,14 +179,7 @@ async function handlePost(req: Request) {
           throw new ResumeVersionError(contextConflict, 409);
         }
         if (applicationId !== null) resolvePreparationApplication(body, { resumeId, resumeVersionId, jd });
-        const result = db
-          .prepare("INSERT INTO intros (resume_id, resume_version_id, jd, created_at) VALUES (?, ?, ?, ?)")
-          .run(resumeId, resumeVersionId, jd, ts);
-        const newId = Number(result.lastInsertRowid);
-        const insert = db.prepare(
-          "INSERT INTO intro_versions (intro_id, kind, sentences, updated_at) VALUES (?, ?, ?, ?)"
-        );
-        for (const v of versions) insert.run(newId, v.kind, JSON.stringify(v.sentences), ts);
+        const newId = createIntroRecord({ resumeId, versionId: resumeVersionId, jd, resumeContext, versions });
         if (applicationId !== null) linkPreparationResource(applicationId, "intro", newId);
         return newId;
       });

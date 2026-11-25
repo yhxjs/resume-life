@@ -11,6 +11,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { mcpPresets, toolAccess } from "../src/mcp/config.mjs";
 import { examplePortrait, runApplicationWorkflow } from "../examples/mcp/workflow.mjs";
 import { resumeTrainingWorkflow, runTrainingWorkflow } from "../examples/mcp/training-workflow.mjs";
+import { runAuthoringWorkflow, runExtendedTrainingWorkflow, resumeContentWorkflow, readContext } from "../examples/mcp/content-workflow.mjs";
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -132,15 +133,20 @@ async function main() {
   const host = await startCodex(collaboration, "workflow-client");
   let result;
   let training;
+  let authoring;
+  let extended;
   try {
     assert.deepEqual(host.tools.map(tool => tool.name).sort(), [...mcpPresets.collaboration.tools].sort());
     for (const tool of host.tools) assert.equal(tool.outputSchema?.oneOf?.length, 2, `${tool.name} output contract`);
     result = await runApplicationWorkflow(async (name, args) => toolData(await host.call(name, args)), { prefix: "codex-full-workflow" });
     training = await runTrainingWorkflow(async (name, args) => toolData(await host.call(name, args)), { ...trainingFixture, prefix: "codex-training" });
+    authoring = await runAuthoringWorkflow(async (name, args) => toolData(await host.call(name, args)), { ...trainingFixture, prefix: "codex-authoring" });
+    extended = await runExtendedTrainingWorkflow(async (name, args) => toolData(await host.call(name, args)), { ...trainingFixture, projectId: authoring.projectId, prefix: "codex-extended-training" });
   } finally { await host.stop(); }
   const recovered = await startCodex(collaboration, "reconnected-client");
   try {
     await resumeTrainingWorkflow(async (name, args) => toolData(await recovered.call(name, args)), training);
+    await resumeContentWorkflow(async (name, args) => toolData(await recovered.call(name, args)), authoring, extended);
     const applicationId = result.applicationId;
     const receipt = toolData(await recovered.call("get_ai_generation_request", { idempotencyKey: "codex-full-workflow:portrait" }));
     assert.equal(receipt.phase, "saved");
@@ -156,6 +162,9 @@ async function main() {
     assert.equal(backup.restored, true);
     toolError(await recovered.call("submit_practice_answer", training.answer), "CONFLICT");
     toolError(await recovered.call("answer_mock_interview", training.turn), "CONFLICT");
+    for (const workflow of [authoring, extended]) for (const { name, args } of workflow.receipts) toolError(await recovered.call(name, args), "CONFLICT");
+    assert.equal(toolData(await recovered.call("get_interview_series", { id: extended.seriesId })).status, "finished");
+    assert.equal((await readContext(async (name, args) => toolData(await recovered.call(name, args)), "get_career_record", { kind: "salary_negotiation", id: extended.salaryId })).value.record.status, "finished");
     assert.equal(toolData(await recovered.call("get_interview", { id: training.mock.id })).interview.report.depth, 8.5);
     const invalidated = toolData(await recovered.call("get_ai_generation_request", { idempotencyKey: "codex-full-workflow:portrait" }));
     assert.equal(invalidated.phase, "invalidated");
@@ -171,6 +180,7 @@ async function main() {
     console.log(JSON.stringify({ ok: true, client: version, readTools: readTools.length, collaborationTools: host.tools.length,
       outsideProjectDirectory: true, structuredOutput: true, idempotentCreation: true, preparationPlan: true,
       interviewQuestions: true, externalDrafts: true, practiceReview: true, introEdit: true, projectMaterial: true, mockInterview: true,
+      introCreation: true, projectSummary: true, generatedPractice: true, interviewTraining: true, interviewSeries: true, resumeDraft: true, careerTools: true,
       reconnect: true, revisionConflict: true, backupRestore: backup }, null, 2));
   } finally { await recovered.stop(); }
 }

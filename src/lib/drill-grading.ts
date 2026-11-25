@@ -29,11 +29,12 @@ function gradeSource(questionId: number, drillId?: number) {
     projectContext: evidence ? "本题仅使用题干保存的依据快照与条件；未提供完整项目档案，不能据此推断全文缺失或个人职责。" : "" };
 }
 
+/** MCP clients read the complete context in pages; their input limit is independent of the Web model. */
 export function captureDrillGrade(questionId: number, drillId?: number, authorize?: (source: string, includesProject: boolean) => void) {
   return inTransaction(() => {
     const source = gradeSource(questionId, drillId);
     authorize?.(source.drill.source, source.includesProject);
-    if (source.includesProject) source.projectContext = readProjectContext(source.drill.project_id!);
+    if (source.includesProject) source.projectContext = readProjectContext(source.drill.project_id!, { maxChars: Number.MAX_SAFE_INTEGER });
     return source;
   });
 }

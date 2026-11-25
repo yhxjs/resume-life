@@ -1,7 +1,8 @@
-import { getDb, now } from "./db";
+import { getDb } from "./db";
 import { captureDrillGrade, commitDrillGrade } from "./drill-grading";
 import { drillEvaluationRules, validateDrillEvaluation } from "./drill-answer-llm";
-import { insertQuestions, MAX_DRILL_QUESTIONS } from "./drills-questions";
+import { MAX_DRILL_QUESTIONS } from "./drills-questions";
+import { createDrillRecord } from "./drill-store";
 import { hasQuestionContent, questionComparisonKey } from "./question-normalization";
 import { McpOperationError } from "./mcp-errors";
 import { fitPage, pageParams, type PageInput } from "./mcp-read";
@@ -66,8 +67,7 @@ export function createSelectedPractice(input: { entries: { id: number; revision:
     if (entries.some(row => !hasQuestionContent(row.question))) throw new McpOperationError("INVALID_ARGUMENT", "所选题库条目缺少有效题干，请重新选题");
     if (new Set(entries.map(row => questionComparisonKey(row.question))).size !== entries.length) throw new McpOperationError("INVALID_ARGUMENT", "所选题目不能重复");
     const direction = [...new Set(entries.map(row => row.direction).filter(Boolean))].join("、");
-    const id = Number(getDb().prepare("INSERT INTO drills (source,direction,jd,created_at) VALUES ('bank',?,?,?)").run(direction, input.jd, now()).lastInsertRowid);
-    insertQuestions(id, entries);
+    const id = createDrillRecord({ source: "bank", direction, jd: input.jd, questions: entries });
     return { id };
   }, id => !!getDb().prepare("SELECT 1 FROM drills WHERE id=?").get(id));
 }

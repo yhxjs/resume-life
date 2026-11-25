@@ -21,6 +21,7 @@ import { createCursorPage, parsePaginationParams } from "@/lib/cursor-pagination
 import { ModelProtocolError, validateInterviewQuestion } from "@/lib/model-protocol";
 import { buildFirstInterviewQuestionMessages, firstInterviewQuestionPrompt } from "@/lib/interview-question-llm";
 import { createInterviewSession } from "@/lib/interview-session-store";
+import { createInterviewSeriesRecord } from "@/lib/interview-series-store";
 
 async function handlePost(req: Request) {
   const parsedBody = await parseApiJson<unknown>(req);
@@ -117,7 +118,6 @@ async function handlePost(req: Request) {
       return;
     }
 
-    const db = getDb();
     const ts = now();
     const contextConflict = "参考简历或所选发布版本已变化或删除，请核对材料后重新生成";
     let created: { interviewId: number; seriesId: number | null };
@@ -131,16 +131,10 @@ async function handlePost(req: Request) {
           throw new ResumeVersionError(contextConflict, 409);
         }
         if (applicationId !== null) resolvePreparationApplication(body, { resumeId, resumeVersionId, jd });
-        let newSeriesId: number | null = null;
-        if (seriesMode) {
-          newSeriesId = Number(
-            db
-              .prepare("INSERT INTO interview_series (resume_id, resume_version_id, jd, rounds, created_at) VALUES (?, ?, ?, ?, ?)")
-              .run(resumeId, resumeVersionId, jd, rounds, ts).lastInsertRowid
-          );
-        }
-        const newId = createInterviewSession({ resumeId, versionId: resumeVersionId, jd, rounds, style, seriesId: newSeriesId,
-          roundNo: seriesMode ? 1 : 0, question, at: ts });
+        const series = seriesMode ? createInterviewSeriesRecord({ resumeId, versionId: resumeVersionId, jd, rounds, question, at: ts }) : null;
+        const newSeriesId = series?.seriesId ?? null;
+        const newId = series?.interviewId ?? createInterviewSession({ resumeId, versionId: resumeVersionId, jd, rounds, style, seriesId: null,
+          roundNo: 0, question, at: ts });
         if (applicationId !== null) linkPreparationResource(applicationId, newSeriesId === null ? "interview" : "series", newSeriesId ?? newId);
         return { interviewId: newId, seriesId: newSeriesId };
       });

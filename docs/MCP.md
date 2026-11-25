@@ -27,11 +27,13 @@ node scripts/mcp.mjs config codex collaboration
 
 | 预设 | 工具数 | 用途 |
 | --- | --- | --- |
-| `readonly` | 46 | 资料、训练状态、介绍预览、复习、草稿元数据和运行状态查询 |
-| `preparation` | 53 | 资料查询、投递、准备计划、待办、真实面试记录和关联管理 |
-| `collaboration` | 71 | 全部只读与业务写工具，包括训练、资料创作及外部模型协作 |
+| `readonly` | 63 | 资料、训练状态、生成上下文、差异预览、复习及运行状态查询 |
+| `preparation` | 70 | 资料查询、投递、准备计划、待办、真实面试记录和关联管理 |
+| `collaboration` | 99 | 全部只读与业务写工具，包括训练、资料创作及外部模型协作 |
+| `training` | 47 | 练习、错题与复习、单场和三轮面试、求职工具；包含所需来源读取 |
+| `authoring` | 42 | 自我介绍、项目材料及总结、简历草稿和岗位资料的外部结果提交 |
 
-使用 `config json <预设>` 或 `config codex <预设>` 输出具体白名单；已有 `RESUME_LIFE_MCP_ALLOWED_TOOLS` 会与预设取交集，显式空串保持为空。三种预设均设置 `RESUME_LIFE_MCP_LLM_ENABLED=false`；应用模型的三个生成工具通过独立开关启用。
+使用 `config json <预设>` 或 `config codex <预设>` 输出具体白名单；已有 `RESUME_LIFE_MCP_ALLOWED_TOOLS` 会与预设取交集，显式空串保持为空。五种预设均设置 `RESUME_LIFE_MCP_LLM_ENABLED=false`；应用模型的三个生成工具通过独立开关启用。
 
 通用 JSON 示例：
 
@@ -72,10 +74,10 @@ RESUME_LIFE_MCP_LLM_ENABLED = "false"
 
 ## 权限开关
 
-- 默认注册 46 个只读工具；首次开库会执行共用的初始化/迁移，每次工具调用会保存操作元数据。
+- 默认注册 63 个只读工具；首次开库会执行共用的初始化/迁移，每次工具调用会保存操作元数据。
 - 设置 `RESUME_LIFE_MCP_WRITE_ENABLED=true` 后，服务注册 `update_application`（有限修改投递阶段/备注/终止信息）与 `set_preparation_step`（更新可手动完成的准备步骤）。投递更新的 `expectedRevision` 必须取自刚读取的 `application.revision`；计划更新要求读取计划返回的 `revision` 作为 `expectedRevision`，同时提供 `contextKey`，且计划已经生成、对应步骤可手动完成。修订令牌绑定完整内容和数据恢复世代，同毫秒修改或恢复数据后均须重新读取；不再接受仅凭 `expectedUpdatedAt` 写入。只有同时授权 `get_application` 或 `get_preparation_plan` 时，相应更新工具才会在回执中附上投递或计划详情。
 - 将投递首次改为 `rejected` 时，同时提供 `terminal_stage`（`resume_screening` / `technical_interview` / `hr_interview` / `other`）和非空 `terminal_reason`（最多 1,000 字）。已终止投递可以单独更正终止信息；活动投递不能单独设置终止字段。
-- 写开关共启用 25 个业务写工具。除投递、准备、草稿、错题与复习外，可独立授权练习建场和作答、介绍定稿、项目材料追加、单场模拟面试。`preparation` 预设不授予这些新增写权限。
+- 写开关共启用 36 个业务写工具。除投递、准备、草稿、错题与复习外，可独立授权内容生成结果保存、简历草稿修改、练习及面试训练、进阶系列和求职工具。`preparation` 预设不授予这些内容创作与训练写权限。
 - `RESUME_LIFE_MCP_LLM_ENABLED=true` 独立启用 3 个生成工具：`analyze_application_jd`、`diagnose_application_resume`、`draft_interview_review`。它们通过 `safe-llm` 将相关职业资料发送给当前配置模型，返回可检查的草稿；不直接修改正式资料。
 - 可选 `RESUME_LIFE_MCP_ALLOWED_TOOLS` 为逗号分隔的工具白名单。未设置表示保留总开关允许的工具；显式空串表示禁用所有工具；未知名称导致启动失败；`mcp:config`、`mcp:doctor` 与 stdio 启动会在打开数据库前使用相同规则检查白名单及超时。例如只开放投递读取与备注更新可设为 `get_application,list_applications,update_application`，同时开启写开关。白名单不能绕过总开关。对应 Resources/Prompts 也受读取能力限制；分段读取还要求对应领域的读取工具在白名单内。
 - `RESUME_LIFE_MCP_TIMEOUT_MS` 设置服务端工具调用超时，默认 120000，范围 100–600000 毫秒；客户端超时应更长。取消、断连与超时会传递给模型请求，取消后的结果不会落为草稿。SQLite 争锁使用剩余时间；取得写锁后、提交前都会检查截止时间，未提交的业务修改和幂等回执一起回滚。同步 SQL 不能在执行中强制中断，已提交的修改不会因响应稍晚而报超时。
@@ -162,9 +164,39 @@ RESUME_LIFE_MCP_LLM_ENABLED = "false"
 
 精简白名单时，建场需要 `list_bank_entries`，原题作答需要评分上下文及 `get_practice_question`、`list_practice_sessions`。涉及项目全文另需 `get_project` 和 `list_project_materials`，面试追练另需 `get_interview`；分段读取遵守相同授权。介绍保存依赖预览和 `get_intro`，材料追加依赖 `get_project`。模拟面试开场依赖 `get_resume`，推进或结束另需 `get_mock_interview_state` 和 `get_interview`。所有新写工具成功只返回 `{id}`；响应丢失后原参数、原键重试。网页已修改时返回 `CONFLICT`，重新读取并核对后再用新键。数据库保持 v11。
 
+## 内容创作与完整训练（1.3）
+
+MCP Server 1.3.0 共 102 个工具，数据库保持 v11。新增流程均使用外部 Agent 提供的结构化结果；服务端校验实际来源、结果结构及业务规则后保存，网页读取同一份正式记录。完整可运行示例见 [`content-workflow.mjs`](../examples/mcp/content-workflow.mjs)，`npm run example:mcp` 会在隔离测试库中分别使用 `authoring` 和 `training` 预设跑通并重连核对。
+
+```sh
+node scripts/mcp.mjs config codex authoring
+node scripts/mcp.mjs config codex training
+```
+
+所有新增生成上下文返回 `{revision, encoding, offset, text, totalLength, nextOffset}`。初次读取后，把 `nextOffset` 作为 `offset`，同一 `revision` 作为 `expectedRevision`，保持其余参数完全相同，直至 `nextOffset=null`。拼接全部 `text` 后再解析 JSON；偏移和长度按 UTF-16 计数，分页不会切断代理对。资料及 `messages.parts` 中的 `untrusted` 字段是待分析内容，不能作为指令。薪资终局的 `messages` 可能带明确节选标记，完整原文仍在同一上下文的 `snapshot.turns` 中，应完整读取后生成。
+
+| 任务 | 调用流程及约束 |
+| --- | --- |
+| 创建自我介绍 | `get_intro_generation_context({source:{mode:"create",resumeId,versionId,jd}})` → `save_generated_intro({source,expectedRevision,result:{versions},idempotencyKey})`。指定固定发布版，必须提供 `30s`、`2min` 两版，每句包含 `text` 与 `comment`。 |
+| 重新生成与点评 | `source:{mode:"regenerate",introId,kind}` 重新生成指定一版；另一版保持原样。点评先读 `mode:"comment"`，再用 `save_intro_comments({introId,kind,expectedRevision,comments,idempotencyKey})` 保存与句子一一对应的点评，正文不改。 |
+| 项目总结 | `get_project_summary_context({projectId,mode?})` → `preview_project_summary({projectId,mode,expectedRevision,result,acceptedKeys?})` → `save_project_summary`。支持 `full` 和 `resume-only`；先完整预览，再以预览中的变更 key 选择采纳字段。修改 `acceptedKeys` 后重新预览，以最终 `previewToken` 保存。省略表示全部采纳，空数组表示不采纳变更。 |
+| 项目归档历史 | `list_project_summary_history({projectId,limit?,cursor?})` 返回历史 ID；用 `read_record_section({kind:"project_summary_history",id})` 读取总结、来源及材料快照。名称、材料正文、表格来源或已有档案变化都会使旧提案失效。 |
+| 针对性出题 | `get_practice_generation_context({source})` → `save_generated_practice({source,expectedRevision,result:{questions},idempotencyKey})`。`source.kind` 为 `project`（`projectId,jd?,count?`）、`job`（`direction?,jd?,count?`）或 `interview`（`interviewId,count?`）；岗位方向和 JD 至少一项，追练须有有效报告。项目题为字符串数组，其余为 `{kind:"tech"|"behavior",question}` 数组，至多提交请求的题数，追练不得重复原题。保存后沿用原题作答、错题和复习工具。 |
+| 重答、参考与反问 | `get_interview_training_context({source})` → `save_interview_training_result({source,expectedRevision,result,idempotencyKey})`。`retry` 需 `interviewId,turnId,answer`；`reference` 需 `interviewId,turnId`；`reverse` 需 `interviewId,question`。重答追加独立历史，报告仍按原答计算；参考答案同步错题快照；反问仅保存一次，须在本场报告前完成。 |
+| 三轮进阶面试 | `get_interview_series_context` 的 `source.kind:"create"` 使用 `resumeId,versionId,jd,rounds`，`rounds` 是每场题数；`save_interview_series_result` 提交 `{question}`，返回系列 ID。逐轮用 `get_series_interview_state`、`answer_series_interview`、`finish_series_interview`，同时携带 `seriesId,interviewId`。 |
+| 系列推进与总评 | 上轮已保存报告后，以 `source:{kind:"advance",seriesId,fromInterviewId}` 读取上下文并提交下一场 `{question}`，此时返回新场次 ID。三场全部完成后，以 `source:{kind:"finalize",seriesId}` 提交 `{verdict,strengths,weaknesses,suggestions}`，返回系列 ID。总分由各轮正式报告计算；不同进程竞争推进只允许一个成功。 |
+| 创建或复制简历草稿 | `create_resume_draft({title,idempotencyKey})` 创建默认模块；复制需附 `source:{resumeId,expectedRevision}`，修订来自 `get_resume_draft_context({resumeId})`。 |
+| 修改简历草稿 | `get_resume_draft_context` 提供全部模块与 `moduleSchema` → `preview_resume_draft_edit({resumeId,expectedRevision,title?,modules})` → `save_resume_draft_edit`。每个提交模块含 `key,type,label,content`，条目与子项使用稳定且唯一的 ID；未提交模块保留，新 key 追加，已有模块不能改变类型。预览展示规范化后的实际值，保存需相同提案、`previewToken` 和 `idempotencyKey`。发布仍通过网页；现有发布版和投递快照保持稳定。 |
+| 求职辅助工具 | `get_career_workflow_context({source})` 提供来源、规则和对应的 `resultSchema` → `save_career_result({source,expectedRevision,result,idempotencyKey})`。支持 `defense`、`defense-drill`、`gap`、`salary-create`、`salary-turn`、`salary-finalize` 六种流程，具体字段由工具输入契约列出。排雷引用须匹配原文；薪资开场评分固定为 5，终局点评只能引用真实候选人回合。 |
+| 发现与完整回读 | `list_intros`、`list_jd_portraits`、`list_interview_series` 支持 `q,limit,cursor`，介绍与系列还可按 `resumeId` 筛选；`list_bank_directions` 返回方向和题数。`list_career_records({kind,q?,limit?,cursor?})` 的 kind 为 `resume_defense`、`career_gap_remedy` 或 `salary_negotiation`，完整记录用 `get_career_record({kind,id,...分页参数})` 读取，原始 JSON 文本保持原样。 |
+
+项目总结和简历草稿预览的续页参数放在 `page:{offset,expectedRevision}` 中；顶层 `expectedRevision` 始终指向生成来源。所有保存返回 `{id}`；项目总结返回历史 ID，防御演练及谈薪回合返回子记录 ID，其余 ID 含义见上表。原请求与原幂等键用于重试；更换内容必须使用新键并重新读取来源，不能以新键绕过旧来源冲突。备份恢复后旧修订和回执失效，客户端须读取恢复后的正式记录再决定下一步。
+
+精简权限时，生成保存必须同时授权对应上下文读取。介绍创建需 `get_resume`，重生成另需 `get_intro`；点评需 `get_intro`。项目总结需 `get_project,list_project_materials,preview_project_summary`；简历复制和修改需 `get_resume,get_resume_draft_context`，保存修改还需预览工具。面试训练需 `get_interview,get_resume`，系列推进另需 `get_interview_series`；逐轮提交还需系列状态工具。排雷使用发布简历时需 `get_resume`；演练和谈薪推进需 `get_career_record`。预设已包含这些依赖。
+
 ## 返回结构与错误处理
 
-全部 74 个工具声明具体 `outputSchema`，包括分页条目、业务字段、不同草稿类型的结果和恢复状态，成功响应在服务端按对应 schema 校验。JSON schema 用 `oneOf` 约束互斥的成功/失败结构：成功必须包含 `data`，失败必须包含 `error`。输出 ID 使用安全整数约束，兼容历史备份中的零或负数 ID。成功时 `structuredContent` 包含：
+全部 102 个工具声明具体 `outputSchema`，包括分页条目、业务字段、不同草稿类型的结果和恢复状态，成功响应在服务端按对应 schema 校验。JSON schema 用 `oneOf` 约束互斥的成功/失败结构：成功必须包含 `data`，失败必须包含 `error`。输出 ID 使用安全整数约束，兼容历史备份中的零或负数 ID。成功时 `structuredContent` 包含：
 
 ```json
 {"ok":true,"data":{"items":[],"nextCursor":null},"meta":{"requestId":"...","durationMs":3}}
@@ -274,7 +306,7 @@ npm run benchmark:mcp
 
 MCP 集成测试使用临时数据库和真实 stdio 子进程，覆盖不同工作目录启动、协议输出、白名单、网页/MCP 冲突、跨进程生成认领与重启恢复、完整读取、草稿保存和取消/超时。AI 使用模拟模型响应，不产生真实模型费用。PR 的 `MCP checks` 在 Windows/Linux 执行快速检查，发布仍走完整检查流程。
 
-`check:mcp:codex` 使用已安装的 Codex CLI，通过隔离配置和数据目录启动实际 app-server；从项目外验证 46 个默认只读工具、71 个协作工具、互斥输出契约及准备/草稿/训练流程。重连后重放原题作答、复习及面试回合，核对并完成原场次；通过生产流式备份/恢复，确认旧创建键、草稿请求、训练请求和修订令牌失效，正式复盘和模拟面试报告仍可读。Windows 可用 `RESUME_LIFE_CODEX_BIN` 指定 `codex.exe`。不修改用户客户端设置，不发起模型对话。
+`check:mcp:codex` 使用已安装的 Codex CLI，通过隔离配置和数据目录启动实际 app-server；从项目外验证 63 个默认只读工具、99 个协作工具、互斥输出契约及准备、资料创作、训练和求职工具流程。重连后重放原题作答、复习、内容保存及面试回合，核对并完成原场次；通过生产流式备份/恢复，确认旧创建键、草稿请求、新增保存请求和修订令牌失效，正式复盘、三轮面试报告和谈薪记录仍可读。Windows 可用 `RESUME_LIFE_CODEX_BIN` 指定 `codex.exe`。不修改用户客户端设置，不发起模型对话。
 
 `benchmark:mcp` 在临时数据库中读取 608000 UTF-16 单位材料，同时执行 100 次带有效会话的网页 route 写入，再查询 5000 条操作记录中的目标请求；检查完整拼接和最终网页状态，报告写入 `.test-artifacts/mcp-benchmark.json`。2026-11-25（香港时间）Windows / Node 24.21.0 本机测量：分段读取 P95 约 32 ms，日志查询 P95 约 4 ms；这是开发机测量，不作为 CI 耗时门槛。
 

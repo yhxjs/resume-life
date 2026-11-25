@@ -11,7 +11,8 @@ import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { randomUUID } from "node:crypto";
 import { errorMessage } from "@/lib/error-message";
 import { withRouteErrorHandling } from "@/lib/api-route";
-import { assertBackupFieldBytes, assertBackupRecordBytes, BackupLimitError } from "@/lib/backup-limits";
+import { BackupLimitError } from "@/lib/backup-limits";
+import { appendInterviewRetry } from "@/lib/interview-training-store";
 import { InterviewCommandError } from "@/lib/interview-commands/errors";
 import { interviewFollowupContextParts } from "@/lib/interview-followup-context";
 import { buildInterviewRetryMessages, RETRY_EVAL_PROMPT } from "@/lib/interview-retry-llm";
@@ -151,7 +152,7 @@ async function evaluateRetry(req: Request, interviewId: number, turnId: number, 
         "SELECT * FROM interview_turns WHERE id = ? AND interview_id = ?"
       ).get(turnId, interviewId) as (Record<string, unknown> & { retries: string; reference: string }) | undefined;
       if (!latest) return null;
-      const { retries, stored } = parseRetryHistory(latest.retries);
+      const { retries } = parseRetryHistory(latest.retries);
       const existing = retries.find((retry) => retry?.id === retryId);
       if (existing) {
         if (existing.answer !== answer) throw new InterviewCommandError("该提交编号已用于其他回答，请重新提交", 409);
@@ -164,21 +165,7 @@ async function evaluateRetry(req: Request, interviewId: number, turnId: number, 
           JSON.stringify(interviewFollowupContextParts(interviewId, turn)) !== JSON.stringify(followupParts)) {
         throw new InterviewCommandError("面试资料、题目或追问上下文已更新，请刷新后重新作答", 409);
       }
-      const updatedRetries = [...retries, newRetry];
-      // 重答参考属于 newRetry，不回填原答或收藏快照的参考。
-      const updatedReference = latest.reference;
-      const encodedRetries = JSON.stringify([...stored, newRetry]);
-      const row = { ...latest, retries: encodedRetries, reference: updatedReference };
-      // 与备份流一致，包含整行、外层 JSON 转义和末尾换行，不能只限制单次回答。
-      for (const value of Object.values(row)) {
-        if (typeof value === "string") assertBackupFieldBytes(Buffer.byteLength(value, "utf8"));
-      }
-      assertBackupRecordBytes(Buffer.byteLength(`${JSON.stringify({ kind: "row", table: "interview_turns", data: row })}\n`, "utf8"));
-      const result = db.prepare(
-        "UPDATE interview_turns SET retries = ? WHERE id = ? AND interview_id = ?"
-      ).run(encodedRetries, turnId, interviewId);
-      if (result.changes !== 1) throw new Error("重答历史提交失败");
-      return { retry: newRetry, updatedRetries, updatedReference };
+      return appendInterviewRetry(interviewId, turnId, newRetry);
     });
   } catch (error) {
     if (error instanceof InterviewCommandError) {

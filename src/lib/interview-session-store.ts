@@ -5,6 +5,7 @@ import { validateGeneratedReport, type EvaluatorReport, type InterviewReport, ty
 import type { InterviewFinishPayload } from "./interview-finish-llm";
 
 export function createInterviewSession(input: { resumeId: number; versionId: number; jd: string; rounds: number; style: string; seriesId: number | null; roundNo: number; question: string; at: string }) {
+  if (!input.jd.trim()) throw new InterviewCommandError("岗位要求（JD）不能为空", 400);
   return inTransaction(() => {
     const db = getDb();
     const id = Number(db.prepare("INSERT INTO interviews (resume_id,resume_version_id,jd,rounds,style,series_id,round_no,status,created_at) VALUES (?,?,?,?,?,?,?,'ongoing',?)")
@@ -17,6 +18,7 @@ export function createInterviewSession(input: { resumeId: number; versionId: num
 /** Callers revalidate the snapshot inside the same transaction. Only the last unanswered turn can advance. */
 export function commitInterviewTurn(input: { interviewId: number; turn: { id: number; idx: number; question: string }; answer: string;
   scores: ScoreMap; comment: string; finished: boolean; nextKind: string; nextQuestion: string }) {
+  if (!input.answer.trim()) throw new InterviewCommandError("回答内容不能为空", 400);
   return inTransaction(() => {
     const db = getDb(), { interviewId, turn, answer, comment } = input, scores = JSON.stringify(input.scores);
     const updated = db.prepare(`UPDATE interview_turns SET answer = ?, comment = ?, scores = ?, answered_at = ?

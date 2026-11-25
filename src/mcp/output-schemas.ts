@@ -73,8 +73,26 @@ export const draftDataSchema = object({
   idempotencyKey: z.string().nullable(), expired: z.boolean(), saved: z.boolean(), savedRecord: object({ id, kind: z.enum(["jd", "diagnosis", "review"]) }).nullable(),
 });
 const page = (item: z.ZodType = record) => object({ items: z.array(item), nextCursor: z.string().nullable() });
+const contextSection = object({ revision, encoding: z.literal("json/utf-16"), offset: count, text: z.string(), totalLength: count, nextOffset: count.nullable() });
 
 const core: Record<string, z.ZodType> = {
+  get_intro_generation_context: contextSection, get_project_summary_context: contextSection,
+  get_practice_generation_context: contextSection, save_generated_practice: record,
+  get_interview_training_context: contextSection, save_interview_training_result: record,
+  get_interview_series_context: contextSection, save_interview_series_result: record, answer_series_interview: record, finish_series_interview: record,
+  get_resume_draft_context: contextSection, create_resume_draft: record, preview_resume_draft_edit: contextSection.extend({ previewToken: revision }), save_resume_draft_edit: record,
+  get_career_record: contextSection, get_career_workflow_context: contextSection, save_career_result: record,
+  list_career_records: page(object({ id, title: z.string(), created_at: z.string(), kind: z.enum(["resume_defense", "career_gap_remedy", "salary_negotiation"]),
+    fullContent: object({ tool: z.literal("get_career_record"), kind: z.enum(["resume_defense", "career_gap_remedy", "salary_negotiation"]), id }) })),
+  get_series_interview_state: object({ id, revision, resumeId: id, versionId: id.nullable(), status: z.enum(["ongoing", "finished"]), rounds: z.number().int(),
+    answered: count, currentTurnId: id.nullable(), currentIndex: z.number().int().nullable(), reportSaved: z.boolean() }),
+  list_intros: page(object({ id, resume_id: id, resume_version_id: id.nullable(), jd: z.string(), created_at: z.string(), resume_title: z.string(), fullContent })),
+  list_jd_portraits: page(object({ id, jd: z.string(), created_at: z.string(), fullContent })),
+  list_interview_series: page(object({ id, resume_id: id, resume_version_id: id.nullable(), jd: z.string(), rounds: count, status: z.string(), created_at: z.string(), finished_at: z.string(), fullContent })),
+  list_bank_directions: page(object({ id, direction: z.string(), count })),
+  preview_project_summary: contextSection.extend({ previewToken: revision }),
+  save_generated_intro: record, save_intro_comments: record, save_project_summary: record,
+  list_project_summary_history: page(object({ id, source: z.enum(["ai", "repo", "manual"]), createdAt: z.string(), fullContent })),
   list_bank_entries: page(object({ id, direction: z.string(), kind: z.enum(["tech", "behavior"]), question: z.string(), created_at: z.string(), revision, fullContent })),
   list_notebook_categories: page(object({ id, name: z.string() })),
   get_practice_answer_context: object({ id, drillId: id, source: z.string(), question: z.string(), answeredAt: z.string(), revision,

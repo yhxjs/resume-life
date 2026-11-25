@@ -2,6 +2,7 @@ import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction, now } from "@/lib/db";
+import { createSalaryNegotiation } from "@/lib/career-tool-store";
 import { LlmConfigError } from "@/lib/llm";
 import {
   describeNegotiationCompany,
@@ -155,51 +156,12 @@ async function handlePost(req: Request) {
 
     const generated = validateGeneratedNegotiationOpening(parsed);
     if (!generated) return NextResponse.json({ error: "AI 初始出招缺少必要字段，请重试" }, { status: 502 });
-    const { initial_offer: initialOffer, hr_response: hrResponse, hr_tactics: hrTactics, hr_mindset: hrMindset, mentor_analysis: mentorAnalysis } = generated;
-
     const createdAt = now();
 
     const newId = inTransaction(() => {
       req.signal.throwIfAborted();
-      const db = getDb();
-      const negRes = db
-        .prepare(
-          `INSERT INTO salary_negotiations (
-            target_company_tier,
-            target_role,
-            expected_salary,
-            current_or_competing_offer,
-            hr_style,
-            status,
-            initial_offer,
-            final_package,
-            report,
-            created_at
-          ) VALUES (?, ?, ?, ?, ?, 'ongoing', ?, '', '', ?)`
-        )
-        .run(rawTier, targetRole, expectedSalary, currentOrCompeting, hrStyle, initialOffer, createdAt);
-
-      const negotiationId = Number(negRes.lastInsertRowid);
-
-      db.prepare(
-        `INSERT INTO salary_negotiation_turns (
-          negotiation_id,
-          turn_no,
-          user_message,
-          hr_response,
-          hr_tactics,
-          hr_mindset,
-          mentor_analysis,
-          created_at
-        ) VALUES (?, 1, '', ?, ?, ?, ?, ?)`
-      ).run(
-        negotiationId,
-        hrResponse,
-        hrTactics,
-        JSON.stringify(hrMindset),
-        JSON.stringify(mentorAnalysis),
-        createdAt
-      );
+      const negotiationId = createSalaryNegotiation({ targetCompanyTier: rawTier, targetRole, expectedSalary,
+        currentOrCompetingOffer: currentOrCompeting, hrStyle }, generated, createdAt);
 
       if (requestId) completeSalaryCreationRequest(requestId, negotiationId);
       return negotiationId;

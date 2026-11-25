@@ -231,7 +231,8 @@ export async function generateResumePdf(html: string, requestSignal?: AbortSigna
     for (const channel of [undefined, "chrome", "msedge"] as const) {
       if (signal.aborted) throw signal.reason;
       try {
-        const launch = chromium.launchServer({ headless: true, channel, args,
+        // Keep the local control connection usable when localhost resolves to a disabled IPv6 loopback.
+        const launch = chromium.launchServer({ headless: true, channel, args, host: "127.0.0.1",
           timeout: Math.max(1, PDF_EXPORT_TIMEOUT_MS - (Date.now() - startedAt)) });
         pendingLaunch = launch;
         browserServer = await withAbort(launch, signal);

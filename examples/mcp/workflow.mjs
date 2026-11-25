@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ResumeLifeClient } from "./client.mjs";
 import { runTrainingWorkflow, resumeTrainingWorkflow } from "./training-workflow.mjs";
+import { runAuthoringWorkflow, runExtendedTrainingWorkflow, resumeContentWorkflow } from "./content-workflow.mjs";
 
 // Synthetic example results. A real Agent supplies its own model's output after reading the context.
 export const examplePortrait = { role: "本地工具集成工程师", must_skills: [{ name: "SQLite", weight: 8, why: "JD 要求维护本地数据库" }],
@@ -70,7 +71,17 @@ async function main() {
     await client.close();
     client = await ResumeLifeClient.connect(options);
     await resumeTrainingWorkflow((name, args) => client.call(name, args), training);
-    console.log(JSON.stringify({ ok: true, isolatedDemo: true, ...result, practiceSessionId: training.session.id, mockInterviewId: training.mock.id }, null, 2));
+    await client.close();
+    client = await ResumeLifeClient.connect({ ...options, preset: "authoring" });
+    const authoring = await runAuthoringWorkflow((name, args) => client.call(name, args), fixture);
+    await client.close();
+    client = await ResumeLifeClient.connect({ ...options, preset: "training" });
+    const extended = await runExtendedTrainingWorkflow((name, args) => client.call(name, args), { ...fixture, projectId: authoring.projectId });
+    await client.close();
+    client = await ResumeLifeClient.connect(options);
+    await resumeContentWorkflow((name, args) => client.call(name, args), authoring, extended);
+    console.log(JSON.stringify({ ok: true, isolatedDemo: true, ...result, practiceSessionId: training.session.id, mockInterviewId: training.mock.id,
+      authoringPreset: true, trainingPreset: true, seriesId: extended.seriesId, salaryId: extended.salaryId }, null, 2));
   } finally {
     await client?.close();
     if (path.dirname(path.resolve(temporary)) !== path.resolve(os.tmpdir()) || !path.basename(temporary).startsWith("resume-life-mcp-example-")) throw new Error("Unsafe demo cleanup path");

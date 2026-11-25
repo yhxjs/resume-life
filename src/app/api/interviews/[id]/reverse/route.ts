@@ -12,6 +12,7 @@ import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
 import { parseReverseInterviewResponse, type ReverseInterviewResponse } from "@/lib/model-protocol";
 import { buildReverseInterviewMessages, reverseInterviewPrompt } from "@/lib/interview-reverse-llm";
+import { storeInterviewReverse } from "@/lib/interview-training-store";
 
 type InterviewRow = {
   id: number;
@@ -110,10 +111,7 @@ async function handlePost(
         if (error instanceof ResumeContextError || error instanceof SyntaxError || error instanceof TypeError) return 409;
         throw error;
       }
-      const result = db.prepare(
-        "UPDATE interviews SET reverse_interview = ? WHERE id = ? AND report = '' AND reverse_interview = '' AND status = ?"
-      ).run(JSON.stringify(reverseData), interviewId, interview.status);
-      return result.changes === 1 ? 200 : 409;
+      return storeInterviewReverse(interviewId, interview.status, reverseData) ? 200 : 409;
     });
     if (status !== 200) {
       return NextResponse.json({ error: status === 499 ? "请求已取消" : "面试状态、岗位或背景材料已变更，请刷新后重试" }, { status });

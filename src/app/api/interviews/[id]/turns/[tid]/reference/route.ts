@@ -8,7 +8,7 @@ import { parseInterviewReference } from "@/lib/model-protocol";
 import { captureInterviewResumeContext } from "@/lib/interview-resume-context";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
-import { syncNotebookSnapshot } from "@/lib/notebook";
+import { storeInterviewReference } from "@/lib/interview-training-store";
 import { interviewFollowupContextParts } from "@/lib/interview-followup-context";
 import { buildInterviewReferenceMessages, INTERVIEW_REFERENCE_PROMPT } from "@/lib/interview-reference-llm";
 
@@ -76,18 +76,7 @@ async function handlePost(
         JSON.stringify(interviewFollowupContextParts(interviewId, turn)) !== JSON.stringify(followupParts)) {
       return { changes: 0 };
     }
-    const res = db.prepare(
-      "UPDATE interview_turns SET reference = ? WHERE id = ? AND interview_id = ? AND question = ? AND answer = ? AND comment = ? AND reference = ?"
-    ).run(reference, turnId, interviewId, turn.question, turn.answer, turn.comment, turn.reference);
-    if (res.changes === 1) {
-      syncNotebookSnapshot(db, "interview", turnId, {
-        reference,
-        answer: turn.answer,
-        comment: turn.comment,
-        scores: turn.scores,
-      });
-    }
-    return res;
+    return storeInterviewReference(interviewId, turnId, reference);
   });
   if (updated.changes === 0) {
     const exists = db.prepare("SELECT 1 FROM interview_turns WHERE id = ? AND interview_id = ?").get(turnId, interviewId);

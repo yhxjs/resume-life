@@ -41,7 +41,7 @@ it("generates portable JSON and Codex configuration with the current executable"
   expect(toml).not.toContain("TEST_PRIVATE_SETTINGS_KEY");
 });
 
-it.each(["readonly", "preparation", "collaboration"] as const)("generates the %s preset with its exact capability inventory", async preset => {
+it.each(["readonly", "preparation", "collaboration", "training", "authoring"] as const)("generates the %s preset with its exact capability inventory", async preset => {
   const generated = JSON.parse((await launch(["config", "json", preset], { RESUME_LIFE_MCP_ALLOWED_TOOLS: undefined })).stdout).mcpServers["resume-life"];
   expect(generated.env.RESUME_LIFE_MCP_WRITE_ENABLED).toBe(String(mcpPresets[preset].writeEnabled));
   expect(generated.env.RESUME_LIFE_MCP_LLM_ENABLED).toBe("false");

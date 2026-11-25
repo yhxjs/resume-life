@@ -35,7 +35,7 @@ export async function loadProjectContext(projectId: number, opts?: { maxChars?: 
 /** 提交前复核实际提供的完整记录；忽略未进入提示词的时间戳等元数据。 */
 export function projectContextMatches(projectId: number, expected: string): boolean {
   try {
-    return inTransaction(() => readProjectContext(projectId) === expected);
+    return inTransaction(() => readProjectContext(projectId, { maxChars: expected.length }) === expected);
   } catch (error) {
     if (error instanceof ProjectNotFoundError || error instanceof ProjectSummaryCorruptError
       || error instanceof ModelInputBudgetError || error instanceof DocumentTableProvenanceError) return false;

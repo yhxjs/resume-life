@@ -11,6 +11,7 @@ import { InterviewCommandError } from "./errors";
 import { errorMessage } from "@/lib/error-message";
 import { loadPriorSeriesContext } from "./series-context";
 import { parseSeriesAdvanceQuestion, SERIES_FIRST_PROMPT, buildSeriesAdvanceMessages } from "@/lib/interview-series-advance-llm";
+import { createInterviewSession } from "@/lib/interview-session-store";
 
 export async function advanceSeries(seriesId: number, fromInterviewId: number, signal: AbortSignal): Promise<{ id: number; round_no: number }> {
   if (!Number.isSafeInteger(fromInterviewId) || fromInterviewId <= 0) throw new InterviewCommandError("请指定有效的上一轮面试 ID", 400);
@@ -95,12 +96,8 @@ export async function advanceSeries(seriesId: number, fromInterviewId: number, s
         AND NOT EXISTS (SELECT 1 FROM interviews WHERE series_id = ? AND round_no >= ?)`)
         .run(seriesId, seriesId, last.id, last.round_no, last.report, seriesId, nextNo);
       if (current.changes !== 1) return null;
-      const result = db.prepare(
-        "INSERT INTO interviews (resume_id, resume_version_id, jd, rounds, style, series_id, round_no, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'ongoing', ?)"
-      ).run(series.resume_id, series.resume_version_id, series.jd, series.rounds, style, seriesId, nextNo, now());
-      const newId = Number(result.lastInsertRowid);
-      db.prepare("INSERT INTO interview_turns (interview_id, idx, kind, question) VALUES (?, 1, 'question', ?)").run(newId, question);
-      return newId;
+      return createInterviewSession({ resumeId: series.resume_id, versionId: series.resume_version_id!, jd: series.jd, rounds: series.rounds,
+        style, seriesId, roundNo: nextNo, question, at: now() });
     });
     if (interviewId === null) throw new InterviewCommandError("进阶面试资料、状态或前轮材料已变更，请刷新后重试", 409);
     return { id: interviewId, round_no: nextNo };

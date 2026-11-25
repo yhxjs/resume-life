@@ -23,8 +23,8 @@ export function readDraft(storage: Storage): { draft: Draft; storageError: boole
           draft.modules = saved.modules;
         }
         if (saved.baseRevisions && typeof saved.baseRevisions === "object" && !Array.isArray(saved.baseRevisions)) {
-          draft.baseRevisions = Object.fromEntries(Object.entries(saved.baseRevisions)
-            .filter((entry) => typeof entry[1] === "string" && /^[0-9a-f]{64}$/.test(entry[1])));
+          draft.baseRevisions = Object.assign(Object.create(null), Object.fromEntries(Object.entries(saved.baseRevisions)
+            .filter((entry) => typeof entry[1] === "string" && /^[0-9a-f]{64}$/.test(entry[1]))));
         }
       }
     }

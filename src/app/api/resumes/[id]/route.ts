@@ -15,6 +15,7 @@ import {
 import { isTemplateRef, sanitizeStyleOverrides } from "@/lib/templates";
 import { avatarUrlFromContent, removeUnreferencedUploadsByUrls } from "@/lib/upload-storage";
 import { loadCustomTemplate } from "@/lib/custom-templates";
+import { writeResumeDraftContent } from "@/lib/resume-draft-store";
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -179,7 +180,7 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
     let touched = false;
 
     if (typeof o.title === "string" && o.title.trim()) {
-      db.prepare("UPDATE resumes SET title = ?, updated_at = ? WHERE id = ?").run(o.title.trim(), ts, numericId);
+      writeResumeDraftContent(numericId, { title: o.title.trim(), updates: [], at: ts });
       touched = true;
     }
 
@@ -199,13 +200,8 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
     }
 
     if (updates.length) {
-      const update = db.prepare(
-        "UPDATE resume_modules SET content = ?, updated_at = ? WHERE resume_id = ? AND module_key = ?"
-      );
-      for (const entry of updates) {
-        update.run(entry.content, ts, numericId, entry.key);
-        touched = true;
-      }
+      writeResumeDraftContent(numericId, { updates, at: ts });
+      touched = true;
     }
 
     if (addType) {

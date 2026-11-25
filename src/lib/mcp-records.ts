@@ -18,7 +18,7 @@ import { readPracticeAnswerContext, readBankEntry, type GradeAccess } from "./mc
 
 export const MCP_COLLECTIONS = ["project_materials", "resume_versions", "application_history", "preparation_tasks", "application_interviews", "operation_logs"] as const;
 export type McpCollection = typeof MCP_COLLECTIONS[number];
-export const MCP_RECORD_KINDS = ["resume", "project", "project_material", "application", "application_submission", "application_interview", "application_interview_questions", "interview", "interview_turn", "practice_session", "practice_question", "interview_review", "notebook", "ai_draft", "resume_diagnosis", "jd_portrait", "intro", "interview_series", "ai_workflow_context", "review_card", "review_attempt", "review_submission", "bank_entry", "practice_answer_context"] as const;
+export const MCP_RECORD_KINDS = ["resume", "project", "project_material", "application", "application_submission", "application_interview", "application_interview_questions", "interview", "interview_turn", "practice_session", "practice_question", "interview_review", "notebook", "ai_draft", "resume_diagnosis", "jd_portrait", "intro", "interview_series", "ai_workflow_context", "review_card", "review_attempt", "review_submission", "bank_entry", "practice_answer_context", "project_summary_history"] as const;
 export type McpRecordKind = typeof MCP_RECORD_KINDS[number];
 
 const collections: Record<McpCollection, { sql: string; parent?: string }> = {
@@ -61,6 +61,7 @@ export function listMcpOperations(input: PageInput & { requestId?: string; tool?
 function record(kind: McpRecordKind, id: number, versionId?: number, workflowKind?: "jd" | "diagnosis" | "review", interviewId?: number, requestId?: string, timeZone?: string, gradeAccess?: GradeAccess): object | null {
   const db = getDb();
   switch (kind) {
+    case "project_summary_history": return db.prepare("SELECT id, project_id, summary, ai_baseline, material_snapshot, source, created_at FROM project_summary_history WHERE id=?").get(id) ?? null;
     case "bank_entry": return readBankEntry(id) ?? null;
     case "practice_answer_context": {
       if (!gradeAccess) throw new McpOperationError("FORBIDDEN", "评分依据需要来源权限");

@@ -13,7 +13,7 @@ const fail = (message) => { console.error(`[mcp] ${message}`); process.exitCode 
 
 async function main() {
   if (!["serve", "doctor", "config"].includes(mode) || process.argv.length > (mode === "config" ? 5 : 3)) {
-    throw new Error("用法：node scripts/mcp.mjs [serve|doctor|config [json|codex] [readonly|preparation|collaboration]]");
+    throw new Error(`用法：node scripts/mcp.mjs [serve|doctor|config [json|codex] [${Object.keys(mcpPresets).join("|")}]]`);
   }
   const [major, minor] = process.versions.node.split(".").map(Number);
   if (major !== 24 || minor < 21) throw new Error("需要 Node.js 24.21.0 或更新的 24.x。");
@@ -61,7 +61,7 @@ async function main() {
     const format = process.argv[3] ?? "json";
     const { allowlist, timeoutMs } = readMcpConfig();
     const presetName = process.argv[4];
-    if (presetName !== undefined && !Object.hasOwn(mcpPresets, presetName)) throw new Error("配置预设仅支持 readonly、preparation 或 collaboration。");
+    if (presetName !== undefined && !Object.hasOwn(mcpPresets, presetName)) throw new Error(`配置预设仅支持 ${Object.keys(mcpPresets).join("、")}。`);
     const profile = presetName === undefined ? undefined : mcpPresets[presetName];
     const selected = profile ? profile.tools.filter(name => allowlist === null || allowlist.has(name)) : allowlist === null ? null : [...allowlist];
     const hostPath = value => value.split(path.sep).join("/");

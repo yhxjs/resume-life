@@ -1,8 +1,29 @@
-import { dataGeneration, getDb } from "./db";
-import { isIntroKind, readStoredIntroSentences, type IntroKind, type IntroSentence } from "./intro";
+import { dataGeneration, getDb, inTransaction, now } from "./db";
+import { isIntroKind, readStoredIntroSentences, validateGeneratedIntroVersions, type IntroKind, type IntroSentence, type IntroVersionData } from "./intro";
 import { introVersionRevision, type IntroVersionSnapshot } from "./intro-versions";
+import { resolveResumeVersionId, ResumeVersionError } from "./resume-versions";
+import { loadIntroResumeContext } from "./intro-resume-context";
+import { ApplicationInputError } from "./applications";
 
 export type IntroVersionRow = { kind: IntroKind; sentences: IntroSentence[]; revision: string; read_error?: string; raw_sentences?: string };
+
+/** Web and external generation create both versions atomically from the same published source. */
+export function createIntroRecord(input: { resumeId: number; versionId: number; jd: string; resumeContext: string; versions: IntroVersionData[] }) {
+  const versions = validateGeneratedIntroVersions({ versions: input.versions });
+  if (!versions || !input.jd.trim()) throw new ApplicationInputError("自我介绍须包含有效岗位要求及完整双版本");
+  return inTransaction(() => {
+    resolveResumeVersionId(input.resumeId, input.versionId);
+    if (loadIntroResumeContext(input.resumeId, input.versionId) !== input.resumeContext) {
+      throw new ResumeVersionError("参考简历或所选发布版本已变化，请重新读取", 409);
+    }
+    const db = getDb(), timestamp = now();
+    const id = Number(db.prepare("INSERT INTO intros (resume_id, resume_version_id, jd, created_at) VALUES (?, ?, ?, ?)")
+      .run(input.resumeId, input.versionId, input.jd, timestamp).lastInsertRowid);
+    const insert = db.prepare("INSERT INTO intro_versions (intro_id, kind, sentences, updated_at) VALUES (?, ?, ?, ?)");
+    for (const version of versions) insert.run(id, version.kind, JSON.stringify(version.sentences), timestamp);
+    return id;
+  });
+}
 
 /** Web 与 MCP 读取同一原稿；异常版本保留原文，不用生成时的长度限制裁剪历史。 */
 export function loadIntroRecord(id: number) {

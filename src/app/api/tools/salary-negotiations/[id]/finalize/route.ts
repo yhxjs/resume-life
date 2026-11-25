@@ -2,7 +2,8 @@ import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
-import { getDb, inTransaction, now, acquireCommandLock } from "@/lib/db";
+import { inTransaction, now, acquireCommandLock } from "@/lib/db";
+import { storeSalaryReport } from "@/lib/career-tool-store";
 import { LlmConfigError } from "@/lib/llm";
 import {
   describeNegotiationCompany,
@@ -55,7 +56,6 @@ async function handlePost(req: Request, { params }: RouteParams) {
   const release = acquireCommandLock(`salary-negotiation:${id}`);
   if (!release) return NextResponse.json({ error: "当前谈判正在处理其他操作，请稍后重试" }, { status: 409 });
   try {
-    const db = getDb();
     const snapshot = readSalaryNegotiationSnapshot(id);
     if (!snapshot) {
       return NextResponse.json({ error: "谈判记录不存在" }, { status: 404 });
@@ -136,15 +136,7 @@ async function handlePost(req: Request, { params }: RouteParams) {
       if (!negotiationContextMatches({ phase: "finalize", negotiation: neg, turns })) return null;
       const base = readSalaryNegotiationSnapshot(id);
       if (!base) return null;
-      const written = db.prepare(
-        `UPDATE salary_negotiations
-         SET status = 'finished',
-             final_package = ?,
-             report = ?,
-             finished_at = ?
-         WHERE id = ? AND status = ?
-           AND (SELECT COUNT(*) FROM salary_negotiation_turns WHERE negotiation_id = ?) = ?`
-      ).run(finalPackageToSave, JSON.stringify(report), finishedAt, id, neg.status, id, turns.length);
+      const written = storeSalaryReport(id, neg.status, turns.length, finalPackageToSave, report, finishedAt);
       if (written.changes === 0) return null;
       const saved = readSalaryNegotiationSnapshot(id);
       if (!saved) throw new Error("谈判复盘保存后记录不存在");

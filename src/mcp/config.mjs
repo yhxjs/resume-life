@@ -20,21 +20,48 @@ export const toolAccess = Object.freeze({
   create_practice_session: "write", submit_practice_answer: "write",
   preview_intro_edit: "read", save_intro_edit: "write", create_project: "write", add_project_material: "write",
   get_mock_interview_state: "read", start_mock_interview: "write", answer_mock_interview: "write", finish_mock_interview: "write",
+  get_intro_generation_context: "read", save_generated_intro: "write", save_intro_comments: "write",
+  get_project_summary_context: "read", preview_project_summary: "read", save_project_summary: "write", list_project_summary_history: "read",
+  get_practice_generation_context: "read", save_generated_practice: "write",
+  list_intros: "read", list_jd_portraits: "read", list_interview_series: "read", list_bank_directions: "read",
+  get_interview_training_context: "read", save_interview_training_result: "write",
+  get_interview_series_context: "read", save_interview_series_result: "write", get_series_interview_state: "read", answer_series_interview: "write", finish_series_interview: "write",
+  get_resume_draft_context: "read", create_resume_draft: "write", preview_resume_draft_edit: "read", save_resume_draft_edit: "write",
+  list_career_records: "read", get_career_record: "read", get_career_workflow_context: "read", save_career_result: "write",
 });
 
-export const MCP_SERVER_VERSION = "1.2.0";
+export const MCP_SERVER_VERSION = "1.3.0";
 
 const reads = Object.keys(toolAccess).filter(name => toolAccess[name] === "read");
 const preparationWrites = ["create_application", "update_application", "generate_preparation_plan", "set_preparation_step",
   "create_preparation_task", "update_preparation_task", "schedule_application_interview", "reschedule_application_interview",
   "update_application_interview", "save_application_interview_questions", "set_preparation_resource"];
 const preset = (tools, writeEnabled) => Object.freeze({ tools: Object.freeze(tools), writeEnabled, llmEnabled: false });
+const commonReads = ["get_mcp_status", "read_record_section", "list_mcp_operations", "list_resumes", "get_resume", "list_resume_versions",
+  "list_projects", "get_project", "list_project_materials"];
+const trainingTools = [...commonReads,
+  "list_bank_directions", "list_bank_entries", "list_practice_sessions", "list_practice_questions", "get_practice_question", "get_practice_answer_context", "get_practice_generation_context",
+  "list_notebook_categories", "list_notebook", "get_notebook_entry", "list_review_cards", "get_review_card", "get_review_submission",
+  "list_interviews", "get_interview", "get_mock_interview_state", "get_interview_training_context", "list_interview_series", "get_interview_series", "get_interview_series_context", "get_series_interview_state",
+  "list_career_records", "get_career_record", "get_career_workflow_context",
+  "create_practice_session", "save_generated_practice", "submit_practice_answer", "bookmark_practice_question", "save_notebook_note", "submit_review",
+  "start_mock_interview", "answer_mock_interview", "finish_mock_interview", "save_interview_training_result",
+  "save_interview_series_result", "answer_series_interview", "finish_series_interview", "save_career_result"];
+const authoringTools = [...commonReads,
+  "list_intros", "get_intro", "get_intro_generation_context", "preview_intro_edit", "get_project_summary_context", "preview_project_summary", "list_project_summary_history",
+  "get_resume_draft_context", "preview_resume_draft_edit", "list_jd_portraits", "get_jd_portrait", "list_resume_diagnoses", "get_resume_diagnosis",
+  "list_applications", "get_application", "list_application_preparation_resources", "get_ai_workflow_context", "get_ai_draft", "list_ai_drafts", "get_ai_generation_request",
+  "get_interview_review", "list_interview_reviews", "get_application_interview_questions",
+  "create_project", "add_project_material", "save_project_summary", "save_generated_intro", "save_intro_comments", "save_intro_edit",
+  "create_resume_draft", "save_resume_draft_edit", "submit_ai_draft", "save_ai_draft"];
 
 /** Named presets generate concrete allowlists. External-model collaboration does not enable server model calls. */
 export const mcpPresets = Object.freeze({
   readonly: preset(reads, false),
   preparation: preset([...reads.filter(name => !["get_ai_workflow_context", "get_ai_draft", "list_ai_drafts", "get_ai_generation_request"].includes(name)), ...preparationWrites], true),
   collaboration: preset([...reads, ...Object.keys(toolAccess).filter(name => toolAccess[name] === "write")], true),
+  training: preset(trainingTools, true),
+  authoring: preset(authoringTools, true),
 });
 
 export class McpConfigurationError extends Error {}

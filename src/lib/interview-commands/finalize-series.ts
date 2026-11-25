@@ -7,6 +7,7 @@ import { normalizeSeriesReport, validateGeneratedSeriesReport, SERIES_REPORT_TEX
 import { InterviewCommandError } from "./errors";
 import { errorMessage } from "@/lib/error-message";
 import { buildSeriesFinalizeMessages, SERIES_FINALIZE_PROMPT } from "@/lib/interview-series-finalize-llm";
+import { storeInterviewSeriesReport } from "@/lib/interview-series-store";
 
 type StoredRound = SeriesFinalizeRoundSource & { id: number };
 
@@ -82,10 +83,7 @@ export async function finalizeSeries(seriesId: number, signal: AbortSignal): Pro
       if (JSON.stringify(seriesQuery.get(seriesId)) !== JSON.stringify(series) ||
           JSON.stringify(roundsQuery.all(seriesId)) !== JSON.stringify(rounds) ||
           JSON.stringify(rounds.map((row) => readAnsweredIndexes(row.id))) !== JSON.stringify(answeredIndexes)) return null;
-      return db.prepare(`
-        UPDATE interview_series SET status = 'finished', final_report = ?, finished_at = ?
-        WHERE id = ? AND status = ? AND final_report = ?
-      `).run(JSON.stringify(report), ts, seriesId, series.status, series.final_report);
+      return storeInterviewSeriesReport(seriesId, series.status, series.final_report, report, ts);
     });
     if (committed?.changes !== 1) throw new InterviewCommandError("进阶面试资料、状态或三轮报告已变更，请刷新后重试", 409);
     return { report, finished_at: ts };

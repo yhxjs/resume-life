@@ -109,6 +109,48 @@ afterEach(() => {
 });
 
 describe("resume save queue state machine", () => {
+  it.each(["__proto__", "constructor", "toString"])("persists and restores revision and status for module key %s", async (key) => {
+    const { queue, patch, storage, setServer, read } = setup();
+    const original = document();
+    original.modules = [{ key, type: "summary", label: "简介", sort: 0, content: { text: "原文" }, revision: "a".repeat(64) }];
+    setServer(original);
+    await queue.load(read);
+    const state = observe(queue);
+    queue.edit({ modules: { [key]: { text: "本地修改" } } });
+    expect(state.current?.status[key]).toBe("editing");
+    expect(Object.hasOwn(state.current!.status, key)).toBe(true);
+    expect(JSON.parse(storage.read()).baseRevisions[key]).toBe("a".repeat(64));
+    queue.disposeAutoWork();
+
+    const reloaded = new ResumeSaveQueue(patch, storage);
+    const restoredState = observe(reloaded);
+    await reloaded.load(read);
+    expect(restoredState.current?.status[key]).toBe("editing");
+    await reloaded.flush();
+    expect(patch.mock.calls[0]![0].moduleRevisions).toEqual({ [key]: "a".repeat(64) });
+    expect(restoredState.current?.status[key]).toBe("saved");
+    expect(storage.read()).toBe("");
+    reloaded.clearLocalDraft();
+    reloaded.edit({ modules: { [key]: { text: "再次修改" } } });
+    expect(restoredState.current?.status[key]).toBe("editing");
+    await reloaded.flush();
+    expect(restoredState.current?.status[key]).toBe("saved");
+    reloaded.disposeAutoWork();
+  });
+
+  it.each(["__proto__", "constructor", "toString"])("does not invent a missing restored revision for module key %s", async (key) => {
+    const { patch, storage, setServer, read } = setup();
+    const original = document();
+    original.modules.push({ key, type: "summary", label: "追加简介", sort: 2, content: { text: "服务器正文" }, revision: "b".repeat(64) });
+    setServer(original);
+    storage.write(JSON.stringify({ modules: { [key]: { text: "缺少版本的旧草稿" } }, baseRevisions: {} }));
+    const queue = new ResumeSaveQueue(patch, storage);
+    await queue.load(read);
+    await queue.flush();
+    expect(patch.mock.calls[0]![0].moduleRevisions).toEqual({ [key]: null });
+    queue.disposeAutoWork();
+  });
+
   it("清除本机草稿后，晚到保存响应不能重新写回敏感内容", async () => {
     const { queue, patch, storage, read } = setup();
     await queue.load(read);

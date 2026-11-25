@@ -3,6 +3,7 @@ import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { acquireCommandLock, getDb, inTransaction, now } from "@/lib/db";
+import { insertSalaryTurn } from "@/lib/career-tool-store";
 import { LlmConfigError } from "@/lib/llm";
 import {
   describeNegotiationCompany,
@@ -132,29 +133,7 @@ async function handlePost(req: Request, { params }: RouteParams) {
         AND NOT EXISTS (SELECT 1 FROM salary_negotiation_turns WHERE negotiation_id = ? AND turn_no >= ?)`)
         .run(id, id, turns.length, id, nextTurnNo);
       if (current.changes !== 1) return null;
-      const inserted = db
-        .prepare(
-          `INSERT INTO salary_negotiation_turns (
-            negotiation_id,
-            turn_no,
-            user_message,
-            hr_response,
-            hr_tactics,
-            hr_mindset,
-            mentor_analysis,
-            created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          id,
-          nextTurnNo,
-          userMessage,
-          hrResponse,
-          hrTactics,
-          JSON.stringify(hrMindset),
-          JSON.stringify(mentorAnalysis),
-          createdAt
-        );
+      const inserted = insertSalaryTurn(id, nextTurnNo, userMessage, generated, createdAt);
       const saved = readSalaryNegotiationSnapshot(id);
       if (!saved) throw new Error("谈判回合保存后记录不存在");
       return { inserted, base_revision: base.revision, revision: saved.revision };

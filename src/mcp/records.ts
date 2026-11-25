@@ -18,6 +18,7 @@ export const edit = { ...write, destructiveHint: true };
 export function json(value: object) { return { content: [{ type: "text" as const, text: JSON.stringify(boundMcpOutput(value)) }] }; }
 
 const sourceTools: Record<McpRecordKind, (keyof typeof toolAccess)[]> = {
+  project_summary_history: ["list_project_summary_history"],
   bank_entry: ["list_bank_entries"], practice_answer_context: ["get_practice_answer_context"],
   resume: ["get_resume"], project: ["get_project"], project_material: ["list_project_materials"], application: ["get_application"],
   application_submission: ["get_application", "get_resume"], application_interview: ["list_application_interviews"],

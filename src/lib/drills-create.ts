@@ -1,4 +1,4 @@
-import { getDb, inTransaction, now } from "@/lib/db";
+import { getDb, inTransaction } from "@/lib/db";
 
 import { LlmConfigError } from "@/lib/llm";
 
@@ -14,7 +14,8 @@ import { errorMessage } from "@/lib/error-message";
 
 import { loadBankContext, loadInterviewQuestionContext, loadInterviewTurnParts, readBankDrillSource } from "@/lib/drills-context";
 
-import { insertQuestions, parseQuestionItems } from "@/lib/drills-questions";
+import { parseQuestionItems } from "@/lib/drills-questions";
+import { createDrillRecord } from "@/lib/drill-store";
 import { hasQuestionContent, questionComparisonKey } from "@/lib/question-normalization";
 import { BANK_DRILL_QUESTION_PROMPT, buildBankDrillQuestionMessages, buildProjectDrillQuestionMessages, PROJECT_DRILL_QUESTION_PROMPT, serializeBankQuestion } from "@/lib/drill-question-llm";
 import { buildInterviewRemediationMessages, buildInterviewRemediationParts, readInterviewRemediationReport, REMEDIATION_PROMPT } from "@/lib/drill-remediation-llm";
@@ -56,17 +57,12 @@ export async function createProjectDrill(body: { project_id?: unknown }, count: 
 
   const questions = generatedQuestions(raw, count, true);
 
-  const db = getDb();
   return inTransaction(() => {
     signal.throwIfAborted();
     if (!projectContextMatches(projectId, context)) {
       throw new HttpError(409, "项目档案或材料已发生变化，请刷新后重新出题");
     }
-    const result = db
-      .prepare("INSERT INTO drills (source, project_id, created_at) VALUES ('project', ?, ?)")
-      .run(projectId, now());
-    const newId = Number(result.lastInsertRowid);
-    insertQuestions(newId, questions);
+    const newId = createDrillRecord({ source: "project", projectId, questions });
     return { id: newId, count: questions.length };
   });
 }
@@ -110,17 +106,12 @@ export async function createBankDrill(
 
   const questions = generatedQuestions(raw, count);
 
-  const db = getDb();
   return inTransaction(() => {
     signal.throwIfAborted();
     if (previous && JSON.stringify(readBankDrillSource(previous.drill.id)) !== JSON.stringify(previous)) {
       throw new HttpError(409, "原练习题目或背景已变化，请刷新后再出题");
     }
-    const result = db
-      .prepare("INSERT INTO drills (source, direction, jd, created_at) VALUES ('bank', ?, ?, ?)")
-      .run(direction, jd, now());
-    const newId = Number(result.lastInsertRowid);
-    insertQuestions(newId, questions);
+    const newId = createDrillRecord({ source: "bank", direction, jd, questions });
     return { id: newId, count: questions.length };
   });
 }
@@ -211,12 +202,7 @@ export async function createInterviewDrill(
     if (JSON.stringify(current.parts) !== JSON.stringify(context.parts)) {
       throw new HttpError(409, "面试追练依据已发生变化，请刷新后重新出题");
     }
-    const db = getDb();
-    const result = db
-      .prepare("INSERT INTO drills (source, interview_id, jd, focus, created_at) VALUES ('interview', ?, ?, ?, ?)")
-      .run(interviewId, context.jd, context.focus, now());
-    const newId = Number(result.lastInsertRowid);
-    insertQuestions(newId, questions);
+    const newId = createDrillRecord({ source: "interview", interviewId, jd: context.jd, focus: context.focus, questions });
     return { id: newId, count: questions.length };
   });
 }

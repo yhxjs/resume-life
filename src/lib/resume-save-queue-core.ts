@@ -39,7 +39,7 @@ export function isAbortError(error: unknown) {
 /** 已发写请求只能逻辑取消，并须留在串行槽中等待 transport drain。 */
 export class ResumeSaveQueue {
   private draft: Draft = {};
-  private revisions: Record<string, string> = {};
+  private revisions: Record<string, string> = Object.create(null);
   private titleRevision?: string;
   private styleRevision?: string;
   private dataGeneration?: string | null;
@@ -57,7 +57,7 @@ export class ResumeSaveQueue {
   private listeners = new Set<(state: SaveState) => void>();
   private state: SaveState = {
     phase: "idle",
-    status: {},
+    status: Object.create(null),
     error: "",
     storageError: false,
     attempt: 0,
@@ -122,7 +122,8 @@ export class ResumeSaveQueue {
   }
 
   private emit() {
-    this.state = { ...this.state, status: { ...this.state.status } };
+    // 模块 key 来自持久化数据，__proto__ 等名称也必须是普通字典项。
+    this.state = { ...this.state, status: Object.assign(Object.create(null), this.state.status) };
     for (const listener of this.listeners) listener(this.state);
   }
 
@@ -245,7 +246,7 @@ export class ResumeSaveQueue {
     }
     for (const key of Object.keys(draft.modules ?? {})) {
       if (!Object.hasOwn(this.draft.modules ?? {}, key) && this.revisions[key]) {
-        this.draft.baseRevisions ??= {};
+        this.draft.baseRevisions ??= Object.create(null) as Record<string, string>;
         this.draft.baseRevisions[key] = this.revisions[key];
       }
     }
@@ -338,7 +339,7 @@ export class ResumeSaveQueue {
       for (const key of keys) {
         const revision = this.revisions[key];
         if (revision && Object.hasOwn(this.draft.modules ?? {}, key)) {
-          this.draft.baseRevisions ??= {};
+          this.draft.baseRevisions ??= Object.create(null) as Record<string, string>;
           this.draft.baseRevisions[key] = revision;
         }
       }
@@ -499,7 +500,7 @@ export class ResumeSaveQueue {
   clearLocalDraft(): boolean {
     this.disposeAutoWork();
     this.draft = {};
-    this.state.status = {};
+    this.state.status = Object.create(null);
     this.state.phase = "idle";
     this.persist();
     this.emit();
@@ -513,9 +514,9 @@ export class ResumeSaveQueue {
   private updateRevisions(document: ResumeDocument) {
     this.titleRevision = document.resume.titleRevision;
     this.dataGeneration = document.resume.dataGeneration;
-    this.revisions = Object.fromEntries(document.modules
+    this.revisions = Object.assign(Object.create(null), Object.fromEntries(document.modules
       .filter((module) => typeof module.revision === "string")
-      .map((module) => [module.key, module.revision!]));
+      .map((module) => [module.key, module.revision!])));
   }
 
   load<T extends ResumeDocument>(read: () => Promise<T>) {

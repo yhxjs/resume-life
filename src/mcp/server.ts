@@ -16,6 +16,11 @@ import { registerMaintenanceTools } from "./maintenance-tools";
 import { registerPracticeTools } from "./practice-tools";
 import { registerAuthoringTools } from "./authoring-tools";
 import { registerMockInterviewTools } from "./mock-interview-tools";
+import { registerContentTools } from "./content-tools";
+import { registerDiscoveryTools } from "./discovery-tools";
+import { registerInterviewTrainingTools } from "./interview-training-tools";
+import { registerResumeDraftTools } from "./resume-draft-tools";
+import { registerCareerTools } from "./career-tools";
 import { wrapUntrustedData } from "@/lib/prompt-safety";
 import { PreparationInputError } from "@/lib/application-preparation";
 import { ResumeContextError, ResumeNotFoundError } from "@/lib/resume-errors";
@@ -272,6 +277,11 @@ export function createResumeLifeMcpServer(config = readMcpConfig()) {
   registerPracticeTools(tools);
   registerAuthoringTools(tools);
   registerMockInterviewTools(tools);
+  registerContentTools(tools);
+  registerDiscoveryTools(tools);
+  registerInterviewTrainingTools(tools);
+  registerResumeDraftTools(tools);
+  registerCareerTools(tools);
   tools.install();
   return server;
 }
