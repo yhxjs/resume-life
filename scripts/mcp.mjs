@@ -1,4 +1,5 @@
 import { readMcpConfig, permittedMcpTools, toolAccess, mcpPresets, MCP_SERVER_VERSION } from "../src/mcp/config.mjs";
+import { readMcpRepositoryRoots } from "../src/mcp/repository-config.mjs";
 import { Console } from "node:console";
 import fs from "node:fs";
 import path from "node:path";
@@ -46,10 +47,11 @@ async function main() {
 
   if (mode === "doctor") {
     const config = readMcpConfig();
+    const repositoryRoots = readMcpRepositoryRoots();
     // This check intentionally does not open, initialize or migrate a database.
     const enabledTools = permittedMcpTools(config);
     console.log(JSON.stringify({ ok: true, serverVersion: MCP_SERVER_VERSION, availablePresets: Object.keys(mcpPresets), node: process.version, project: root, dataDirectory: directory,
-      databaseExists: fs.existsSync(databasePath),
+      databaseExists: fs.existsSync(databasePath), repositoryRoots,
       writeEnabled: config.writeEnabled, llmEnabled: config.llmEnabled, timeoutMs: config.timeoutMs,
       allowedTools: config.allowlist === null ? null : [...config.allowlist],
       enabledTools, toolCount: enabledTools.length,
@@ -69,6 +71,7 @@ async function main() {
     const args = [hostPath(path.join(root, "scripts/mcp.mjs"))];
     // Carry restrictions into a desktop Host even when it does not inherit this shell's environment.
     const env = { RESUME_LIFE_DATA_DIR: hostPath(directory),
+      RESUME_LIFE_MCP_REPO_ROOTS: JSON.stringify(readMcpRepositoryRoots().map(hostPath)),
       RESUME_LIFE_MCP_WRITE_ENABLED: String(profile?.writeEnabled ?? false), RESUME_LIFE_MCP_LLM_ENABLED: "false",
       RESUME_LIFE_MCP_TIMEOUT_MS: String(timeoutMs),
       ...(selected === null ? {} : { RESUME_LIFE_MCP_ALLOWED_TOOLS: selected.join(",") }) };

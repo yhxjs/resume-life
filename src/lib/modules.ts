@@ -282,12 +282,31 @@ function genId(): string {
   return `it_${Date.now().toString(36)}_${idSeq}`;
 }
 
-function normalizeSubItems(rawSub: unknown): EntrySubItem[] {
+function stableIdFactory(raw: unknown, prefix: string): () => string {
+  const used = new Set<string>();
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    const value = item(entry);
+    if (typeof value.id === "string" && value.id) used.add(value.id);
+    for (const sub of Array.isArray(value.subItems) ? value.subItems : []) {
+      const id = item(sub).id;
+      if (typeof id === "string" && id) used.add(id);
+    }
+  }
+  let sequence = 0;
+  return () => {
+    let id: string;
+    do { id = `it_${prefix}_${++sequence}`; } while (used.has(id));
+    used.add(id);
+    return id;
+  };
+}
+
+function normalizeSubItems(rawSub: unknown, nextId: () => string): EntrySubItem[] {
   const list = Array.isArray(rawSub) ? rawSub : [];
   return list.map((s) => {
     const so = item(s);
     return {
-      id: typeof so.id === "string" && so.id ? so.id : genId(),
+      id: typeof so.id === "string" && so.id ? so.id : nextId(),
       label: str(so.label),
       value: str(so.value),
     };
@@ -325,7 +344,9 @@ function normalizeDescriptionItemsAndStyle(o: Record<string, unknown>): {
 }
 
 /** 逐字段清洗模块内容：非法类型回退默认值、补齐列表项 id，落库前统一走这里 */
-export function normalizeContent<K extends ModuleKey>(key: K, raw: unknown): ModuleContentMap[K] {
+export function normalizeContent<K extends ModuleKey>(key: K, raw: unknown, options?: { stableIdPrefix: string }): ModuleContentMap[K] {
+  // 旧备份可能没有条目 ID；读取时使用稳定命名空间，写入新条目仍生成独立 ID。
+  const nextId = options ? stableIdFactory(raw, options.stableIdPrefix) : genId;
   switch (key) {
     case "basic": {
       const o = item(raw);
@@ -363,7 +384,7 @@ export function normalizeContent<K extends ModuleKey>(key: K, raw: unknown): Mod
     case "education": {
       const list = Array.isArray(raw) ? raw : [];
       return list.map((v) => {
-        const o = withId(item(v), genId());
+        const o = withId(item(v), nextId());
         return {
           id: str(o.id),
           school: str(o.school),
@@ -378,8 +399,8 @@ export function normalizeContent<K extends ModuleKey>(key: K, raw: unknown): Mod
     case "work": {
       const list = Array.isArray(raw) ? raw : [];
       return list.map((v) => {
-        const o = withId(item(v), genId());
-        const subItems = normalizeSubItems(o.subItems);
+        const o = withId(item(v), nextId());
+        const subItems = normalizeSubItems(o.subItems, nextId);
         const { description, descriptionItems, descriptionStyle } =
           normalizeDescriptionItemsAndStyle(o);
 
@@ -399,8 +420,8 @@ export function normalizeContent<K extends ModuleKey>(key: K, raw: unknown): Mod
     case "projects": {
       const list = Array.isArray(raw) ? raw : [];
       return list.map((v) => {
-        const o = withId(item(v), genId());
-        const subItems = normalizeSubItems(o.subItems);
+        const o = withId(item(v), nextId());
+        const subItems = normalizeSubItems(o.subItems, nextId);
         const { description, descriptionItems, descriptionStyle } =
           normalizeDescriptionItemsAndStyle(o);
 
@@ -434,8 +455,8 @@ export function normalizeContent<K extends ModuleKey>(key: K, raw: unknown): Mod
     case "custom": {
       const list = Array.isArray(raw) ? raw : [];
       return list.map((v) => {
-        const o = withId(item(v), genId());
-        const subItems = normalizeSubItems(o.subItems);
+        const o = withId(item(v), nextId());
+        const subItems = normalizeSubItems(o.subItems, nextId);
         const { description, descriptionItems, descriptionStyle } =
           normalizeDescriptionItemsAndStyle(o);
 

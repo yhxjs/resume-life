@@ -86,7 +86,7 @@ export function validateBackupPayload(input: unknown): { valid: true; payload: B
   if (!isRecord(input.data)) {
     return { valid: false, error: "备份数据损坏：缺少 data 数据主体" };
   }
-  if (meta.version !== BACKUP_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, CURRENT_DB_VERSION].includes(meta.dbVersion as number)) {
+  if (meta.version !== BACKUP_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, CURRENT_DB_VERSION].includes(meta.dbVersion as number)) {
     return { valid: false, error: `不支持此备份版本：仅接受格式 ${BACKUP_VERSION}、数据库版本 ${CURRENT_DB_VERSION} 的完整备份` };
   }
   const tables = backupTablesForDbVersion(meta.dbVersion as number);

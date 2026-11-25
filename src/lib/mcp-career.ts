@@ -111,9 +111,10 @@ export function saveCareerResult(input: { source: CareerSource; expectedRevision
   });
 }
 
-export const CAREER_RECORD_KINDS = ["resume_defense", "career_gap_remedy", "salary_negotiation"] as const;
+export const CAREER_RECORD_KINDS = ["resume_defense", "career_gap_remedy", "salary_negotiation", "jargon_decoding"] as const;
 type CareerRecordKind = typeof CAREER_RECORD_KINDS[number];
 const specs = {
+  jargon_decoding: { table: "jargon_decodings", title: "substr(source_text,1,100)", text: "source_text" },
   resume_defense: { table: "resume_defenses", title: "title", text: "title || ' ' || target_role || ' ' || source_content" },
   career_gap_remedy: { table: "resignation_gap_remedies", title: "target_role", text: "target_role || ' ' || raw_story" },
   salary_negotiation: { table: "salary_negotiations", title: "target_role", text: "target_role || ' ' || target_company_tier" },

@@ -8,6 +8,7 @@ import { captureProjectSummaryInput, listProjectSummaryHistory, prepareProjectSu
 import { PROJECT_RESUME_SYSTEM_PROMPT, PROJECT_SUMMARY_SYSTEM_PROMPT } from "./project-summary-llm";
 import { hasProjectSummaryContent, isEmptyGeneratedProjectSummary, isGeneratedProjectSummary, normalizeSummary, parseSummary, validateGeneratedProjectResume } from "./summary";
 import { fitPage, pageParams, type PageInput } from "./mcp-read";
+import { iterateProjectMaterialSources } from "./project-materials";
 
 export type ProjectSummarySource = { projectId: number; mode: "full" | "resume-only" };
 type ProposalInput = ProjectSummarySource & { expectedRevision: string; result: unknown; acceptedKeys?: string[] };
@@ -18,6 +19,7 @@ function capture(source: ProjectSummarySource) {
   const archive = parseSummary(input.project.summary);
   if (!input.materialText.trim() && !hasProjectSummaryContent(archive)) throw new McpOperationError("INVALID_ARGUMENT", "请先补充项目材料或档案");
   return { input, context: { workflow: "project-summary", source, revisionId: input.revisionId, materials: input.materials,
+    sourceReferences: Array.from(iterateProjectMaterialSources(source.projectId), ({ id, filename }) => ({ id, filename: filename ?? "" })),
     rules: source.mode === "full" ? PROJECT_SUMMARY_SYSTEM_PROMPT : PROJECT_RESUME_SYSTEM_PROMPT,
     untrusted: { projectName: input.project.name, archive, materialText: input.materialText } } };
 }

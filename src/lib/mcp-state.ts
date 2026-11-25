@@ -38,3 +38,28 @@ export function recordMcpOperation(input: { requestId: string; tool: string; tar
     }));
   } catch { console.error("[mcp] 操作记录写入失败"); }
 }
+
+/** Multi-record operations retain their exact result alongside the receipt in one transaction. */
+export function mcpCreateWithResult<T extends { id: number }>(tool: string, key: string, input: object, create: () => T, exists: (id: number) => boolean): T {
+  return inTransaction(() => {
+    let created: T | undefined;
+    mcpCreateOnce(tool, key, input, () => { created = create(); return { id: created.id }; }, exists);
+    if (created) {
+      const result = JSON.stringify(created);
+      if (Buffer.byteLength(result) > 2 * 1024 * 1024) throw new McpOperationError("INVALID_ARGUMENT", "批量操作结果过大，请分批提交");
+      getDb().prepare("INSERT INTO mcp_operation_results(tool,request_key,result_json) VALUES(?,?,?)").run(tool, key, result);
+      return created;
+    }
+    return readMcpOperationResult(tool, key) as T;
+  });
+}
+
+export function readMcpOperationResult(tool: string, key: string): object {
+  const row = getDb().prepare(`SELECT r.generation,o.result_json FROM mcp_creation_receipts r
+    LEFT JOIN mcp_operation_results o ON o.tool=r.tool AND o.request_key=r.request_key WHERE r.tool=? AND r.request_key=?`)
+    .get(tool, key) as { generation: string; result_json: string | null } | undefined;
+  if (!row) throw new McpOperationError("NOT_FOUND", "操作回执不存在");
+  if (row.generation !== (dataGeneration() ?? "initial")) throw new McpOperationError("CONFLICT", "数据已恢复，旧批量结果失效");
+  if (!row.result_json) throw new McpOperationError("NOT_FOUND", "操作结果已失效");
+  return JSON.parse(row.result_json) as object;
+}

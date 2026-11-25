@@ -1,6 +1,6 @@
 import { normalizeScores, validateGeneratedScores, type ScoreMap } from "./scores";
 import type { ModuleData } from "./modules";
-import { stripRichText } from "./rich-text";
+import { escapePlainTextToRichHtml, stripRichText } from "./rich-text";
 import { hasQuestionContent } from "./question-normalization";
 
 /** 允许 AI 给出改写建议的字段白名单 */
@@ -35,6 +35,14 @@ export type DiagnosisReport = {
   summary: string;
   modules: ModuleDiagnosis[];
 };
+
+/** 将模型纯文本转为编辑器格式；技能与历史富文本保留原值，手动编辑值不经过此转换。 */
+export function diagnosisDraftForEditor(report: DiagnosisReport | null | undefined, suggestion: DiagnosisSuggestion): string | string[] {
+  const plainText = report?.textFormat === "plain-text" || report?.draftFormat === "plain-text";
+  return suggestion.field !== "items" && typeof suggestion.draft === "string" && plainText
+    ? escapePlainTextToRichHtml(suggestion.draft)
+    : suggestion.draft;
+}
 
 /** 新生成诊断的篇幅与数量上限；历史报告读取继续使用宽松兼容校验。 */
 export const DIAGNOSIS_OUTPUT_LIMITS = {

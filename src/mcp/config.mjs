@@ -28,18 +28,30 @@ export const toolAccess = Object.freeze({
   get_interview_series_context: "read", save_interview_series_result: "write", get_series_interview_state: "read", answer_series_interview: "write", finish_series_interview: "write",
   get_resume_draft_context: "read", create_resume_draft: "write", preview_resume_draft_edit: "read", save_resume_draft_edit: "write",
   list_career_records: "read", get_career_record: "read", get_career_workflow_context: "read", save_career_result: "write",
+  get_diagnosis_adoption_context: "read", preview_diagnosis_adoption: "read", save_diagnosis_adoption: "write",
+  get_resume_layout_context: "read", preview_resume_layout: "read", save_resume_layout: "write",
+  get_resume_export_context: "read", export_resume: "write", read_export_artifact: "read",
+  preview_bank_import: "read", save_bank_import: "write", get_bank_import_result: "read", get_notebook_organization_context: "read",
+  create_notebook_category: "write", rename_notebook_category: "write", move_notebook_entry: "write",
+  get_project_material_context: "read", preview_project_material_edit: "read", save_project_material_edit: "write",
+  get_repository_catalog: "read", capture_project_repository: "write", get_repository_capture: "read", save_repository_evidence: "write",
+  get_jargon_generation_context: "read", save_jargon_result: "write", get_portfolio_sources: "read", get_portfolio_context: "read", export_portfolio: "write",
+  get_workflow_catalog: "read",
+  get_resume_version_context: "read", compare_resume_versions: "read", publish_resume_version: "write", preview_resume_version_branch: "read", branch_resume_version: "write",
 });
 
-export const MCP_SERVER_VERSION = "1.3.0";
+export const MCP_SERVER_VERSION = "1.4.0";
 
 const reads = Object.keys(toolAccess).filter(name => toolAccess[name] === "read");
 const preparationWrites = ["create_application", "update_application", "generate_preparation_plan", "set_preparation_step",
   "create_preparation_task", "update_preparation_task", "schedule_application_interview", "reschedule_application_interview",
   "update_application_interview", "save_application_interview_questions", "set_preparation_resource"];
 const preset = (tools, writeEnabled) => Object.freeze({ tools: Object.freeze(tools), writeEnabled, llmEnabled: false });
-const commonReads = ["get_mcp_status", "read_record_section", "list_mcp_operations", "list_resumes", "get_resume", "list_resume_versions",
+const commonReads = ["get_workflow_catalog", "search_records", "get_mcp_status", "read_record_section", "list_mcp_operations", "list_resumes", "get_resume", "list_resume_versions",
   "list_projects", "get_project", "list_project_materials"];
 const trainingTools = [...commonReads,
+  "get_jargon_generation_context", "save_jargon_result",
+  "preview_bank_import", "save_bank_import", "get_bank_import_result", "get_notebook_organization_context", "create_notebook_category", "rename_notebook_category", "move_notebook_entry",
   "list_bank_directions", "list_bank_entries", "list_practice_sessions", "list_practice_questions", "get_practice_question", "get_practice_answer_context", "get_practice_generation_context",
   "list_notebook_categories", "list_notebook", "get_notebook_entry", "list_review_cards", "get_review_card", "get_review_submission",
   "list_interviews", "get_interview", "get_mock_interview_state", "get_interview_training_context", "list_interview_series", "get_interview_series", "get_interview_series_context", "get_series_interview_state",
@@ -48,6 +60,11 @@ const trainingTools = [...commonReads,
   "start_mock_interview", "answer_mock_interview", "finish_mock_interview", "save_interview_training_result",
   "save_interview_series_result", "answer_series_interview", "finish_series_interview", "save_career_result"];
 const authoringTools = [...commonReads,
+  "get_portfolio_sources", "get_portfolio_context", "export_portfolio", "get_jargon_generation_context", "save_jargon_result", "list_career_records", "get_career_record",
+  "get_project_material_context", "preview_project_material_edit", "save_project_material_edit", "get_repository_catalog", "capture_project_repository", "get_repository_capture", "save_repository_evidence",
+  "get_resume_export_context", "export_resume", "read_export_artifact",
+  "get_resume_layout_context", "preview_resume_layout", "save_resume_layout",
+  "get_diagnosis_adoption_context", "preview_diagnosis_adoption", "save_diagnosis_adoption", "get_resume_version_context", "compare_resume_versions", "publish_resume_version", "preview_resume_version_branch", "branch_resume_version",
   "list_intros", "get_intro", "get_intro_generation_context", "preview_intro_edit", "get_project_summary_context", "preview_project_summary", "list_project_summary_history",
   "get_resume_draft_context", "preview_resume_draft_edit", "list_jd_portraits", "get_jd_portrait", "list_resume_diagnoses", "get_resume_diagnosis",
   "list_applications", "get_application", "list_application_preparation_resources", "get_ai_workflow_context", "get_ai_draft", "list_ai_drafts", "get_ai_generation_request",

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:http";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { listenForFetch } from "../../tests/support/http-server";
 
 let directory: string;
 let db: import("node:sqlite").DatabaseSync;
@@ -319,7 +320,7 @@ it("reserves generation keys across two stdio processes and replays them after r
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(model) }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } })}\n\ndata: [DONE]\n\n`);
   });
-  await new Promise<void>(resolve => provider.listen(0, "127.0.0.1", resolve));
+  await listenForFetch(provider);
   const address = provider.address(); if (!address || typeof address === "string") throw new Error("Missing local provider address");
   (await import("@/lib/settings")).writeSettings({ base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "synthetic-provider-key", model_question: "fixture", api_format: "openai_chat", proxy_enabled: false });
   const children: Client[] = [];

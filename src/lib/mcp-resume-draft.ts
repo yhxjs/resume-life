@@ -11,7 +11,7 @@ import { mcpRevision } from "./mcp-revision";
 import { mcpCreateOnce } from "./mcp-state";
 import { avatarUrlFromContent, removeUnreferencedUploadsByUrls } from "./upload-storage";
 
-function capture(resumeId: number) {
+export function captureResumeDraft(resumeId: number) {
   const db = getDb(), resume = db.prepare("SELECT id,title,template,style_overrides,base_version_id,created_at,updated_at FROM resumes WHERE id=?").get(resumeId);
   if (!resume) throw new McpOperationError("NOT_FOUND", "简历不存在");
   const raw = db.prepare("SELECT module_key,type,label,sort,content FROM resume_modules WHERE resume_id=? ORDER BY sort,id").all(resumeId) as
@@ -22,10 +22,13 @@ function capture(resumeId: number) {
     if (!isModuleKey(row.type) || !isValidModuleContentInput(row.type, content)) throw new McpOperationError("INVALID_ARGUMENT", "草稿模块结构无效，请先核对原文");
     return { key: row.module_key, type: row.type, label: row.label, sort: row.sort, content };
   });
-  return { workflow: "resume-draft", resume, modules, raw,
+  const templateId = /^custom:(\d+)$/.exec(String(resume.template))?.[1];
+  const template = templateId ? db.prepare("SELECT * FROM resume_templates WHERE id=?").get(Number(templateId)) ?? null : null;
+  return { workflow: "resume-draft", resume, modules, raw, template,
     moduleSchema: z.toJSONSchema(mcpResumeModuleSchema),
-    instructions: "modules 提交所选模块的完整内容，未提交模块保留。已有模块不能改 type；新 key 追加模块。条目及子项须有稳定且唯一的 id。预览返回规范化后的实际保存值。发布另在网页操作。" };
+    instructions: "modules 提交所选模块的完整内容，未提交模块保留。已有模块不能改 type；新 key 追加模块。条目及子项须有稳定且唯一的 id。预览返回规范化后的实际保存值。发布使用独立版本工具。" };
 }
+const capture = captureResumeDraft;
 
 export function getResumeDraftContext(resumeId: number, page: ContextPageInput) {
   return inTransaction(() => mcpContextPage(capture(resumeId), page));

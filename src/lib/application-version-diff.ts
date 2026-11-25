@@ -1,6 +1,6 @@
 import type { ApplicationVersions } from "@/lib/applications-types";
 import type { ModuleData } from "@/lib/modules";
-import { resumeToMarkdown } from "@/lib/resume-markdown";
+import { resumeToReadableText } from "@/lib/resume-markdown";
 
 export type ApplicationDiffRow = {
   key: string;
@@ -17,7 +17,7 @@ function diffRow(key: string, label: string, before: string | null, after: strin
 }
 
 function moduleText(module: ModuleData): string {
-  const markdown = resumeToMarkdown("", [module]).replace(/^# 简历\n\n/, "").trim();
+  const markdown = resumeToReadableText("", [module]).replace(/^# 简历\n\n/, "").trim();
   return module.type === "basic" ? `## ${module.label}\n\n${markdown}`.trim() : markdown || `## ${module.label}`;
 }
 

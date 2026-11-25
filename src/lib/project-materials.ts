@@ -5,7 +5,7 @@ import { parseDocumentTableProvenance, serializeDocumentTableProvenance, type Do
 
 export type ProjectMaterialMetadata = { id: number; title: string; source: string; filename: string; content_length: number; created_at: string };
 export type ProjectMaterialDetail = Omit<ProjectMaterialMetadata, "content_length"> & { content: string; revision: string; tableProvenance?: DocumentTableProvenance };
-export type ProjectMaterialSource = { id: number; title: string; content: string; tableProvenance?: DocumentTableProvenance };
+export type ProjectMaterialSource = { id: number; title: string; content: string; filename?: string; tableProvenance?: DocumentTableProvenance };
 
 /** 来源只能由文件提取器提供；HTTP JSON 创建和编辑入口不接收来源声明。 */
 export function createProjectMaterial(projectId: number, input: {
@@ -28,11 +28,11 @@ export function createProjectMaterial(projectId: number, input: {
 
 /** 同时读取正文和已验证来源；原文形似布局标签不能自行取得提取来源。 */
 export function* iterateProjectMaterialSources(projectId: number, db = getDb()): IterableIterator<ProjectMaterialSource> {
-  const rows = db.prepare("SELECT m.id, m.title, m.content, p.provenance FROM project_materials m LEFT JOIN project_material_table_provenance p ON p.material_id = m.id WHERE m.project_id = ? ORDER BY m.id")
-    .iterate(projectId) as IterableIterator<{ id: number; title: string; content: string; provenance: string | null }>;
-  for (const { provenance, ...row } of rows) {
+  const rows = db.prepare("SELECT m.id, m.title, m.content, m.filename, p.provenance FROM project_materials m LEFT JOIN project_material_table_provenance p ON p.material_id = m.id WHERE m.project_id = ? ORDER BY m.id")
+    .iterate(projectId) as IterableIterator<{ id: number; title: string; content: string; filename: string; provenance: string | null }>;
+  for (const { provenance, filename, ...row } of rows) {
     const tableProvenance = parseDocumentTableProvenance(provenance, row.content);
-    yield { ...row, ...(tableProvenance === null ? {} : { tableProvenance }) };
+    yield { ...row, ...(filename ? { filename } : {}), ...(tableProvenance === null ? {} : { tableProvenance }) };
   }
 }
 
@@ -63,16 +63,16 @@ export function loadProjectMaterial(projectId: number, materialId: number): Proj
   return { ...material, revision: materialRevision(project_id, material) };
 }
 
-export function updateProjectMaterial(projectId: number, materialId: number, input: { title: string; content: string; expectedRevision: string }) {
+export function updateProjectMaterial(projectId: number, materialId: number, input: { title: string; content: string; expectedRevision: string; filename?: string }) {
   return inTransaction(() => {
     const current = loadProjectMaterial(projectId, materialId);
     if (!current) return { status: "missing" as const };
     if (current.revision !== input.expectedRevision) return { status: "conflict" as const };
     const db = getDb();
     db.prepare("UPDATE project_materials SET title = ?, content = ? WHERE id = ? AND project_id = ?").run(input.title, input.content, materialId, projectId);
-    const tableProvenance = current.content === input.content ? current.tableProvenance : undefined;
+    if (input.filename !== undefined) db.prepare("UPDATE project_materials SET filename=? WHERE id=? AND project_id=?").run(input.filename, materialId, projectId);
     if (current.content !== input.content) db.prepare("DELETE FROM project_material_table_provenance WHERE material_id = ?").run(materialId);
     db.prepare("UPDATE projects SET updated_at = ? WHERE id = ?").run(now(), projectId);
-    return { status: "ok" as const, revision: materialRevision(projectId, { id: materialId, ...input, tableProvenance }) };
+    return { status: "ok" as const, revision: loadProjectMaterial(projectId, materialId)!.revision };
   });
 }

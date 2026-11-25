@@ -1,7 +1,8 @@
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
-import { escapeLike, getDb, inTransaction, now } from "@/lib/db";
+import { escapeLike, getDb } from "@/lib/db";
+import { insertBankQuestions } from "@/lib/bank-storage";
 import { bankImportQuestions, bankKindOf, MAX_BANK_IMPORT } from "@/lib/bank";
 import { createCursorPage, parsePaginationParams } from "@/lib/cursor-pagination";
 
@@ -84,15 +85,7 @@ async function handlePost(req: Request) {
     return NextResponse.json({ error: "请粘贴题目，每行一题" }, { status: 400 });
   }
 
-  const db = getDb();
-  const ts = now();
-  const inserted = inTransaction(() => {
-    const statement = db.prepare(
-      "INSERT INTO bank_entries (direction, kind, question, created_at) VALUES (?, ?, ?, ?)"
-    );
-    for (const q of questions) statement.run(direction, kind, q, ts);
-    return questions.length;
-  });
+  const inserted = insertBankQuestions(direction, kind, questions).length;
   return NextResponse.json({ count: inserted }, { status: 201 });
 }
 

@@ -8,15 +8,14 @@ import { dataGeneration, getDb, inTransaction, now } from "@/lib/db";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { LlmConfigError } from "@/lib/llm";
-import { loadResume, loadResumeForModel } from "@/lib/resumes";
+import { loadResumeForModel } from "@/lib/resumes";
 import { ResumeContextError } from "@/lib/resume-errors";
-import { diagnosisValue, diagnosisValuesEqual, validateGeneratedDiagnosis, sanitizeModulesForDiagnosis, type DiagnosisReport, type DiagnosisSnapshot } from "@/lib/diagnosis";
+import { validateGeneratedDiagnosis, sanitizeModulesForDiagnosis, type DiagnosisReport, type DiagnosisSnapshot } from "@/lib/diagnosis";
 import { assertDiagnosisBudget, canArchiveDiagnosisSnapshot, diagnosisHistory, findMatchingDiagnosisJob, loadDiagnosis, saveDiagnosis } from "@/lib/diagnosis-history";
 import { BackupLimitError } from "@/lib/backup-limits";
 import { safeChat, LLM_FEATURES } from "@/lib/safe-llm";
 import { errorMessage } from "@/lib/error-message";
-import { stripRichText } from "@/lib/rich-text";
-import { writeDiagnosisValue } from "@/lib/module-descriptions";
+import { recordDiagnosisAdoption } from "@/lib/diagnosis-adoption";
 import { ModelInputBudgetError } from "@/lib/llm-input-budget";
 import { buildDiagnosisMessages } from "@/lib/diagnosis-llm";
 import { DIAGNOSIS_PRODUCTION_SYSTEM_PROMPT } from "@/lib/diagnosis-production-prompt";
@@ -179,50 +178,15 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
       !Number.isSafeInteger(body.suggestion_index) || (body.suggestion_index as number) < 0) {
     return NextResponse.json({ error: "采纳参数无效" }, { status: 400 });
   }
-  const moduleKey = body.module_key;
-  const suggestionIndex = body.suggestion_index as number;
-  return inTransaction(() => {
-    const current = loadDiagnosis(numericId, body.diagnosis_id as number);
-    if (!current) return NextResponse.json({ error: "诊断记录不存在" }, { status: 404 });
-    const suggestion = current.report?.modules.find((module) => module.moduleKey === moduleKey)?.suggestions[suggestionIndex];
-    const value = body.value;
-    if (!suggestion || (suggestion.field === "items"
-      ? !Array.isArray(value) || value.length === 0 || !value.every((item) => typeof item === "string" && item.trim())
-      : typeof value !== "string" || !value.trim())) {
-      return NextResponse.json({ error: "建议或采纳内容无效" }, { status: 400 });
-    }
-    const data = loadResume(numericId);
-    const mod = data?.modules.find((entry) => entry.key === moduleKey);
-    // 复用编辑器的写入入口，统一经历抬头清理、列表和富文本整理规则。
-    let savedValue: string | string[] | null = value as string | string[];
-    if (typeof value === "string" && mod &&
-        (mod.type === "work" || mod.type === "projects" || mod.type === "education" || mod.type === "summary")) {
-      const content = writeDiagnosisValue(mod.type, mod.content, suggestion.itemId, value);
-      savedValue = content === null ? null : diagnosisValue([{ ...mod, content }], moduleKey, suggestion);
-    }
-    if (typeof savedValue === "string" && !stripRichText(savedValue).trim()) {
-      return NextResponse.json({ error: "采纳内容整理后为空，请补充正文后重新采纳" }, { status: 400 });
-    }
-    if (!data || savedValue === null || JSON.stringify(diagnosisValue(data.modules, moduleKey, suggestion)) !== JSON.stringify(savedValue)) {
-      return NextResponse.json({ error: "采纳内容尚未保存或已被修改，请确认简历保存成功后重试" }, { status: 409 });
-    }
-    const existing = current.adoptions.find((entry) => entry.moduleKey === moduleKey && entry.suggestionIndex === suggestionIndex);
-    // 只把相同实际保存值视为幂等重试；历史技能兼容换行字符串，不改写原记录。
-    if (existing && !diagnosisValuesEqual(suggestion.field, existing.value, savedValue)) {
-      return NextResponse.json({ error: "该建议已记录其他采纳内容，请点击“继续编辑草稿”刷新采纳状态并核对历史记录" }, { status: 409 });
-    }
-    if (!existing) {
-      current.adoptions.push({ moduleKey, suggestionIndex, value: savedValue as string | string[], applied_at: now() });
-      const adoptions = JSON.stringify(current.adoptions);
-      const stored = getDb().prepare("SELECT * FROM resume_diagnoses WHERE resume_id = ? AND id = ?").get(numericId, current.id)!;
-      try { assertDiagnosisBudget({ ...stored, adoptions }); } catch (err) {
-        if (!(err instanceof BackupLimitError)) throw err;
-        return NextResponse.json({ error: "采纳记录内容过大，无法完整保存" }, { status: 413 });
-      }
-      getDb().prepare("UPDATE resume_diagnoses SET adoptions = ? WHERE resume_id = ? AND id = ?").run(adoptions, numericId, current.id);
-    }
+  try {
+    const current = recordDiagnosisAdoption(numericId, { diagnosisId: body!.diagnosis_id as number,
+      moduleKey: body!.module_key as string, suggestionIndex: body!.suggestion_index as number, value: body!.value });
     return NextResponse.json({ ...current, ...diagnosisHistory(numericId, current) });
-  });
+  } catch (error) {
+    if (error instanceof ResumeVersionError) return NextResponse.json({ error: error.message }, { status: error.status });
+    if (error instanceof BackupLimitError) return NextResponse.json({ error: "采纳记录内容过大，无法完整保存" }, { status: 413 });
+    throw error;
+  }
 }
 
 export const GET = withRouteErrorHandling("GET /api/resumes/[id]/diagnose", handleGet);

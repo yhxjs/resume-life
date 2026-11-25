@@ -10,13 +10,13 @@ import type {
   DiagnosisHistoryResponse,
   DiagnosisSuggestion,
 } from "@/lib/diagnosis";
-import { diagnosisValue, diagnosisValuesEqual } from "@/lib/diagnosis";
+import { diagnosisDraftForEditor, diagnosisValue, diagnosisValuesEqual } from "@/lib/diagnosis";
 import { writeDiagnosisValue } from "@/lib/module-descriptions";
 import type { ModuleData } from "@/lib/modules";
 import { alertDialog, confirmDialog } from "@/components/common/confirm-dialog";
 import { DiagnosisChanges } from "@/components/resume/diagnosis-changes";
 import { getResumeSaveQueue } from "@/lib/resume-save-queue";
-import { resumeToMarkdown } from "@/lib/resume-markdown";
+import { resumeToReadableText } from "@/lib/resume-markdown";
 import { useModalFocus } from "@/hooks/use-modal-focus";
 import { jsonFetch } from "@/lib/fetcher";
 import {
@@ -39,7 +39,7 @@ import { ResumeVersionSelect } from "@/components/resume/resume-version-select";
 import { ResumeVersionBadge } from "@/components/resume/resume-version-badge";
 import { RichText } from "@/components/resume/rich-text";
 import { RichTextEditor } from "@/components/resume/rich-text-editor";
-import { escapePlainTextToRichHtml, splitRichTextToLines, stripRichText } from "@/lib/rich-text";
+import { splitRichTextToLines, stripRichText } from "@/lib/rich-text";
 import { LoadingOverlay } from "@/components/common/loading-overlay";
 import { InlineError } from "@/components/common/inline-error";
 
@@ -285,10 +285,7 @@ export function DiagnoseDialog({
     const draft = drafts[key];
     if (typeof draft === "string") return draft;
     if (Array.isArray(draft)) return draft.join("\n");
-    const text = valueText(s.draft);
-    // 只转换新报告的模型纯文本；手动草稿和历史富文本已经是编辑器格式。
-    const plainText = report?.textFormat === "plain-text" || report?.draftFormat === "plain-text";
-    return s.field !== "items" && plainText ? escapePlainTextToRichHtml(text) : text;
+    return valueText(diagnosisDraftForEditor(report, s));
   }
 
   function draftLinesOf(key: string, s: DiagnosisSuggestion): string[] {
@@ -582,7 +579,7 @@ export function DiagnoseDialog({
           {report && record && <ResumeVersionBadge resume_version_id={record.resume_version_id} resume_version={selectedResume?.versions.find((version) => version.id === record.resume_version_id)?.version} resume_version_name={selectedResume?.versions.find((version) => version.id === record.resume_version_id)?.name} />}
           {report ? (
             <>
-              {record && <div className="text-sm text-muted"><p>{record.job_title} · #{record.id}</p><p className="mt-1">本次建议已采纳 {record.adoptions.length} / {report.modules.reduce((sum, module) => sum + module.suggestions.length, 0)} 条</p><details className="mt-2"><summary className="cursor-pointer">查看本次岗位 JD</summary><pre className="mt-2 whitespace-pre-wrap break-words font-sans text-xs">{record.jd}</pre></details><details className="mt-2"><summary className="cursor-pointer">查看诊断时的简历快照</summary><pre role="region" aria-label="诊断时简历快照" className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-surface p-3 font-sans text-xs leading-relaxed">{resumeToMarkdown(record.resume_snapshot.title, record.resume_snapshot.modules)}</pre></details></div>}
+              {record && <div className="text-sm text-muted"><p>{record.job_title} · #{record.id}</p><p className="mt-1">本次建议已采纳 {record.adoptions.length} / {report.modules.reduce((sum, module) => sum + module.suggestions.length, 0)} 条</p><details className="mt-2"><summary className="cursor-pointer">查看本次岗位 JD</summary><pre className="mt-2 whitespace-pre-wrap break-words font-sans text-xs">{record.jd}</pre></details><details className="mt-2"><summary className="cursor-pointer">查看诊断时的简历快照</summary><pre role="region" aria-label="诊断时简历快照" className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-surface p-3 font-sans text-xs leading-relaxed">{resumeToReadableText(record.resume_snapshot.title, record.resume_snapshot.modules)}</pre></details></div>}
               <div className="rounded-xl border border-primary/25 bg-primary-soft/40 p-4 sm:p-5">
                 <div className="flex items-center justify-between gap-4">
                   <h3 className="text-base font-semibold">总体评价</h3>

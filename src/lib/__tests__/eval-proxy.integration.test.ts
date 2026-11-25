@@ -5,6 +5,7 @@ import { connect, type Socket } from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { listenForFetch } from "../../../tests/support/http-server";
 
 const directories: string[] = [];
 const servers: Server[] = [];
@@ -20,7 +21,7 @@ async function listen(server: Server) {
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
   });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  await listenForFetch(server);
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Missing local server address");
   return `127.0.0.1:${address.port}`;

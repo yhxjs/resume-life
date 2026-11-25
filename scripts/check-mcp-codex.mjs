@@ -12,6 +12,7 @@ import { mcpPresets, toolAccess } from "../src/mcp/config.mjs";
 import { examplePortrait, runApplicationWorkflow } from "../examples/mcp/workflow.mjs";
 import { resumeTrainingWorkflow, runTrainingWorkflow } from "../examples/mcp/training-workflow.mjs";
 import { runAuthoringWorkflow, runExtendedTrainingWorkflow, resumeContentWorkflow, readContext } from "../examples/mcp/content-workflow.mjs";
+import { runDeliveryWorkflow, resumeDeliveryWorkflow } from "../examples/mcp/delivery-workflow.mjs";
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -20,6 +21,7 @@ const codex = process.env.RESUME_LIFE_CODEX_BIN || "codex";
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "resume-life-codex-check-"));
 const readTools = Object.keys(toolAccess).filter(name => toolAccess[name] === "read");
 const env = { ...process.env, RESUME_LIFE_DATA_DIR: path.join(temporary, "data"), RESUME_LIFE_MCP_WRITE_ENABLED: "false",
+  RESUME_LIFE_MCP_REPO_ROOTS: JSON.stringify([path.join(temporary, "repository")]),
   RESUME_LIFE_MCP_LLM_ENABLED: "false", RESUME_LIFE_MCP_ALLOWED_TOOLS: readTools.join(","), RESUME_LIFE_MCP_TIMEOUT_MS: "120000" };
 
 async function configuration(format, allowed = readTools, preset) {
@@ -135,6 +137,7 @@ async function main() {
   let training;
   let authoring;
   let extended;
+  let delivery;
   try {
     assert.deepEqual(host.tools.map(tool => tool.name).sort(), [...mcpPresets.collaboration.tools].sort());
     for (const tool of host.tools) assert.equal(tool.outputSchema?.oneOf?.length, 2, `${tool.name} output contract`);
@@ -142,11 +145,13 @@ async function main() {
     training = await runTrainingWorkflow(async (name, args) => toolData(await host.call(name, args)), { ...trainingFixture, prefix: "codex-training" });
     authoring = await runAuthoringWorkflow(async (name, args) => toolData(await host.call(name, args)), { ...trainingFixture, prefix: "codex-authoring" });
     extended = await runExtendedTrainingWorkflow(async (name, args) => toolData(await host.call(name, args)), { ...trainingFixture, projectId: authoring.projectId, prefix: "codex-extended-training" });
+    delivery = await runDeliveryWorkflow(async (name, args) => toolData(await host.call(name, args)), { resumeId: authoring.draftId, projectId: authoring.projectId, prefix: "codex-delivery" });
   } finally { await host.stop(); }
   const recovered = await startCodex(collaboration, "reconnected-client");
   try {
     await resumeTrainingWorkflow(async (name, args) => toolData(await recovered.call(name, args)), training);
     await resumeContentWorkflow(async (name, args) => toolData(await recovered.call(name, args)), authoring, extended);
+    await resumeDeliveryWorkflow(async (name, args) => toolData(await recovered.call(name, args)), delivery);
     const applicationId = result.applicationId;
     const receipt = toolData(await recovered.call("get_ai_generation_request", { idempotencyKey: "codex-full-workflow:portrait" }));
     assert.equal(receipt.phase, "saved");
@@ -163,6 +168,12 @@ async function main() {
     toolError(await recovered.call("submit_practice_answer", training.answer), "CONFLICT");
     toolError(await recovered.call("answer_mock_interview", training.turn), "CONFLICT");
     for (const workflow of [authoring, extended]) for (const { name, args } of workflow.receipts) toolError(await recovered.call(name, args), "CONFLICT");
+    for (const { name, args } of delivery.receipts) toolError(await recovered.call(name, args), "CONFLICT");
+    for (const artifact of delivery.artifacts) toolError(await recovered.call("read_export_artifact", { artifactId: artifact.artifactId }), "CONFLICT");
+    toolError(await recovered.call("get_bank_import_result", { idempotencyKey: delivery.bankKey }), "CONFLICT");
+    toolError(await recovered.call("get_repository_capture", { idempotencyKey: delivery.captureKey }), "CONFLICT");
+    assert.equal(toolData(await recovered.call("get_application", { id: delivery.applicationId })).application.resume_version_id, delivery.versionId);
+    assert.equal((await readContext(async (name, args) => toolData(await recovered.call(name, args)), "get_career_record", { kind: "jargon_decoding", id: delivery.jargonId })).value.record.id, delivery.jargonId);
     assert.equal(toolData(await recovered.call("get_interview_series", { id: extended.seriesId })).status, "finished");
     assert.equal((await readContext(async (name, args) => toolData(await recovered.call(name, args)), "get_career_record", { kind: "salary_negotiation", id: extended.salaryId })).value.record.status, "finished");
     assert.equal(toolData(await recovered.call("get_interview", { id: training.mock.id })).interview.report.depth, 8.5);
@@ -181,6 +192,8 @@ async function main() {
       outsideProjectDirectory: true, structuredOutput: true, idempotentCreation: true, preparationPlan: true,
       interviewQuestions: true, externalDrafts: true, practiceReview: true, introEdit: true, projectMaterial: true, mockInterview: true,
       introCreation: true, projectSummary: true, generatedPractice: true, interviewTraining: true, interviewSeries: true, resumeDraft: true, careerTools: true,
+      diagnosisAdoption: true, resumePublication: true, resumeFiles: true, resumeLayout: true, bankImport: true,
+      notebookOrganization: true, repositoryEvidence: true, jargonDecoding: true, portfolioExport: true,
       reconnect: true, revisionConflict: true, backupRestore: backup }, null, 2));
   } finally { await recovered.stop(); }
 }

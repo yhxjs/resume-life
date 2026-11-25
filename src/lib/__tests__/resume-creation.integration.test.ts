@@ -84,7 +84,7 @@ describe("简历创建和复制的领域写入", () => {
       expect.objectContaining({ type: "skills", items: [text] }),
     ]));
     const markdown = resumeToMarkdown("字面量导入", loaded.modules);
-    expect(markdown).toContain(text);
+    expect(markdown).toContain(String.raw`维护 Array\<T\>、\<template\>、\<strong\>字面标签\</strong\>、\&amp; 与 C:\\new\\resume`);
     expect(markdown).not.toContain("&amp;amp;");
     const copied = await copy(id);
     expect(copied.status).toBe(201);

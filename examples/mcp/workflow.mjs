@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { ResumeLifeClient } from "./client.mjs";
 import { runTrainingWorkflow, resumeTrainingWorkflow } from "./training-workflow.mjs";
 import { runAuthoringWorkflow, runExtendedTrainingWorkflow, resumeContentWorkflow } from "./content-workflow.mjs";
+import { runDeliveryWorkflow, resumeDeliveryWorkflow, verifyConcurrentDelivery } from "./delivery-workflow.mjs";
 
 // Synthetic example results. A real Agent supplies its own model's output after reading the context.
 export const examplePortrait = { role: "本地工具集成工程师", must_skills: [{ name: "SQLite", weight: 8, why: "JD 要求维护本地数据库" }],
@@ -62,7 +63,7 @@ async function main() {
     const dataDirectory = path.join(temporary, "data");
     const fixture = JSON.parse(execFileSync(process.execPath, [fileURLToPath(new URL("../../scripts/check-mcp-training-fixture.mjs", import.meta.url)), temporary],
       { cwd: temporary, env: { ...process.env, RESUME_LIFE_DATA_DIR: dataDirectory }, windowsHide: true, encoding: "utf8" }));
-    const options = { dataDirectory, preset: "collaboration", cwd: temporary };
+    const options = { dataDirectory, preset: "collaboration", cwd: temporary, repositoryRoots: [fixture.repositoryRoot] };
     client = await ResumeLifeClient.connect(options);
     const result = await runApplicationWorkflow((name, args) => client.call(name, args));
     const draft = await client.call("get_ai_draft", { id: result.reviewDraftId });
@@ -80,8 +81,16 @@ async function main() {
     await client.close();
     client = await ResumeLifeClient.connect(options);
     await resumeContentWorkflow((name, args) => client.call(name, args), authoring, extended);
+    const delivery = await runDeliveryWorkflow((name, args) => client.call(name, args), { resumeId: authoring.draftId, projectId: authoring.projectId });
+    await client.close();
+    client = await ResumeLifeClient.connect(options);
+    await resumeDeliveryWorkflow((name, args) => client.call(name, args), delivery);
+    const peer = await ResumeLifeClient.connect(options);
+    try { await verifyConcurrentDelivery((name, args) => client.call(name, args), (name, args) => peer.call(name, args), delivery); }
+    finally { await peer.close(); }
     console.log(JSON.stringify({ ok: true, isolatedDemo: true, ...result, practiceSessionId: training.session.id, mockInterviewId: training.mock.id,
-      authoringPreset: true, trainingPreset: true, seriesId: extended.seriesId, salaryId: extended.salaryId }, null, 2));
+      authoringPreset: true, trainingPreset: true, seriesId: extended.seriesId, salaryId: extended.salaryId,
+      resumeDelivery: true, repositoryEvidence: true, portfolioExport: true, independentProcessConcurrency: true }, null, 2));
   } finally {
     await client?.close();
     if (path.dirname(path.resolve(temporary)) !== path.resolve(os.tmpdir()) || !path.basename(temporary).startsWith("resume-life-mcp-example-")) throw new Error("Unsafe demo cleanup path");
@@ -90,5 +99,5 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  main().catch(error => { console.error(error.message); process.exitCode = 1; });
+  main().catch(error => { console.error(`[${error.tool ?? "workflow"}] ${error.message}`); process.exitCode = 1; });
 }

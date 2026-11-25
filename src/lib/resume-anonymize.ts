@@ -251,22 +251,31 @@ function transformAstTextNodes(nodes: RichTextNode[], rules: CustomSensitiveRule
       const spans = paragraph.map((node) => {
         const start = offset;
         offset += node.text.length;
-        return { node, start, end: offset };
+        return { node, start, end: offset, cursor: 0, parts: [] as string[] };
       });
       const text = paragraph.map((node) => node.text).join("");
       const regex = new RegExp(escapeRegex(rule.source.trim()), rule.matchCase ? "g" : "gi");
-      // 倒序写回原叶节点，避免长度变化影响前面的匹配；替换文本继承起点格式。
-      for (const match of Array.from(text.matchAll(regex)).reverse()) {
+      // 逐个匹配预留预算，按叶节点累积后一次写回；不先收集全部匹配或反复复制增长中的文本。
+      let spanIndex = 0;
+      for (const match of text.matchAll(regex)) {
         onReplacement?.(rule);
         const start = match.index;
         const end = start + match[0].length;
-        for (const span of spans) {
-          if (span.end <= start || span.start >= end) continue;
+        while (spanIndex < spans.length && spans[spanIndex]!.end <= start) spanIndex++;
+        let index = spanIndex;
+        for (; index < spans.length && spans[index]!.start < end; index++) {
+          const span = spans[index]!;
           const from = Math.max(0, start - span.start);
           const to = Math.min(span.end - span.start, end - span.start);
           const replacement = span.start <= start ? rule.replacement : "";
-          span.node.text = span.node.text.slice(0, from) + replacement + span.node.text.slice(to);
+          span.parts.push(span.node.text.slice(span.cursor, from), replacement);
+          span.cursor = to;
         }
+        spanIndex = Math.max(spanIndex, index - 1);
+      }
+      for (const span of spans) {
+        span.parts.push(span.node.text.slice(span.cursor));
+        span.node.text = span.parts.join("");
       }
     }
   }
@@ -458,23 +467,27 @@ function transformResumeModules(modules: ModuleData[], config: AnonymizeConfig, 
   return cloned;
 }
 
-export function anonymizeResumeTitle(title: string, modules: ModuleData[], config: AnonymizeConfig): string {
+export function anonymizeResumeTitle(title: string, modules: ModuleData[], config: AnonymizeConfig, onReplacement?: ReplacementObserver): string {
   let rawTitle = (title || "简历").trim();
   const basicMod = modules.find((m) => m.type === "basic");
   const rawName = ((basicMod?.content ?? {}) as Partial<BasicContent>).name;
   if (config.name.enabled && rawName && typeof rawName === "string" && rawName.trim()) {
     const maskedName = maskPersonName(rawName, config.name.mode, config.name.customPlaceholder);
-    rawTitle = rawTitle.replace(new RegExp(escapeRegex(rawName.trim()), "g"), () => maskedName);
+    const rule = { id: "resume-title-name", source: rawName.trim(), replacement: maskedName, matchCase: true };
+    rawTitle = rawTitle.replace(new RegExp(escapeRegex(rule.source), "g"), () => {
+      onReplacement?.(rule);
+      return maskedName;
+    });
   }
 
-  const titleWithRules = replaceSensitiveText(rawTitle, config.customRules);
+  const titleWithRules = replaceSensitiveText(rawTitle, config.customRules, onReplacement);
   return titleWithRules.startsWith("[脱敏版]") ? titleWithRules : `[脱敏版] ${titleWithRules}`;
 }
 
-export function anonymizeResumeData(data: ResumeWithModules, config: AnonymizeConfig): ResumeWithModules {
+export function anonymizeResumeData(data: ResumeWithModules, config: AnonymizeConfig, onReplacement?: ReplacementObserver): ResumeWithModules {
   const clonedResume = structuredClone(data.resume);
-  const anonymizedModules = anonymizeResumeModules(data.modules, config);
-  clonedResume.title = anonymizeResumeTitle(data.resume.title, data.modules, config);
+  const anonymizedModules = anonymizeResumeModules(data.modules, config, onReplacement);
+  clonedResume.title = anonymizeResumeTitle(data.resume.title, data.modules, config, onReplacement);
 
   return {
     ...data,

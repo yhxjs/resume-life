@@ -61,7 +61,7 @@ function parseJsonLimited(value: string, maxChars: number): unknown {
   return parseJson(value);
 }
 
-export function searchRecords(query: string) {
+export function searchRecords(query: string, permits: (name: string) => boolean = () => true) {
   const q = query.trim();
   if (q.length < 2 || q.length > 100) throw new Error("搜索词须为 2–100 个字符");
   const db = getDb();
@@ -86,7 +86,31 @@ export function searchRecords(query: string) {
     WHERE d.direction LIKE ? ESCAPE '\\' OR d.jd LIKE ? ESCAPE '\\' OR d.focus LIKE ? ESCAPE '\\' OR
       q.question LIKE ? ESCAPE '\\' OR q.answer LIKE ? ESCAPE '\\'
     ORDER BY d.id DESC LIMIT 5`).all(like, like, like, like, like);
-  return boundMcpOutput({ query: q, resumes, projects, applications: apps, interviews, practiceSessions: drills });
+  const discoveries = [
+    { key: "intros", permission: "list_intros", tool: "get_intro", kind: undefined,
+      sql: "SELECT i.id,substr(i.jd,1,120) AS title,i.created_at FROM intros i WHERE i.jd LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM intro_versions v WHERE v.intro_id=i.id AND v.sentences LIKE ? ESCAPE '\\') ORDER BY i.id DESC LIMIT 5", args: [like, like] },
+    { key: "jdPortraits", permission: "list_jd_portraits", tool: "get_jd_portrait", kind: undefined,
+      sql: "SELECT id,substr(jd,1,120) AS title,created_at FROM jd_portraits WHERE jd LIKE ? ESCAPE '\\' OR result LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT 5", args: [like, like] },
+    { key: "interviewSeries", permission: "list_interview_series", tool: "get_interview_series", kind: undefined,
+      sql: "SELECT id,substr(jd,1,120) AS title,created_at FROM interview_series WHERE jd LIKE ? ESCAPE '\\' OR final_report LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT 5", args: [like, like] },
+    { key: "bankEntries", permission: "list_bank_entries", tool: "read_record_section", kind: "bank_entry",
+      sql: "SELECT id,substr(question,1,120) AS title,created_at FROM bank_entries WHERE question LIKE ? ESCAPE '\\' OR direction LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT 5", args: [like, like] },
+    { key: "notebookEntries", permission: "list_notebook", tool: "get_notebook_entry", kind: undefined,
+      sql: "SELECT id,substr(question,1,120) AS title,created_at FROM notebook_entries WHERE question LIKE ? ESCAPE '\\' OR answer LIKE ? ESCAPE '\\' OR reference LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT 5", args: [like, like, like] },
+  ];
+  const extended = Object.fromEntries(discoveries.map(spec => [spec.key, permits(spec.permission) ? getDb().prepare(spec.sql).all(...spec.args).map(row => ({ ...row,
+    fullContent: { tool: spec.tool, id: row.id, ...(spec.kind ? { kind: spec.kind } : {}) } })) : []]));
+  const careerSpecs = [
+    { kind: "resume_defense", table: "resume_defenses", title: "title", fields: "title || ' ' || target_role || ' ' || source_content" },
+    { kind: "career_gap_remedy", table: "resignation_gap_remedies", title: "target_role", fields: "target_role || ' ' || raw_story" },
+    { kind: "salary_negotiation", table: "salary_negotiations", title: "target_role", fields: "target_role || ' ' || target_company_tier" },
+    { kind: "jargon_decoding", table: "jargon_decodings", title: "source_text", fields: "source_text || ' ' || result" },
+  ];
+  const careerRecords = permits("list_career_records") ? careerSpecs.flatMap(spec => getDb().prepare(`SELECT id,substr(${spec.title},1,120) AS title,created_at FROM ${spec.table} WHERE ${spec.fields} LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT 5`)
+    .all(like).map(row => ({ ...row, fullContent: { tool: "get_career_record", id: row.id, kind: spec.kind } }))) : [];
+  return boundMcpOutput({ query: q, resumes: permits("list_resumes") ? resumes : [], projects: permits("list_projects") ? projects : [],
+    applications: permits("list_applications") ? apps : [], interviews: permits("list_interviews") ? interviews : [], practiceSessions: permits("list_practice_sessions") ? drills : [],
+    ...extended, careerRecords });
 }
 
 export function listMcpResumes(input: PageInput = {}) {

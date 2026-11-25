@@ -1,9 +1,13 @@
 import * as z from "zod/v4";
+import { getWorkflowCatalog } from "./workflow-catalog";
+import { contextPageInput } from "./content-tools";
 import { listMcpBankDirections, listMcpDiscovered } from "@/lib/mcp-discovery";
 import { id, json, page, read } from "./records";
 import type { McpTools } from "./tools";
 
 export function registerDiscoveryTools(tools: McpTools) {
+  tools.register("get_workflow_catalog", { title: "读取 MCP 工作流指引", description: "机器可读的调用顺序、参数绑定示例、来源读取权限、匹配预设与失败恢复说明。available 按当前连接权限计算；可用 workflowId 筛选。",
+    inputSchema: z.strictObject({ workflowId: z.string().max(80).optional(), ...contextPageInput }), annotations: read }, async ({ workflowId, ...page }) => json(getWorkflowCatalog(name => tools.permits(name), workflowId, page)));
   const q = z.string().max(100).optional();
   for (const [name, kind, title] of [["list_intros", "intro", "发现自我介绍"], ["list_jd_portraits", "jd_portrait", "发现 JD 画像"],
     ["list_interview_series", "interview_series", "发现进阶面试系列"]] as const) {

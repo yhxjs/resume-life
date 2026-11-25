@@ -41,6 +41,16 @@ it("generates portable JSON and Codex configuration with the current executable"
   expect(toml).not.toContain("TEST_PRIVATE_SETTINGS_KEY");
 });
 
+it("preserves repository restrictions in independent clients and rejects relative roots", async () => {
+  const roots = [path.join(directory, "allowed-repository")];
+  const env = { RESUME_LIFE_MCP_REPO_ROOTS: JSON.stringify(roots) };
+  const generated = JSON.parse((await launch(["config", "json", "authoring"], env)).stdout).mcpServers["resume-life"];
+  expect(JSON.parse(generated.env.RESUME_LIFE_MCP_REPO_ROOTS).map((root: string) => path.resolve(root))).toEqual(roots);
+  expect(JSON.parse((await launch(["doctor"], env)).stdout).repositoryRoots).toEqual(roots);
+  expect(fs.existsSync(path.join(directory, "new-data"))).toBe(false);
+  await expect(launch(["config"], { RESUME_LIFE_MCP_REPO_ROOTS: '["relative"]' })).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("RESUME_LIFE_MCP_REPO_ROOTS") });
+});
+
 it.each(["readonly", "preparation", "collaboration", "training", "authoring"] as const)("generates the %s preset with its exact capability inventory", async preset => {
   const generated = JSON.parse((await launch(["config", "json", preset], { RESUME_LIFE_MCP_ALLOWED_TOOLS: undefined })).stdout).mcpServers["resume-life"];
   expect(generated.env.RESUME_LIFE_MCP_WRITE_ENABLED).toBe(String(mcpPresets[preset].writeEnabled));

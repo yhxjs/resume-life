@@ -13,6 +13,21 @@ import {
 import { prepare } from "@/components/resume/doc-data";
 
 describe("modules.ts 简历模块与内容清洗", () => {
+  it("读取旧条目时补齐稳定 ID，避开已有 ID，且不改原始内容", () => {
+    const raw = [{ id: "", company: "旧数据", subItems: [{ id: "", label: "标签", value: "值" }] },
+      { id: "it_fixture_1", company: "已有 ID", subItems: [{ id: "it_fixture_2", label: "标签", value: "值" }] }];
+    const snapshot = structuredClone(raw);
+    const first = normalizeContent("work", raw, { stableIdPrefix: "fixture" });
+    expect(normalizeContent("work", raw, { stableIdPrefix: "fixture" })).toEqual(first);
+    const ids = first.flatMap(entry => [entry.id, ...entry.subItems!.map(sub => sub.id)]);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(first[1]!.id).toBe("it_fixture_1");
+    expect(first[1]!.subItems![0]!.id).toBe("it_fixture_2");
+    expect(raw).toEqual(snapshot);
+    expect(normalizeContent("work", raw, { stableIdPrefix: "other-module" })[0]!.id).not.toBe(first[0]!.id);
+    expect(normalizeContent("work", raw)[0]!.id).not.toBe(normalizeContent("work", raw)[0]!.id);
+  });
+
   it("恢复后的版本化本机头像能进入编辑预览，任意查询参数不能进入", () => {
     const versioned = "/api/uploads/avatar.png?v=8f130bae-f339-493b-a69b-b41d9f471323";
     expect(isLocalAvatarUrl(versioned)).toBe(true);

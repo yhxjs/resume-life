@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resumeToMarkdown } from "../resume-markdown";
+import { resumeToMarkdown, resumeToReadableText } from "../resume-markdown";
 import type { ModuleData } from "@/lib/modules";
 
 describe("resumeToMarkdown 纯函数测试", () => {
@@ -85,13 +85,13 @@ describe("resumeToMarkdown 纯函数测试", () => {
     expect(md).toContain("https://myblog.com");
 
     expect(md).toContain("## 工作经历");
-    expect(md).toContain("### [某头部互联网公司] | 高级架构师");
+    expect(md).toContain(String.raw`### \[某头部互联网公司\] | 高级架构师`);
     expect(md).toContain("2021-03 ~ 2024-05");
     expect(md).toContain("**核心产品**：云原生微服务平台");
     expect(md).toContain("- 主导整体云平台架构设计");
 
     expect(md).toContain("## 项目经历");
-    expect(md).toContain("### [保密项目A] | 技术负责人");
+    expect(md).toContain(String.raw`### \[保密项目A\] | 技术负责人`);
     expect(md).toContain("负责从 0 到 1 构建高并发网关");
 
     expect(md).toContain("## 专业技能");
@@ -120,6 +120,35 @@ describe("resumeToMarkdown 纯函数测试", () => {
 
     const md = resumeToMarkdown("李华的简历", modules);
     expect(md).toContain("李华 · 男 · 28岁 · 13800002222 · lihua@example.com");
+  });
+
+  it("标题、普通字段和富文本正文中的技术字面量不会变成 Markdown 或 HTML", () => {
+    const plain = "Array<T> <template> &amp; **字面**";
+    const rich = "<strong>Array&lt;T&gt;</strong> &lt;template&gt; &amp;amp; **字面**";
+    const escaped = String.raw`Array\<T\> \<template\> \&amp; \*\*字面\*\*`;
+    const modules: ModuleData[] = [
+      { key: "basic", type: "basic", label: "基本信息", sort: 0, content: { name: plain, links: plain } },
+      { key: "work", type: "work", label: plain, sort: 1, content: [{ company: plain, title: "开发", start: "2024", end: "至今", subItems: [{ label: plain, value: plain }], description: rich }] },
+      { key: "skills", type: "skills", label: "技能", sort: 2, content: { items: [plain] } },
+      { key: "summary", type: "summary", label: "自我评价", sort: 3, content: { text: rich } },
+    ];
+    const md = resumeToMarkdown(plain, modules);
+    expect(md).toContain(`# ${escaped}\n`);
+    expect(md).toContain(`\n${escaped}\n${escaped}\n`);
+    expect(md).toContain(`## ${escaped}\n`);
+    expect(md).toContain(`### ${escaped} | 开发`);
+    expect(md).toContain(`**${escaped}**：${escaped}`);
+    expect(md).toContain(`- ${escaped}`);
+    expect(md.match(/\*\*Array\\<T\\>\*\*/g)).toHaveLength(2);
+    expect(md).not.toContain("<template>");
+    const display = resumeToReadableText(plain, modules);
+    expect(display).toContain(`# ${plain}\n`);
+    expect(display).toContain(`\n${plain}\n${plain}\n`);
+    expect(display).toContain(`### ${plain} | 开发`);
+    expect(display).toContain(`**${plain}**：${plain}`);
+    expect(display).toContain(`- ${plain}`);
+    expect(display).toContain("**Array<T>** <template> &amp; **字面**");
+    expect(display).not.toContain("\\");
   });
 
   it("基本信息按自定义 fieldOrder 顺序输出 Markdown 页眉行", () => {

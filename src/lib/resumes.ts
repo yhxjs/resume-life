@@ -125,7 +125,9 @@ export function loadResume(id: number, versionId?: number | null): ResumeWithMod
     const label = row.label.trim() || MODULE_LABELS[type];
     let content: unknown;
     try {
-      content = normalizeContent(type, JSON.parse(row.content));
+      content = normalizeContent(type, JSON.parse(row.content), {
+        stableIdPrefix: revisionOf(row.module_key, id, "entry-id", null).slice(0, 16),
+      });
     } catch {
       content = defaultContent(type);
       warnings.push(`「${label}」模块数据无法解析，已显示为空；直接保存将覆盖原内容。`);

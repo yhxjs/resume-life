@@ -1,6 +1,6 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { readMcpConfig, MCP_SERVER_VERSION } from "./config.mjs";
+import { readMcpConfig, MCP_SERVER_VERSION, toolAccess } from "./config.mjs";
 import { McpTools } from "./tools";
 import { registerRecordTools, edit } from "./records";
 import { McpOperationError } from "@/lib/mcp-errors";
@@ -9,6 +9,11 @@ import { dataGeneration } from "@/lib/db";
 import { assertDataGeneration, DataGenerationConflictError, withDataGenerationScope } from "@/lib/data-generation";
 import { updateMcpApplication, setMcpPreparationStep } from "@/lib/mcp-write";
 import { registerWorkflowTools } from "./workflows";
+import { registerResumeLifecycleTools } from "./resume-lifecycle-tools";
+import { registerExportTools } from "./export-tools";
+import { registerKnowledgeTools } from "./knowledge-tools";
+import { registerProjectMaterialTools } from "./project-material-tools";
+import { registerPortfolioTools } from "./portfolio-tools";
 import { registerBusinessTools } from "./business-tools";
 import { registerMaterialTools } from "./material-tools";
 import { registerReviewTools } from "./review-tools";
@@ -85,10 +90,10 @@ export function createResumeLifeMcpServer(config = readMcpConfig()) {
 
   tools.register("search_records", {
     title: "搜索求职资料",
-    description: "跨简历、项目材料、投递、模拟面试和练习记录搜索。仅返回少量匹配摘要；需要详情时再调用对应读取工具。",
+    description: "跨已授权的简历、项目、投递、面试、练习、自我介绍、JD 画像、系列面试、求职工具、题库和错题搜索。每类最多 5 条摘要，详情使用返回的读取入口；更多结果使用对应分页列表。",
     inputSchema: z.strictObject({ query: z.string().trim().min(2).max(100).describe("搜索关键词，2–100 个字符") }),
     annotations: { readOnlyHint: true, destructiveHint: false },
-  }, async ({ query }) => jsonResult(searchRecords(query)));
+  }, async ({ query }) => jsonResult(searchRecords(query, name => tools.permits(name as keyof typeof toolAccess))));
 
   tools.register("list_resumes", {
     title: "列出简历",
@@ -281,6 +286,11 @@ export function createResumeLifeMcpServer(config = readMcpConfig()) {
   registerDiscoveryTools(tools);
   registerInterviewTrainingTools(tools);
   registerResumeDraftTools(tools);
+  registerResumeLifecycleTools(tools);
+  registerExportTools(tools);
+  registerKnowledgeTools(tools);
+  registerProjectMaterialTools(tools);
+  registerPortfolioTools(tools);
   registerCareerTools(tools);
   tools.install();
   return server;

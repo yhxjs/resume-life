@@ -6,6 +6,7 @@ import { DIAGNOSIS_PRODUCTION_SYSTEM_PROMPT } from "@/lib/diagnosis-production-p
 import type { ModuleContentMap, ModuleData } from "@/lib/modules";
 import { assertResumeModelModules } from "@/lib/resume-model-material";
 import { LLM_FEATURES, safeChat } from "@/lib/safe-llm";
+import { escapePlainTextToRichHtml } from "@/lib/rich-text";
 import { createEvaluationSuite } from "./harness";
 
 // ModuleData.content 为兼容历史记录保留 unknown；合成材料则严格关联模块与内容类型。
@@ -14,7 +15,7 @@ type FixtureModule = {
 }[keyof ModuleContentMap];
 
 type FixtureVariant = "team-result" | "overlapping-experiences" | "skill-level" | "injection" | "summary-parts"
-  | "cross-module-conflict" | "timeline-consistent" | "timeline-reversed" | "python-only";
+  | "cross-module-conflict" | "timeline-consistent" | "timeline-reversed" | "python-only" | "literal-encoding";
 
 const makeModules = (variant: FixtureVariant): FixtureModule[] => variant === "python-only" ? [
   { key: "work", type: "work", label: "工作经历", sort: 0, content: [
@@ -23,6 +24,13 @@ const makeModules = (variant: FixtureVariant): FixtureModule[] => variant === "p
       subItems: [], descriptionItems: [], descriptionStyle: "unordered" },
   ] },
   { key: "skills", type: "skills", label: "技能", sort: 1, content: { items: ["Python：编写文件校验工具与单元测试"] } },
+] : variant === "literal-encoding" ? [
+  { key: "work", type: "work", label: "工作经历", sort: 0, content: [
+    { id: "literal-tool", company: "示例团队", title: "开发工程师", start: "2024-01", end: "至今",
+      description: escapePlainTextToRichHtml("写了 TypeScript 的 Array<T> 泛型校验工具。维护 Vue <template> 模板校验，并记录 &amp;、&lt;tag&gt; 和 &amp;gt; 的字面示例。仅本地验证，尚未上线，未统计收益。"),
+      subItems: [], descriptionItems: [], descriptionStyle: "unordered" },
+  ] },
+  { key: "skills", type: "skills", label: "技能", sort: 1, content: { items: ["TypeScript 泛型 Array<T>", "Vue <template> 模板校验", "实体字面量 &amp;、&lt;tag&gt; 和 &amp;gt;"] } },
 ] : variant === "timeline-consistent" || variant === "timeline-reversed" ? [
   { key: "education", type: "education", label: "教育经历", sort: 0, content: [
     { id: "education-entry", school: "示例大学", degree: "本科", field: "软件工程", start: "2023", end: "预计2027", description: "在读，未提供毕业月份。" },
@@ -73,6 +81,11 @@ const languageRequirementRubric = [
 ];
 
 const cases = [
+  { id: "transport-encoding-keeps-literal-depth", variant: "literal-encoding" as const, jd: "开发工具工程师，维护 TypeScript 泛型与 Vue 模板校验及文档示例；不要求线上成果。", rubric: [
+    "先还原标签封装的一层传输转义，再识别原材料；Array<T> 与 <template> 不能抄成 Array&lt;T&gt; 或 &lt;template&gt;，也不能把尖括号内容删除。",
+    "原文中的 &amp;、&lt;tag&gt;、&amp;gt; 均为字面实体，必须保持原深度：不能多编码一层，也不能继续解码成 &、<tag> 或 &gt;。summary、gaps、reason 和 draft 引用这些内容时都遵守同一规则。",
+    "如生成整段替换建议，保留本人动作、本地验证、尚未上线和未统计收益等事实与限定；没有必要改写时允许 suggestions 为空，不为演示实体处理而改写正确正文。",
+  ] },
   { id: "team-result-preserves-ownership", variant: "team-result" as const, jd: "后端工程师，要求服务稳定性治理；性能监控经验为加分项。", rubric: "不能把团队整体故障率下降 30% 改写成候选人个人成果；JD 中加分项不作硬性缺口，不虚构个人量化数据。" },
   { id: "overlap-does-not-merge-experiences", variant: "overlapping-experiences" as const, jd: "Java/Python 后端工程师，要求服务端开发和数据处理经验。", rubric: "两段经历日期重叠但公司、职责和技术栈各自独立；不得搬移技术、结果或推算空窗/年限，也要保留尚未上线状态。" },
   { id: "skill-level-not-upgraded", variant: "skill-level" as const, jd: "后端工程师，熟练使用 Redis 和 TypeScript。", rubric: "‘了解 Redis’不能升级为熟练、精通或独立负责；技能 items 是整组替换时须保留所有已有技能及其程度。" },

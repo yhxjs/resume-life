@@ -67,8 +67,9 @@ function historySummary(row: HistoryRow): ProjectSummary {
   }
 }
 
-function snapshotItem({ id, title, content, tableProvenance }: ProjectMaterialSource): MaterialSnapshotItem {
+function snapshotItem({ id, title, content, filename, tableProvenance }: ProjectMaterialSource): MaterialSnapshotItem {
   const digest = createHash("sha256").update(title).update("\0").update(content);
+  if (filename) digest.update("\0source-reference-v1\0").update(filename);
   if (tableProvenance !== undefined) digest.update("\0docx-table-provenance-v1\0").update(serializeDocumentTableProvenance(tableProvenance, content));
   return { id, title, digest: digest.digest("hex") };
 }

@@ -1176,14 +1176,22 @@ describe("显式提示词评估入口（本地合成服务，无真实模型）"
     const snapshot = await run(["--suite=diagnosis"], { PROMPT_EVAL_LIVE: "1", PROMPT_EVAL_SUITE: "intro", PROMPT_EVAL_BASE_URL: local.url, PROMPT_EVAL_API_KEY: syntheticKey, PROMPT_EVAL_MODEL: "synthetic-model" });
     expect(snapshot.code).toBe(0);
     expect(local.requests).toHaveLength(0);
-    expect(snapshot.summary).toMatchObject({ suite: "diagnosis", mode: "snapshot", expectedSamples: 10, recordedSamples: 10, protocolCounts: { "not-run": 10, pass: 0, fail: 0, error: 0 } });
+    expect(snapshot.summary).toMatchObject({ suite: "diagnosis", mode: "snapshot", expectedSamples: 11, recordedSamples: 11, protocolCounts: { "not-run": 11, pass: 0, fail: 0, error: 0 } });
     const expectedMessages: string[] = [];
     for (const entry of snapshot.summary.results) {
       const sample = JSON.parse(fs.readFileSync(path.join(snapshot.output!, `${entry.id}.json`), "utf8"));
       expectedMessages.push(sample.assembledMessages[1].content);
       expect.soft(() => assertResumeModelModules(sample.input.modules)).not.toThrow();
       const findModule = (key: string) => sample.input.modules.find((item: { key: string }) => item.key === key);
-      if (sample.id === "cross-module-claims-remain-unresolved") {
+      if (sample.id === "transport-encoding-keeps-literal-depth") {
+        expect(findModule("work").content[0]).toMatchObject({
+          id: "literal-tool", start: "2024-01", end: "至今",
+          description: "写了 TypeScript 的 Array<T> 泛型校验工具。维护 Vue <template> 模板校验，并记录 &amp;、&lt;tag&gt; 和 &amp;gt; 的字面示例。仅本地验证，尚未上线，未统计收益。",
+        });
+        expect(findModule("skills").content.items).toContain("实体字面量 &amp;、&lt;tag&gt; 和 &amp;gt;");
+        expect(sample.rubric).toHaveLength(6);
+        expect(sample.semanticReviewItems.every((item: { verdict: string }) => item.verdict === "pending")).toBe(true);
+      } else if (sample.id === "cross-module-claims-remain-unresolved") {
         expect(findModule("summary").content.text).toContain("独立主导订单项目的 Redis 改造并上线");
         expect(findModule("projects").content.map((project: { id: string }) => project.id)).toEqual(["orders", "payments"]);
         expect(sample.rubric).toHaveLength(7);
@@ -1228,9 +1236,9 @@ describe("显式提示词评估入口（本地合成服务，无真实模型）"
     expect(conjunction.input.jd).toBe("开发工程师，要求具备 Go 和 Python 实际开发经验。");
     const live = await run(["--suite=diagnosis", "--live"], { PROMPT_EVAL_BASE_URL: local.url, PROMPT_EVAL_API_KEY: syntheticKey, PROMPT_EVAL_MODEL: "synthetic-model" });
     expect(live.code).toBe(0);
-    expect(local.requests).toHaveLength(10);
+    expect(local.requests).toHaveLength(11);
     expect(local.requests.map(request => request.messages[1]?.content).sort()).toEqual(expectedMessages.sort());
-    expect(live.summary).toMatchObject({ suite: "diagnosis", mode: "live", expectedSamples: 10, recordedSamples: 10, protocolCounts: { "not-run": 0, pass: 10, fail: 0, error: 0 }, semanticQuality: "pending-human-review" });
+    expect(live.summary).toMatchObject({ suite: "diagnosis", mode: "live", expectedSamples: 11, recordedSamples: 11, protocolCounts: { "not-run": 0, pass: 11, fail: 0, error: 0 }, semanticQuality: "pending-human-review" });
     const injected = JSON.parse(fs.readFileSync(path.join(snapshot.output!, "untrusted-resume-instruction.json"), "utf8"));
     expect(injected.assembledMessages[1].content).toContain("千万 QPS");
     expect(injected.assembledMessages[1].content).toContain("candidate_resume_modules");

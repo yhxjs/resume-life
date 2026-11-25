@@ -8,26 +8,29 @@ import {
   sanitizeRichText,
   stripRichText,
   richTextToMarkdown,
+  richTextToReadableText,
   splitRichTextToLines,
   plainTextToRichHtml,
   isValidCssColor,
   decodeHtmlEntities,
   hasHtmlEntity,
   escapePlainTextToRichHtml,
+  escapeMarkdownText,
 } from "../rich-text";
 import { segmentsToHtml } from "../metric-highlight";
 
 describe("纯文本写入与富文本渲染的一致性", () => {
   it.each([
-    "封装 Array<T> 与 Map<K, V>",
-    "维护 <template>、<strong> 与 <script>alert(1)</script> 字面代码",
-    "记录 &amp;、&lt;tag&gt;、&#39; 与 R&D",
-    "首行\r\n第二行\r第三行\n末行",
-  ])("保留原始字符与换行：%s", (plain) => {
+    ["封装 Array<T> 与 Map<K, V>", String.raw`封装 Array\<T\> 与 Map\<K, V\>`],
+    ["维护 <template>、<strong> 与 <script>alert(1)</script> 字面代码", String.raw`维护 \<template\>、\<strong\> 与 \<script\>alert(1)\</script\> 字面代码`],
+    ["记录 &amp;、&lt;tag&gt;、&#39; 与 R&D", String.raw`记录 \&amp;、\&lt;tag\&gt;、\&\#39; 与 R\&D`],
+    ["首行\r\n第二行\r第三行\n末行", "首行\n第二行\n第三行\n末行"],
+  ])("保留原始字符与换行：%s", (plain, markdown) => {
     const stored = escapePlainTextToRichHtml(plain);
     const normalized = plain.replace(/\r\n?|\n/g, "\n");
     expect(stripRichText(stored)).toBe(normalized);
-    expect(richTextToMarkdown(stored)).toBe(normalized);
+    expect(richTextToMarkdown(stored)).toBe(markdown);
+    expect(richTextToReadableText(stored)).toBe(normalized);
     expect(sanitizeRichText(stored)).toBe(stored);
     const rendered = renderToStaticMarkup(createElement(RichText, { content: stored }));
     expect(stripRichText(rendered)).toBe(normalized);
@@ -39,6 +42,21 @@ describe("纯文本写入与富文本渲染的一致性", () => {
     const rendered = renderToStaticMarkup(createElement(RichText, { content }));
     expect(rendered).toContain('<strong style="font-weight:600">泛型 Array&lt;T&gt;</strong>');
     expect(stripRichText(rendered)).toBe("泛型 Array<T> 与 <strong> 字面标签");
+    expect(richTextToMarkdown(content)).toBe(String.raw`**泛型 Array\<T\>** 与 \<strong\> 字面标签`);
+    expect(richTextToReadableText(content)).toBe("**泛型 Array<T>** 与 <strong> 字面标签");
+  });
+
+  it("Markdown 转义正文中的路径、强调、链接和行首列表，保留字符本身", () => {
+    const plain = String.raw`C:\new\resume **字面** _name_ [标签](url) ~~删除~~ | 列
+1. 字面编号
+- 字面连字符
+> 字面引用
+# 字面标题`;
+    expect(escapeMarkdownText(plain)).toBe(String.raw`C:\\new\\resume \*\*字面\*\* \_name\_ \[标签\](url) \~\~删除\~\~ \| 列
+1\. 字面编号
+\- 字面连字符
+\> 字面引用
+\# 字面标题`);
   });
 });
 

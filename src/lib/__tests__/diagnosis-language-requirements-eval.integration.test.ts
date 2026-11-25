@@ -58,7 +58,7 @@ beforeAll(async () => {
     status: "completed", mode: "snapshot", expectedSamples: 2, recordedSamples: 2,
     semanticQuality: "not-evaluated",
     protocolCounts: { "not-run": 2, pass: 0, fail: 0, error: 0 },
-    selection: { suiteSamples: 10, requestedIds: ids },
+    selection: { suiteSamples: 11, requestedIds: ids },
   });
   expect(summary.results.map((result: { id: string }) => result.id)).toEqual(ids);
   expect(fs.existsSync(path.join(output!, "data"))).toBe(false);

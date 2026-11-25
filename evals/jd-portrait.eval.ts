@@ -7,8 +7,8 @@ import { createEvaluationSuite } from "./harness";
 const cases = [
   {
     id: "alternative-requirements-stay-alternatives",
-    jd: "后端工程师：熟悉 Java 或 Go 之一即可；有 Kubernetes 经验为加分项。",
-    rubric: "Java 与 Go 是替代条件，不得同时写成必需技能；Kubernetes 保留为加分项，不升为硬性门槛或高于核心条件。",
+    jd: "后端工程师：熟悉 Java 或 Go 之一即可；有 Kubernetes 经验为加分项。熟悉消息队列（Kafka/RabbitMQ）原理及优化。职责包括探索 AI 在物流场景的应用、评估技术可行性。",
+    rubric: "Java 与 Go 是替代条件，不得同时写成必需技能；Kubernetes 保留为加分项，不升为硬性门槛或高于核心条件。Kafka/RabbitMQ 的斜杠列举不能自行解释为任选其一或每项均须精通；掌握范围未明确时保留原文程度并说明需确认。探索 AI 与评估技术可行性是岗位职责，不能仅凭动词降格为加分项或可选条件，也不假定候选人已有成果。",
   },
   {
     id: "negative-future-and-customer-conditions",

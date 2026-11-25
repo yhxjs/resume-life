@@ -148,16 +148,16 @@ describe("GET & POST /api/resumes/[id]/export", () => {
     const text = await res.text();
 
     // 标题被脱敏标识包裹
-    expect(text).toContain("# [脱敏版] 张*的资深前端简历");
+    expect(text).toContain(String.raw`# \[脱敏版\] 张\*的资深前端简历`);
     // 联系信息与地址已脱敏（手机号默认只保留前三位）
-    expect(text).toContain("张* · 138******** · z***@example.com · 北京市 · 1995年");
+    expect(text).toContain(String.raw`张\* · 138\*\*\*\*\*\*\*\* · z\*\*\*@example.com · 北京市 · 1995年`);
     expect(text).not.toContain("13800000000");
     expect(text).not.toContain("zhangsan@example.com");
     expect(text).not.toContain("github.com/zhangsan");
 
     // 经历中的敏感词被替换
-    expect(text).toContain("### [某头部大厂] | 高级前端架构师");
-    expect(text).toContain("[保密核心架构]");
+    expect(text).toContain(String.raw`### \[某头部大厂\] | 高级前端架构师`);
+    expect(text).toContain(String.raw`\[保密核心架构\]`);
     expect(text).not.toContain("字节跳动");
     expect(text).not.toContain("Project-Zeus");
   });

@@ -3,6 +3,8 @@ import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
 import { getDb, inTransaction } from "@/lib/db";
+import { renameNotebookCategory } from "@/lib/notebook-category-store";
+import { NotebookMutationError } from "@/lib/notebook-storage";
 import { logServerError, requestIdFrom } from "@/lib/server-errors";
 
 function isUniqueError(err: unknown): boolean {
@@ -31,14 +33,11 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
   if (!name) return NextResponse.json({ error: "请输入分类名称" }, { status: 400 });
   if (name.length > 30) return NextResponse.json({ error: "分类名称不能超过 30 个字" }, { status: 400 });
 
-  const db = getDb();
   try {
-    const result = inTransaction(() => db
-      .prepare("UPDATE notebook_categories SET name = ? WHERE id = ?")
-      .run(name, categoryId));
-    if (result.changes === 0) return NextResponse.json({ error: "分类不存在" }, { status: 404 });
+    renameNotebookCategory(categoryId, name);
     return NextResponse.json({ ok: true });
   } catch (err) {
+    if (err instanceof NotebookMutationError) return NextResponse.json({ error: err.message }, { status: err.status });
     if (isUniqueError(err)) {
       return NextResponse.json({ error: "已存在同名分类" }, { status: 409 });
     }

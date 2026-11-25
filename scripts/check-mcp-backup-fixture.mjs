@@ -37,6 +37,7 @@ try {
   assert.equal(getApplicationById(applicationId).notes, before.notes);
   assert.notEqual(dataGeneration(db), generation);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mcp_drafts").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mcp_operation_results").get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mcp_generation_requests WHERE response_json IS NOT NULL").get().n, 0);
   process.stdout.write(JSON.stringify({ restored: true, databaseVersion: CURRENT_DB_VERSION, runtimeTablesExcluded: true }) + "\n");
 } finally {

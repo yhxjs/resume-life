@@ -11,7 +11,7 @@ export function registerCareerTools(tools: McpTools) {
     if (source.kind === "defense" && source.material.type === "resume") requireReads(tools, "get_resume");
     if (source.kind === "defense-drill" || source.kind === "salary-turn" || source.kind === "salary-finalize") requireReads(tools, "get_career_record");
   };
-  tools.register("list_career_records", { title: "发现求职工具记录", description: "按 kind 分页检索简历排雷、职业空档方案和薪资谈判；q 为字面关键词。",
+  tools.register("list_career_records", { title: "发现求职工具记录", description: "按 kind 分页检索简历排雷、职业空档方案、薪资谈判和黑话解码；q 为字面关键词。",
     inputSchema: z.strictObject({ kind: z.enum(CAREER_RECORD_KINDS), q: z.string().max(100).optional(), ...page }), annotations: read }, async ({ kind, ...input }) => json(listCareerRecords(kind, input)));
   tools.register("get_career_record", { title: "完整读取求职工具记录", description: "分页返回 record 与 related 原始存档 JSON，包含防御演练或谈判回合。正文 JSON 字段保持原样；读到 nextOffset=null 后解析。",
     inputSchema: z.strictObject({ kind: z.enum(CAREER_RECORD_KINDS), id, ...contextPageInput }), annotations: read }, async ({ kind, id, ...input }) => json(getCareerRecord(kind, id, input)));

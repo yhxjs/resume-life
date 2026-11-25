@@ -9,14 +9,15 @@ const launcher = fileURLToPath(new URL("../../scripts/mcp.mjs", import.meta.url)
 export class ResumeLifeClient {
   constructor(client) { this.client = client; }
 
-  static async connect({ dataDirectory, preset = "readonly", timeoutMs = 120_000, cwd } = {}) {
+  static async connect({ dataDirectory, preset = "readonly", timeoutMs = 120_000, cwd, repositoryRoots = [] } = {}) {
     if (!path.isAbsolute(dataDirectory ?? "")) throw new Error("dataDirectory 必须为绝对路径");
     if (!Object.hasOwn(mcpPresets, preset)) throw new Error("未知的 MCP 权限预设");
+    if (!Array.isArray(repositoryRoots) || repositoryRoots.some(root => typeof root !== "string" || !path.isAbsolute(root))) throw new Error("repositoryRoots 必须是绝对目录数组");
     const profile = mcpPresets[preset];
     const client = new Client({ name: "resume-life-example-agent", version: "1.0.0" });
     try {
       await client.connect(new StdioClientTransport({ command: process.execPath, args: [launcher], cwd, stderr: "inherit",
-        env: { RESUME_LIFE_DATA_DIR: dataDirectory, RESUME_LIFE_MCP_WRITE_ENABLED: String(profile.writeEnabled), RESUME_LIFE_MCP_LLM_ENABLED: "false",
+        env: { RESUME_LIFE_DATA_DIR: dataDirectory, RESUME_LIFE_MCP_REPO_ROOTS: JSON.stringify(repositoryRoots), RESUME_LIFE_MCP_WRITE_ENABLED: String(profile.writeEnabled), RESUME_LIFE_MCP_LLM_ENABLED: "false",
           RESUME_LIFE_MCP_ALLOWED_TOOLS: profile.tools.join(","), RESUME_LIFE_MCP_TIMEOUT_MS: String(timeoutMs) } }));
       return new ResumeLifeClient(client);
     } catch (error) { await client.close(); throw error; }

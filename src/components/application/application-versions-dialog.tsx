@@ -5,7 +5,7 @@ import { useEffect, useId, useState } from "react";
 import type { Application, ApplicationVersions } from "@/lib/applications-types";
 import { compareApplicationVersions } from "@/lib/application-version-diff";
 import { formatFriendlyDateTime } from "@/lib/application-datetime";
-import { resumeToMarkdown } from "@/lib/resume-markdown";
+import { resumeToReadableText } from "@/lib/resume-markdown";
 import { jsonFetch } from "@/lib/fetcher";
 import { errorMessage } from "@/lib/error-message";
 import { btnGhost, dialogCardCls, modalOverlayCls } from "@/lib/ui";
@@ -102,7 +102,7 @@ export function ApplicationVersionsDialog({ application, onClose }: { applicatio
                 <div className="space-y-5">
                   <section aria-label={`${views[view]}简历正文`}>
                     <h3 className="mb-3 font-serif font-semibold text-ink">简历正文</h3>
-                    {selected.resume ? <Content text={resumeToMarkdown(selected.resume.title, selected.resume.modules)} /> :
+                    {selected.resume ? <Content text={resumeToReadableText(selected.resume.title, selected.resume.modules)} /> :
                       <p className="text-sm text-muted">{view === "submitted" ? "标记已投递时未关联简历，未保存简历正文。" : "当前未关联简历，或源简历已删除。"}</p>}
                   </section>
                   <section className="border-t border-line pt-4" aria-label={`${views[view]}岗位 JD`}>

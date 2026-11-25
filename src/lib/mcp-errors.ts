@@ -21,6 +21,10 @@ import { ProjectSummaryHistoryError } from "./project-summary-history";
 import { InterviewCommandError } from "./interview-commands/errors";
 import { DefenseDrillSaveError } from "./resume-defense";
 import { NegotiationBudgetError } from "./salary-negotiation-llm";
+import { PortfolioError } from "./portfolio-export-budget";
+import { CorruptedTemplateError } from "./custom-templates";
+import { PdfExportBusyError, PdfExportCancelledError, PdfExportTimeoutError } from "./pdf-render";
+import { RequestTooLargeError, RequestFormatError } from "./request-limits";
 
 /** Stable machine codes for MCP clients; messages contain no model/provider payloads. */
 export const MCP_ERROR_CODES = ["INVALID_ARGUMENT", "NOT_FOUND", "CONFLICT", "FORBIDDEN", "CONFIGURATION", "BUSY", "CANCELLED", "TIMEOUT", "MODEL_OUTPUT", "INTERNAL"] as const;
@@ -36,6 +40,11 @@ export class McpOperationError extends Error {
 
 export function classifyMcpError(error: unknown): { code: McpErrorCode; message: string } {
   if (error instanceof McpOperationError) return { code: error.code, message: error.message };
+  if (error instanceof PdfExportBusyError) return { code: "BUSY", message: error.message };
+  if (error instanceof PdfExportCancelledError) return { code: "CANCELLED", message: error.message };
+  if (error instanceof PdfExportTimeoutError) return { code: "TIMEOUT", message: error.message };
+  if (error instanceof PortfolioError) return { code: error.status === 404 ? "NOT_FOUND" : error.status === 409 ? "CONFLICT" : "INVALID_ARGUMENT", message: error.message };
+  if (error instanceof CorruptedTemplateError || error instanceof RequestTooLargeError || error instanceof RequestFormatError) return { code: "INVALID_ARGUMENT", message: error.message };
   if (error instanceof OperationTimeoutError) return { code: "TIMEOUT", message: error.message };
   if (isSqliteBusy(error)) return { code: "BUSY", message: "数据库正忙，请稍后重试" };
   if (error instanceof DataGenerationConflictError) return { code: "CONFLICT", message: error.message };

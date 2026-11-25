@@ -487,7 +487,7 @@ describe("resume-life MCP server", () => {
 
   it("publishes output schemas, stable errors and metadata-only operation records", async () => {
     const listed = await client.listTools();
-    expect(listed.tools).toHaveLength(63);
+    expect(listed.tools).toHaveLength(83);
     expect(listed.tools.every(tool => tool.outputSchema?.type === "object")).toBe(true);
     const ok = await client.callTool({ name: "list_resumes", arguments: {} });
     expect(ok.structuredContent).toMatchObject({ ok: true, data: { items: [{ id: 1 }] }, meta: { requestId: expect.any(String) } });

@@ -1,7 +1,9 @@
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
-import { getDb, inTransaction, now } from "@/lib/db";
+import { getDb } from "@/lib/db";
+import { createNotebookCategory } from "@/lib/notebook-category-store";
+import { NotebookMutationError } from "@/lib/notebook-storage";
 import { logServerError, requestIdFrom } from "@/lib/server-errors";
 import { errorMessage } from "@/lib/error-message";
 
@@ -27,13 +29,10 @@ async function handlePost(req: Request) {
   if (!name) return NextResponse.json({ error: "请输入分类名称" }, { status: 400 });
   if (name.length > 30) return NextResponse.json({ error: "分类名称不能超过 30 个字" }, { status: 400 });
 
-  const db = getDb();
   try {
-    const result = inTransaction(() => db
-      .prepare("INSERT INTO notebook_categories (name, created_at) VALUES (?, ?)")
-      .run(name, now()));
-    return NextResponse.json({ id: Number(result.lastInsertRowid), name }, { status: 201 });
+    return NextResponse.json(createNotebookCategory(name), { status: 201 });
   } catch (err) {
+    if (err instanceof NotebookMutationError) return NextResponse.json({ error: err.message }, { status: err.status });
     const message = errorMessage(err);
     if (message.includes("UNIQUE")) {
       return NextResponse.json({ error: "已存在同名分类" }, { status: 409 });

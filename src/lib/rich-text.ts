@@ -307,18 +307,26 @@ export function stripRichText(html: string): string {
   return toText(parseRichTextToNodes(html)).replace(/ /g, " ");
 }
 
-/** 将富文本节点树转换为 Markdown 纯净文本 */
-function nodesToMarkdown(nodes: RichTextNode[]): string {
+/** 纯文本写入 Markdown：防止字面标签、实体及排版符号被查看器重新解释。 */
+export function escapeMarkdownText(text: string): string {
+  return text
+    .replace(/[\\`*_[\]<>&~|#]/g, "\\$&")
+    .replace(/^([ \t]*)([+=-])/gm, "$1\\$2")
+    .replace(/^([ \t]*\d{1,9})([.)])(?=\s|$)/gm, "$1\\$2");
+}
+
+/** 将富文本节点树转换为 Markdown，只有真实格式节点生成排版标记。 */
+function nodesToMarkdown(nodes: RichTextNode[], escapeText: boolean): string {
   let res = "";
   for (const n of nodes) {
     if (n.type === "text") {
-      res += n.text;
+      res += escapeText ? escapeMarkdownText(n.text) : n.text;
     } else if (n.type === "br") {
       res += "\n";
     } else if (n.type === "strong") {
-      res += `**${nodesToMarkdown(n.children)}**`;
+      res += `**${nodesToMarkdown(n.children, escapeText)}**`;
     } else if (n.type === "color") {
-      res += nodesToMarkdown(n.children);
+      res += nodesToMarkdown(n.children, escapeText);
     }
   }
   return res;
@@ -328,7 +336,12 @@ function nodesToMarkdown(nodes: RichTextNode[]): string {
 export function richTextToMarkdown(html: string): string {
   if (!html) return "";
   const nodes = parseRichTextToNodes(html);
-  return nodesToMarkdown(nodes);
+  return nodesToMarkdown(nodes, true);
+}
+
+/** 用于 pre 文本展示：保留加粗标记，但正文按可见字符输出。 */
+export function richTextToReadableText(html: string): string {
+  return html ? nodesToMarkdown(parseRichTextToNodes(html), false) : "";
 }
 
 /** ASCII 星号/连字符须有空白分隔；点号编号仅认空白或既有中文正文，保留版本与域名。 */

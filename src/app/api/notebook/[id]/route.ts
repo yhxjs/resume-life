@@ -2,7 +2,9 @@ import { parseCanonicalPositiveId } from "@/lib/id-parsing";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
-import { getDb, inTransaction, now } from "@/lib/db";
+import { getDb, inTransaction } from "@/lib/db";
+import { moveNotebookEntry } from "@/lib/notebook-category-store";
+import { NotebookMutationError } from "@/lib/notebook-storage";
 
 export const GET = withRouteErrorHandling("GET /api/notebook/[id]", async (_req, { params }) => {
   const id = parseCanonicalPositiveId((await params).id);
@@ -46,10 +48,11 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
     const cat = db.prepare("SELECT id FROM notebook_categories WHERE id = ?").get(categoryId);
     if (!cat) return NextResponse.json({ error: "分类不存在" }, { status: 400 });
   }
-  const result = inTransaction(() => db
-    .prepare("UPDATE notebook_entries SET category_id = ?, updated_at = ? WHERE id = ?")
-    .run(categoryId, now(), entryId));
-  if (result.changes === 0) return NextResponse.json({ error: "错题不存在" }, { status: 404 });
+  try { moveNotebookEntry(entryId, categoryId); }
+  catch (error) {
+    if (error instanceof NotebookMutationError) return NextResponse.json({ error: error.message }, { status: error.status });
+    throw error;
+  }
   return NextResponse.json({ ok: true });
 }
 

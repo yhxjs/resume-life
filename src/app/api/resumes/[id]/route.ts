@@ -16,6 +16,7 @@ import { isTemplateRef, sanitizeStyleOverrides } from "@/lib/templates";
 import { avatarUrlFromContent, removeUnreferencedUploadsByUrls } from "@/lib/upload-storage";
 import { loadCustomTemplate } from "@/lib/custom-templates";
 import { writeResumeDraftContent } from "@/lib/resume-draft-store";
+import { writeResumeLayout } from "@/lib/resume-layout-store";
 
 async function handleGet(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -185,17 +186,13 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
     }
 
     if (isTemplateRef(o.template)) {
-      db.prepare("UPDATE resumes SET template = ?, updated_at = ? WHERE id = ?").run(o.template, ts, numericId);
+      writeResumeLayout(numericId, { template: o.template, at: ts });
       touched = true;
     }
 
     if (o.styleOverrides !== undefined) {
       const sanitized = o.styleOverrides === null ? {} : sanitizeStyleOverrides(o.styleOverrides);
-      db.prepare("UPDATE resumes SET style_overrides = ?, updated_at = ? WHERE id = ?").run(
-        JSON.stringify(sanitized),
-        ts,
-        numericId
-      );
+      writeResumeLayout(numericId, { styleOverrides: sanitized, at: ts });
       touched = true;
     }
 
@@ -227,13 +224,12 @@ async function handlePatch(req: Request, { params }: { params: Promise<{ id: str
     }
 
     if (removeKey) {
-      db.prepare("DELETE FROM resume_modules WHERE resume_id = ? AND module_key = ?").run(numericId, removeKey);
+      writeResumeLayout(numericId, { removeKeys: [removeKey], at: ts });
       touched = true;
     }
 
     if (orderKeys.length) {
-      const setSort = db.prepare("UPDATE resume_modules SET sort = ? WHERE resume_id = ? AND module_key = ?");
-      orderKeys.forEach((key, index) => setSort.run(index, numericId, key));
+      writeResumeLayout(numericId, { moduleOrder: orderKeys, at: ts });
       touched = true;
     }
 

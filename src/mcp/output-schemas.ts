@@ -4,6 +4,7 @@ import { APPLICATION_STAGES, INTERVIEW_ROUND_STATUSES } from "@/lib/applications
 import { PLAN_STEP_KEYS } from "@/lib/preparation-plan-types";
 import { PREPARATION_KINDS } from "@/lib/application-preparation-types";
 import { INTRO_KINDS } from "@/lib/intro";
+import { CAREER_RECORD_KINDS } from "@/lib/mcp-career";
 
 // Restore preserves historical IDs across the full safe-integer range.
 const id = z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER);
@@ -75,15 +76,34 @@ export const draftDataSchema = object({
 const page = (item: z.ZodType = record) => object({ items: z.array(item), nextCursor: z.string().nullable() });
 const contextSection = object({ revision, encoding: z.literal("json/utf-16"), offset: count, text: z.string(), totalLength: count, nextOffset: count.nullable() });
 
+const artifactSchema = object({ artifactId: revision, filename: z.string(), mimeType: z.string(), byteLength: count, sha256: revision,
+  sourceRevision: revision, createdAt: z.string(), read: object({ tool: z.literal("read_export_artifact"), artifactId: revision, offset: count }) });
+const searchEntry = object({ id, title: z.string(), created_at: z.string(), fullContent: object({ tool: z.string(), id, kind: z.string().optional() }) });
 const core: Record<string, z.ZodType> = {
+  get_workflow_catalog: contextSection,
+  get_jargon_generation_context: contextSection, save_jargon_result: record, get_portfolio_sources: contextSection, get_portfolio_context: contextSection, export_portfolio: artifactSchema,
+  get_project_material_context: contextSection, preview_project_material_edit: contextSection.extend({ previewToken: revision }), save_project_material_edit: record,
+  get_repository_catalog: contextSection, get_repository_capture: contextSection,
+  capture_project_repository: record.extend({ fileCount: count, capturedAt: z.string(), capture: object({ tool: z.literal("get_repository_capture"), idempotencyKey: z.string() }) }),
+  save_repository_evidence: record.extend({ materialIds: z.array(id) }),
+  preview_bank_import: contextSection.extend({ previewToken: revision }), get_bank_import_result: contextSection,
+  save_bank_import: record.extend({ createdCount: count, skippedCount: count, result: object({ tool: z.literal("get_bank_import_result"), idempotencyKey: z.string() }) }),
+  get_notebook_organization_context: contextSection, create_notebook_category: record, rename_notebook_category: record, move_notebook_entry: record,
+  get_resume_export_context: contextSection,
+  export_resume: artifactSchema,
+  read_export_artifact: artifactSchema.extend({ encoding: z.literal("base64"), offset: count, data: z.string(), nextOffset: count.nullable() }),
+  get_resume_layout_context: contextSection, preview_resume_layout: contextSection.extend({ previewToken: revision }), save_resume_layout: record,
+  get_diagnosis_adoption_context: contextSection, preview_diagnosis_adoption: contextSection.extend({ previewToken: revision }), save_diagnosis_adoption: record,
+  get_resume_version_context: contextSection, compare_resume_versions: contextSection, publish_resume_version: record,
+  preview_resume_version_branch: contextSection.extend({ previewToken: revision }), branch_resume_version: record,
   get_intro_generation_context: contextSection, get_project_summary_context: contextSection,
   get_practice_generation_context: contextSection, save_generated_practice: record,
   get_interview_training_context: contextSection, save_interview_training_result: record,
   get_interview_series_context: contextSection, save_interview_series_result: record, answer_series_interview: record, finish_series_interview: record,
   get_resume_draft_context: contextSection, create_resume_draft: record, preview_resume_draft_edit: contextSection.extend({ previewToken: revision }), save_resume_draft_edit: record,
   get_career_record: contextSection, get_career_workflow_context: contextSection, save_career_result: record,
-  list_career_records: page(object({ id, title: z.string(), created_at: z.string(), kind: z.enum(["resume_defense", "career_gap_remedy", "salary_negotiation"]),
-    fullContent: object({ tool: z.literal("get_career_record"), kind: z.enum(["resume_defense", "career_gap_remedy", "salary_negotiation"]), id }) })),
+  list_career_records: page(object({ id, title: z.string(), created_at: z.string(), kind: z.enum(CAREER_RECORD_KINDS),
+    fullContent: object({ tool: z.literal("get_career_record"), kind: z.enum(CAREER_RECORD_KINDS), id }) })),
   get_series_interview_state: object({ id, revision, resumeId: id, versionId: id.nullable(), status: z.enum(["ongoing", "finished"]), rounds: z.number().int(),
     answered: count, currentTurnId: id.nullable(), currentIndex: z.number().int().nullable(), reportSaved: z.boolean() }),
   list_intros: page(object({ id, resume_id: id, resume_version_id: id.nullable(), jd: z.string(), created_at: z.string(), resume_title: z.string(), fullContent })),
@@ -108,7 +128,8 @@ const core: Record<string, z.ZodType> = {
     applications: z.array(object({ id, company: z.string(), role: z.string(), stage: z.enum(APPLICATION_STAGES), updated_at: z.string() })),
     interviews: z.array(object({ id, resume_id: id, resume_title: z.string(), resume_version_id: id.nullable(), resume_version: z.number().int().nullable(),
       series_id: id.nullable(), round_no: z.number().int(), status: z.string(), style: z.string(), created_at: z.string(), finished_at: z.string() })),
-    practiceSessions: z.array(object({ id, source: z.string(), direction: z.string(), focus: z.string(), created_at: z.string(), project_name: z.string().nullable() })) }),
+    practiceSessions: z.array(object({ id, source: z.string(), direction: z.string(), focus: z.string(), created_at: z.string(), project_name: z.string().nullable() })),
+    intros: z.array(searchEntry), jdPortraits: z.array(searchEntry), interviewSeries: z.array(searchEntry), careerRecords: z.array(searchEntry), bankEntries: z.array(searchEntry), notebookEntries: z.array(searchEntry) }),
   list_resumes: page(object({ id, title: z.string(), created_at: z.string(), updated_at: z.string(), versions: z.array(version), versionCount: count, versionsTruncated: z.boolean() })),
   get_resume: object({ resume: object({ id, revision, title: z.string(), template: z.string(), created_at: z.string(), updated_at: z.string(), version_id: id.nullable() }),
     modules: z.array(object({ key: z.string(), type: z.string(), label: z.string(), content: z.string() })), warnings: z.array(z.json()),

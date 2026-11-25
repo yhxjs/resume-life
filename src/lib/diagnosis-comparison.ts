@@ -1,6 +1,6 @@
 import type { DiagnosisRecord, DiagnosisSnapshot } from "@/lib/diagnosis";
 import { DIMENSIONS, type ScoreMap } from "@/lib/scores";
-import { resumeToMarkdown } from "@/lib/resume-markdown";
+import { resumeToReadableText } from "@/lib/resume-markdown";
 
 export type DiagnosisContentChange = {
   key: string;
@@ -20,8 +20,8 @@ export function compareDiagnosisSnapshots(before: DiagnosisSnapshot | null, afte
   for (const key of new Set([...oldModules.keys(), ...newModules.keys()])) {
     const old = oldModules.get(key);
     const next = newModules.get(key);
-    const oldText = old ? resumeToMarkdown("", [old.module]).trim() : null;
-    const newText = next ? resumeToMarkdown("", [next.module]).trim() : null;
+    const oldText = old ? resumeToReadableText("", [old.module]).trim() : null;
+    const newText = next ? resumeToReadableText("", [next.module]).trim() : null;
     const moved = Boolean(old && next && old.index !== next.index);
     rows.push({ key, label: next?.module.label ?? old!.module.label, before: oldText, after: newText, moved,
       status: oldText === null ? "added" : newText === null ? "removed" : oldText !== newText || moved ? "changed" : "unchanged" });

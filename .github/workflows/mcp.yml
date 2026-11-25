@@ -42,11 +42,17 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - run: npx playwright install --with-deps chromium
       - run: npm run test:mcp
       - run: >-
           npx vitest run src/lib/__tests__/database-schema.test.ts
           src/lib/__tests__/backup-fixture-versions.integration.test.ts
           src/lib/__tests__/notebook-notes-backup.integration.test.ts
+          src/lib/__tests__/diagnosis-target-integrity.integration.test.ts
+          src/lib/__tests__/project-material-provenance.integration.test.ts
+          src/lib/__tests__/project-summary-history-integrity.integration.test.ts
+          src/lib/__tests__/resume-export-integrity.integration.test.ts
+          src/lib/__tests__/portfolio-export.integration.test.ts
           src/lib/__tests__/application-interview-review.integration.test.ts
           src/lib/__tests__/notebook-favorite.test.ts src/lib/__tests__/reviews.integration.test.ts
           src/app/api/drills/[id]/questions/[qid]/__tests__/output-contract.integration.test.ts

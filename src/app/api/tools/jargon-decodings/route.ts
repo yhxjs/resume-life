@@ -2,7 +2,8 @@ import { ModelInputBudgetError } from "@/lib/llm-input-budget";
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
-import { getDb, inTransaction, now } from "@/lib/db";
+import { getDb } from "@/lib/db";
+import { createJargonDecoding } from "@/lib/jargon-store";
 import { LlmConfigError } from "@/lib/llm";
 import { validateGeneratedJargonDecoderResult } from "@/lib/jargon-decoder";
 import { buildJargonDecoderMessages, JARGON_DECODER_SYSTEM_PROMPT } from "@/lib/jargon-decoder-llm";
@@ -64,11 +65,7 @@ async function handlePost(req: Request) {
     );
   }
 
-  const db = getDb();
-  const res = inTransaction(() => db
-    .prepare("INSERT INTO jargon_decodings (source_text, result, created_at) VALUES (?, ?, ?)")
-    .run(text, JSON.stringify(result), now()));
-  return NextResponse.json({ id: Number(res.lastInsertRowid) }, { status: 201 });
+  return NextResponse.json({ id: createJargonDecoding(text, result) }, { status: 201 });
 }
 
 export const GET = withRouteErrorHandling("GET /api/tools/jargon-decodings", handleGet);

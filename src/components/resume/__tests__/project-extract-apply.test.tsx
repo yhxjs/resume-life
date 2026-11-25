@@ -117,7 +117,8 @@ describe("项目摘取的预览与实际写入", () => {
     const saved = onChange.mock.calls[0]![0][0] as ProjectItem;
     const last = saved.descriptionItems!.at(-1)!;
     expect(stripRichText(last)).toBe(achievement);
-    expect(richTextToMarkdown(last)).toBe(achievement);
+    expect(richTextToMarkdown(last)).toBe(String.raw`封装 Array\<T\>，维护 \<template\> 与 \<strong\> 字面标签
+记录 \&amp; 和 \&lt;tag\&gt;，P99 \< 200ms`);
     expect(saved.description).toBe(saved.descriptionItems!.join("\n"));
     expect(saved.subItems?.map(({ value }) => value)).toEqual(["Map<K, V>", "处理 &amp; 字面实体"]);
     if (mode === "append") expect(saved.descriptionItems![0]).toBe(entry.descriptionItems![0]);
