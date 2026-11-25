@@ -59,10 +59,11 @@ export function parseQuestionItems(raw: string, options: { maxCount: number; pro
   return questions;
 }
 
+/** Generated questions are normalized by their parser; source snapshots stay literal here. */
 export function insertQuestions(drillId: number, items: { question: string; kind: string }[]) {
   const db = getDb();
   const insert = db.prepare(
     "INSERT INTO drill_questions (drill_id, idx, question, kind) VALUES (?, ?, ?, ?)"
   );
-  items.forEach((item, i) => insert.run(drillId, i + 1, item.question.trim(), item.kind));
+  items.forEach((item, i) => insert.run(drillId, i + 1, item.question, item.kind));
 }

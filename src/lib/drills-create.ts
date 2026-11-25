@@ -12,11 +12,11 @@ import { safeChat, checkSafeModelInput, LLM_FEATURES, type PromptPart } from "@/
 
 import { errorMessage } from "@/lib/error-message";
 
-import { loadBankContext, loadInterviewQuestionContext, loadInterviewTurnParts } from "@/lib/drills-context";
+import { loadBankContext, loadInterviewQuestionContext, loadInterviewTurnParts, readBankDrillSource } from "@/lib/drills-context";
 
 import { insertQuestions, parseQuestionItems } from "@/lib/drills-questions";
-import { questionComparisonKey } from "@/lib/question-normalization";
-import { BANK_DRILL_QUESTION_PROMPT, buildBankDrillQuestionMessages, buildProjectDrillQuestionMessages, PROJECT_DRILL_QUESTION_PROMPT } from "@/lib/drill-question-llm";
+import { hasQuestionContent, questionComparisonKey } from "@/lib/question-normalization";
+import { BANK_DRILL_QUESTION_PROMPT, buildBankDrillQuestionMessages, buildProjectDrillQuestionMessages, PROJECT_DRILL_QUESTION_PROMPT, serializeBankQuestion } from "@/lib/drill-question-llm";
 import { buildInterviewRemediationMessages, buildInterviewRemediationParts, readInterviewRemediationReport, REMEDIATION_PROMPT } from "@/lib/drill-remediation-llm";
 
 export type CreatedDrill = { id: number; count: number };
@@ -73,32 +73,49 @@ export async function createProjectDrill(body: { project_id?: unknown }, count: 
 
 /** 岗位通用题（八股/行为）：按方向/JD 出题，题库条目仅作参考题源 */
 export async function createBankDrill(
-  body: { direction?: unknown; jd?: unknown },
+  body: { direction?: unknown; jd?: unknown; previous_drill_id?: unknown },
   count: number,
   signal: AbortSignal
 ): Promise<CreatedDrill> {
-  const direction = typeof body?.direction === "string" ? body.direction.trim() : "";
-  const jd = typeof body?.jd === "string" ? body.jd.trim() : "";
-  if (!direction && !jd) {
+  const previousId = body.previous_drill_id;
+  if (previousId !== undefined && (typeof previousId !== "number" || !Number.isSafeInteger(previousId) || previousId <= 0)) {
+    throw new HttpError(400, "原练习 ID 无效");
+  }
+  if (previousId !== undefined && (body.direction !== undefined || body.jd !== undefined)) {
+    throw new HttpError(400, "重练使用原场次背景，不能同时指定方向或 JD");
+  }
+  const previous = previousId === undefined ? null : inTransaction(() => readBankDrillSource(previousId as number));
+  if (previousId !== undefined && !previous) throw new HttpError(404, "原题库练习不存在");
+  if (previous && !previous.questions.length) throw new HttpError(400, "原练习没有可用于重练的题目");
+  if (previous?.questions.some(question => !hasQuestionContent(question.question))) throw new HttpError(400, "原练习含无效题干，请重新创建练习");
+  const direction = previous ? previous.drill.direction : typeof body.direction === "string" ? body.direction.trim() : "";
+  const jd = previous ? previous.drill.jd : typeof body.jd === "string" ? body.jd.trim() : "";
+  if (!previous && !direction && !jd) {
     throw new HttpError(400, "请填写岗位方向或 JD（至少一项）");
   }
 
   // 先保留完整 JD、方向与固定指令，参考题库只使用剩余额度（含标签转义开销）。
   const bankBudget = remainingContextChars(BANK_DRILL_QUESTION_PROMPT, buildBankDrillQuestionMessages(direction, jd, "", count)[0]!.parts);
-  const bank = await loadBankContext(direction || undefined, Math.min(60_000, bankBudget));
+  // A saved selection must stay complete, including unlabelled and mixed-direction questions.
+  const bank = previous ? previous.questions.map(serializeBankQuestion).join("\n")
+    : await loadBankContext(direction || undefined, Math.min(60_000, bankBudget));
 
   let raw: string;
   try {
-      raw = await safeChat("question", { feature: LLM_FEATURES.drillBank }, BANK_DRILL_QUESTION_PROMPT,
-        buildBankDrillQuestionMessages(direction, jd, bank, count), { signal, requireJson: "strict"});
+    raw = await safeChat("question", { feature: LLM_FEATURES.drillBank }, BANK_DRILL_QUESTION_PROMPT,
+      buildBankDrillQuestionMessages(direction, jd, bank, count), { signal, requireJson: "strict"});
   } catch (err) {
-    throw new HttpError(502, llmErrorMessage(err));
+    throw new HttpError(err instanceof ModelInputBudgetError ? 413 : 502, llmErrorMessage(err));
   }
 
   const questions = generatedQuestions(raw, count);
 
   const db = getDb();
   return inTransaction(() => {
+    signal.throwIfAborted();
+    if (previous && JSON.stringify(readBankDrillSource(previous.drill.id)) !== JSON.stringify(previous)) {
+      throw new HttpError(409, "原练习题目或背景已变化，请刷新后再出题");
+    }
     const result = db
       .prepare("INSERT INTO drills (source, direction, jd, created_at) VALUES ('bank', ?, ?, ?)")
       .run(direction, jd, now());

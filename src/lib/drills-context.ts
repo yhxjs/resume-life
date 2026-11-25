@@ -1,4 +1,4 @@
-import { getDb } from "@/lib/db";
+import { dataGeneration, getDb } from "@/lib/db";
 
 import { serializeBankQuestion } from "@/lib/drill-question-llm";
 
@@ -11,6 +11,18 @@ import type { PromptPart } from "@/lib/safe-llm";
 import { buildInterviewRemediationQuestionParts, buildInterviewRemediationTurnParts } from "@/lib/drill-remediation-llm";
 
 type BankEntry = { id: number; kind: string; question: string };
+
+/** Caller holds a short transaction; a restart uses the saved selection, not a direction lookup. */
+export function readBankDrillSource(id: number) {
+  const db = getDb();
+  const drill = db.prepare("SELECT id, direction, jd FROM drills WHERE id = ? AND source = 'bank'")
+    .get(id) as { id: number; direction: string; jd: string } | undefined;
+  if (!drill) return null;
+  const questions = db.prepare("SELECT id, idx, kind, question FROM drill_questions WHERE drill_id = ? ORDER BY idx, id")
+    .all(id) as (BankEntry & { idx: number })[];
+  return { generation: dataGeneration(db), drill, questions };
+}
+
 type InterviewTurnContext = {
   id: number;
   idx: number;

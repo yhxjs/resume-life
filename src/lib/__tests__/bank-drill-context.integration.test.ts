@@ -38,6 +38,18 @@ async function create(direction?: string) {
   }));
 }
 
+async function restart(body: Record<string, unknown>) {
+  const { POST } = await import("@/app/api/drills/route");
+  return POST(new Request("http://localhost/api/drills", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source: "bank", count: 1, ...body }),
+  }));
+}
+
+function savedSelection() {
+  db.exec("INSERT INTO drills(id,source,direction,jd,created_at) VALUES(1,'bank','','',''); INSERT INTO drill_questions(drill_id,idx,kind,question) VALUES(1,1,'tech','实际选题一'),(1,2,'behavior','实际选题二')");
+}
+
 function messages() {
   return model.chat.mock.calls.at(-1)![1] as { role: string; content: string }[];
 }
@@ -134,5 +146,53 @@ describe("题库参考的记录归属与完整输入", () => {
     expect((await create("后端")).status).toBe(201);
     expect(bankRows()).toEqual(expected);
     expect(sourceRows()).toEqual(before);
+  });
+
+  it("拒绝无背景的新练习、无效的重练来源和同时覆盖原背景的请求", async () => {
+    savedSelection();
+    db.exec("INSERT INTO drills(id,source,created_at) VALUES(2,'bank',''),(3,'project','')");
+    for (const previous_drill_id of [null, 0, -1, 1.5, "1", Number.MAX_SAFE_INTEGER + 1]) {
+      expect((await restart({ previous_drill_id })).status).toBe(400);
+    }
+    for (const previous_drill_id of [3, 999]) expect((await restart({ previous_drill_id })).status).toBe(404);
+    for (const body of [{}, { previous_drill_id: 2 }, { previous_drill_id: 1, direction: "" }, { previous_drill_id: 1, jd: "其他背景" }, { source: "project", previous_drill_id: 1 }]) {
+      expect((await restart(body)).status).toBe(400);
+    }
+    expect(model.chat).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT count(*) n FROM drills").get()).toEqual({ n: 3 });
+  });
+
+  it.each(["question", "background", "delete"])("重练出题期间原场次发生 %s 变化时不保存过期结果", async change => {
+    savedSelection();
+    model.chat.mockImplementationOnce(async () => {
+      if (change === "question") db.exec("UPDATE drill_questions SET question='网页编辑后的原题' WHERE idx=1");
+      else if (change === "background") db.exec("UPDATE drills SET jd='网页编辑后的背景'");
+      else db.exec("DELETE FROM drills WHERE id=1");
+      return JSON.stringify({ questions: [{ question: generatedQuestion, kind: "tech" }] });
+    });
+    expect((await restart({ previous_drill_id: 1 })).status).toBe(409);
+    expect(db.prepare("SELECT count(*) n FROM drills").get()).toEqual({ n: change === "delete" ? 0 : 1 });
+    expect(db.prepare("SELECT 1 FROM drill_questions WHERE question=?").get(generatedQuestion)).toBeUndefined();
+  });
+
+  it("原场次含无有效题干的历史选题时整次拒绝，保留题目且不调用模型", async () => {
+    savedSelection();
+    db.exec("UPDATE drill_questions SET question='！？ …' WHERE idx=1");
+    const original = db.prepare("SELECT * FROM drill_questions ORDER BY idx").all();
+    expect((await restart({ previous_drill_id: 1 })).status).toBe(400);
+    expect(model.chat).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT * FROM drill_questions ORDER BY idx").all()).toEqual(original);
+    expect(db.prepare("SELECT count(*) n FROM drills").get()).toEqual({ n: 1 });
+  });
+
+  it("原场次选题超过模型输入预算时整次拒绝，不省略题目后继续生成", async () => {
+    savedSelection();
+    const question = "\\".repeat(32_000) + "选题尾部必须保留";
+    db.prepare("UPDATE drill_questions SET question=? WHERE idx=1").run(question);
+    const original = db.prepare("SELECT * FROM drill_questions ORDER BY idx").all();
+    expect((await restart({ previous_drill_id: 1 })).status).toBe(413);
+    expect(model.chat).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT * FROM drill_questions ORDER BY idx").all()).toEqual(original);
+    expect(db.prepare("SELECT count(*) n FROM drills").get()).toEqual({ n: 1 });
   });
 });

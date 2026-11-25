@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { ResumeLifeClient } from "./client.mjs";
+import { runTrainingWorkflow, resumeTrainingWorkflow } from "./training-workflow.mjs";
 
 // Synthetic example results. A real Agent supplies its own model's output after reading the context.
 export const examplePortrait = { role: "本地工具集成工程师", must_skills: [{ name: "SQLite", weight: 8, why: "JD 要求维护本地数据库" }],
@@ -56,11 +58,19 @@ async function main() {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "resume-life-mcp-example-"));
   let client;
   try {
-    client = await ResumeLifeClient.connect({ dataDirectory: path.join(temporary, "data"), preset: "collaboration", cwd: temporary });
+    const dataDirectory = path.join(temporary, "data");
+    const fixture = JSON.parse(execFileSync(process.execPath, [fileURLToPath(new URL("../../scripts/check-mcp-training-fixture.mjs", import.meta.url)), temporary],
+      { cwd: temporary, env: { ...process.env, RESUME_LIFE_DATA_DIR: dataDirectory }, windowsHide: true, encoding: "utf8" }));
+    const options = { dataDirectory, preset: "collaboration", cwd: temporary };
+    client = await ResumeLifeClient.connect(options);
     const result = await runApplicationWorkflow((name, args) => client.call(name, args));
     const draft = await client.call("get_ai_draft", { id: result.reviewDraftId });
     assert.deepEqual(JSON.parse((await client.readFull(draft.fullContent)).payload), exampleReview);
-    console.log(JSON.stringify({ ok: true, isolatedDemo: true, ...result }, null, 2));
+    const training = await runTrainingWorkflow((name, args) => client.call(name, args), fixture);
+    await client.close();
+    client = await ResumeLifeClient.connect(options);
+    await resumeTrainingWorkflow((name, args) => client.call(name, args), training);
+    console.log(JSON.stringify({ ok: true, isolatedDemo: true, ...result, practiceSessionId: training.session.id, mockInterviewId: training.mock.id }, null, 2));
   } finally {
     await client?.close();
     if (path.dirname(path.resolve(temporary)) !== path.resolve(os.tmpdir()) || !path.basename(temporary).startsWith("resume-life-mcp-example-")) throw new Error("Unsafe demo cleanup path");

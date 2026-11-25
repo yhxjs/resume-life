@@ -10,6 +10,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { mcpPresets, toolAccess } from "../src/mcp/config.mjs";
 import { examplePortrait, runApplicationWorkflow } from "../examples/mcp/workflow.mjs";
+import { resumeTrainingWorkflow, runTrainingWorkflow } from "../examples/mcp/training-workflow.mjs";
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -109,6 +110,8 @@ async function main() {
     await fixture.connect(new StdioClientTransport({ ...generated, env: { ...generated.env, RESUME_LIFE_MCP_WRITE_ENABLED: "true", RESUME_LIFE_MCP_ALLOWED_TOOLS: "create_application" }, cwd: temporary, stderr: "ignore" }));
     fixtureId = toolData(await fixture.callTool({ name: "create_application", arguments: { company: "MCP 示例公司", role: "软件工程师", idempotencyKey: "codex-smoke-fixture" } })).id;
   } finally { await fixture.close(); }
+  const trainingFixture = JSON.parse((await execute(process.execPath, [path.join(root, "scripts/check-mcp-training-fixture.mjs"), temporary],
+    { cwd: temporary, env, timeout: 45_000, windowsHide: true })).stdout);
   const read = await startCodex(await configuration("codex"), "read-client");
   try {
     assert.deepEqual(read.tools.map(tool => tool.name).sort(), [...readTools].sort());
@@ -128,13 +131,16 @@ async function main() {
   const collaboration = await configuration("codex", [...mcpPresets.collaboration.tools], "collaboration");
   const host = await startCodex(collaboration, "workflow-client");
   let result;
+  let training;
   try {
     assert.deepEqual(host.tools.map(tool => tool.name).sort(), [...mcpPresets.collaboration.tools].sort());
     for (const tool of host.tools) assert.equal(tool.outputSchema?.oneOf?.length, 2, `${tool.name} output contract`);
     result = await runApplicationWorkflow(async (name, args) => toolData(await host.call(name, args)), { prefix: "codex-full-workflow" });
+    training = await runTrainingWorkflow(async (name, args) => toolData(await host.call(name, args)), { ...trainingFixture, prefix: "codex-training" });
   } finally { await host.stop(); }
   const recovered = await startCodex(collaboration, "reconnected-client");
   try {
+    await resumeTrainingWorkflow(async (name, args) => toolData(await recovered.call(name, args)), training);
     const applicationId = result.applicationId;
     const receipt = toolData(await recovered.call("get_ai_generation_request", { idempotencyKey: "codex-full-workflow:portrait" }));
     assert.equal(receipt.phase, "saved");
@@ -148,6 +154,9 @@ async function main() {
     const backup = JSON.parse((await execute(process.execPath, [path.join(root, "scripts/check-mcp-backup-fixture.mjs"), temporary, String(applicationId)],
       { cwd: temporary, env, timeout: 45_000, windowsHide: true })).stdout);
     assert.equal(backup.restored, true);
+    toolError(await recovered.call("submit_practice_answer", training.answer), "CONFLICT");
+    toolError(await recovered.call("answer_mock_interview", training.turn), "CONFLICT");
+    assert.equal(toolData(await recovered.call("get_interview", { id: training.mock.id })).interview.report.depth, 8.5);
     const invalidated = toolData(await recovered.call("get_ai_generation_request", { idempotencyKey: "codex-full-workflow:portrait" }));
     assert.equal(invalidated.phase, "invalidated");
     assert.equal(invalidated.draftAvailable, false);
@@ -161,7 +170,8 @@ async function main() {
     assert.ok(tasks.items.some(item => item.id === result.taskId && item.done));
     console.log(JSON.stringify({ ok: true, client: version, readTools: readTools.length, collaborationTools: host.tools.length,
       outsideProjectDirectory: true, structuredOutput: true, idempotentCreation: true, preparationPlan: true,
-      interviewQuestions: true, externalDrafts: true, reconnect: true, revisionConflict: true, backupRestore: backup }, null, 2));
+      interviewQuestions: true, externalDrafts: true, practiceReview: true, introEdit: true, projectMaterial: true, mockInterview: true,
+      reconnect: true, revisionConflict: true, backupRestore: backup }, null, 2));
   } finally { await recovered.stop(); }
 }
 

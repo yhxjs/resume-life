@@ -5,6 +5,7 @@ import { boundMcpOutput } from "@/lib/mcp-output";
 import { getMcpApplicationStats, getMcpPriorities, getMcpRecord, listMcpCollection, listMcpOperations, readMcpRecordSection, MCP_RECORD_KINDS, type McpCollection, type McpRecordKind } from "@/lib/mcp-records";
 import { createMcpApplication, createMcpPreparationTask, scheduleMcpInterview } from "@/lib/mcp-write";
 import { McpOperationError, MCP_ERROR_CODES } from "@/lib/mcp-errors";
+import { gradeAccess } from "./source-access";
 
 export const id = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 export const revision = z.string().regex(/^[a-f0-9]{64}$/);
@@ -17,6 +18,7 @@ export const edit = { ...write, destructiveHint: true };
 export function json(value: object) { return { content: [{ type: "text" as const, text: JSON.stringify(boundMcpOutput(value)) }] }; }
 
 const sourceTools: Record<McpRecordKind, (keyof typeof toolAccess)[]> = {
+  bank_entry: ["list_bank_entries"], practice_answer_context: ["get_practice_answer_context"],
   resume: ["get_resume"], project: ["get_project"], project_material: ["list_project_materials"], application: ["get_application"],
   application_submission: ["get_application", "get_resume"], application_interview: ["list_application_interviews"],
   application_interview_questions: ["get_application_interview_questions"],
@@ -57,7 +59,7 @@ export function registerRecordTools(tools: McpTools) {
       length: z.number().int().min(1).max(4000).optional(), expectedRevision: revision.optional() }), annotations: read }, async input => {
     if (!tools.permits(...sourceTools[input.kind])) throw new McpOperationError("FORBIDDEN", "对应资料读取工具未在白名单内");
     if (input.kind === "ai_workflow_context" && input.workflowKind) assertWorkflowRead(tools, input.workflowKind);
-    return json(readMcpRecordSection(input));
+    return json(readMcpRecordSection(input, input.kind === "practice_answer_context" ? gradeAccess(tools) : undefined));
   });
   tools.register("get_today_priorities", { title: "读取今日优先事项", description: "复用首页优先事项，返回近期面试、资料缺口和到期复习。可指定 IANA 时区。",
     inputSchema: z.strictObject({ timeZone: z.string().max(100).optional() }), annotations: read }, async ({ timeZone }) => json(getMcpPriorities(timeZone)));

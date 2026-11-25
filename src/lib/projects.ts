@@ -1,4 +1,4 @@
-import { getDb, inTransaction } from "./db";
+import { getDb, inTransaction, now } from "./db";
 import { parseSummary, ProjectSummaryCorruptError } from "./summary";
 import { ModelInputBudgetError } from "./llm-input-budget";
 import { serializeProjectInterviewContext } from "./project-interview-context";
@@ -10,6 +10,12 @@ export class ProjectNotFoundError extends Error {
     super("项目不存在");
     this.name = "ProjectNotFoundError";
   }
+}
+
+export function createProjectRecord(name: string): number {
+  const ts = now();
+  return inTransaction(() => Number(getDb().prepare("INSERT INTO projects (name, created_at, updated_at) VALUES (?, ?, ?)")
+    .run(name, ts, ts).lastInsertRowid));
 }
 
 export function loadProjectRow(id: number, db = getDb()) {
@@ -37,7 +43,7 @@ export function projectContextMatches(projectId: number, expected: string): bool
   }
 }
 
-function readProjectContext(projectId: number, opts?: { maxChars?: number }): string {
+export function readProjectContext(projectId: number, opts?: { maxChars?: number }): string {
   const row = loadProjectRow(projectId);
   if (!row) throw new ProjectNotFoundError();
   return serializeProjectInterviewContext({

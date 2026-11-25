@@ -1,13 +1,15 @@
 import { ApplicationInputError, getApplicationById, listApplications } from "@/lib/applications";
 import { encodeUpdatedAtCursor, parsePaginationParams, type UpdatedAtCursor } from "@/lib/cursor-pagination";
-import { escapeLike, getDb } from "@/lib/db";
-import { loadResumeForModel } from "@/lib/resumes";
+import { escapeLike, getDb, inTransaction } from "@/lib/db";
+import { formatResumeContext, loadResumeForModel } from "@/lib/resumes";
 import { parseSummary } from "@/lib/summary";
 import { getPreparationPlan } from "@/lib/preparation-plan";
 import { listDrills } from "@/lib/drills-list";
 import { boundMcpOutput, MCP_LIST_BUDGET } from "@/lib/mcp-output";
-import { mcpRevision } from "@/lib/mcp-revision";
+import { mcpRevision, mockResumeRevision } from "@/lib/mcp-revision";
 import type { PreparationPlan } from "@/lib/preparation-plan-types";
+import { loadProjectRow } from "@/lib/projects";
+import { mcpProjectRevision } from "@/lib/mcp-project-revision";
 
 export const MCP_MAX_PAGE_SIZE = 50;
 const TEXT_FIELD_LIMIT = 12_000;
@@ -120,6 +122,7 @@ export function getMcpResume(id: number, versionId?: number) {
   const result = {
     resume: {
       id: resume.resume.id, title: resume.resume.title, template: resume.resume.template,
+      revision: mockResumeRevision(id, versionId ?? null, formatResumeContext(resume.modules)),
       created_at: resume.resume.created_at, updated_at: resume.resume.updated_at,
       version_id: versionId ?? null,
     },
@@ -148,23 +151,23 @@ export function listMcpProjects(input: PageInput = {}) {
 }
 
 export function getMcpProject(id: number) {
-  const db = getDb();
-  const project = db.prepare("SELECT id, name, summary, summary_updated_at, created_at, updated_at FROM projects WHERE id = ?").get(id) as
-    { id: number; name: string; summary: string; summary_updated_at: string; created_at: string; updated_at: string } | undefined;
-  if (!project) return null;
-  let summary: unknown = null;
-  let summaryWarning: string | null = null;
-  try { summary = parseSummary(project.summary); }
-  catch { summaryWarning = "项目总结格式损坏，未返回原始存储内容。"; }
-  const materials = db.prepare(`SELECT id, title, source, filename, content, created_at FROM project_materials
-    WHERE project_id = ? ORDER BY id DESC LIMIT 10`).all(id) as
-    { id: number; title: string; source: string; filename: string; content: string; created_at: string }[];
-  const materialCount = (db.prepare("SELECT COUNT(*) AS total FROM project_materials WHERE project_id = ?").get(id) as { total: number }).total;
-  const bounded = boundMcpOutput({ project: { id, name: project.name, summary, summary_updated_at: project.summary_updated_at,
-      created_at: project.created_at, updated_at: project.updated_at, summaryWarning },
-    materialCount, hasMoreMaterials: materialCount > materials.length,
-    materials: materials.map(item => ({ ...item, content: limitedText(item.content, 2_000) })) });
-  return { ...bounded, hasMoreMaterials: materialCount > bounded.materials.length };
+  return inTransaction(() => {
+    const db = getDb(), project = loadProjectRow(id, db);
+    if (!project) return null;
+    let summary: unknown = null;
+    let summaryWarning: string | null = null;
+    try { summary = parseSummary(project.summary); }
+    catch { summaryWarning = "项目总结格式损坏，未返回原始存储内容。"; }
+    const materials = db.prepare(`SELECT id, title, source, filename, content, created_at FROM project_materials
+      WHERE project_id = ? ORDER BY id DESC LIMIT 10`).all(id) as
+      { id: number; title: string; source: string; filename: string; content: string; created_at: string }[];
+    const materialCount = (db.prepare("SELECT COUNT(*) AS total FROM project_materials WHERE project_id = ?").get(id) as { total: number }).total;
+    const bounded = boundMcpOutput({ project: { id, name: project.name, revision: mcpProjectRevision(project, db), summary, summary_updated_at: project.summary_updated_at,
+        created_at: project.created_at, updated_at: project.updated_at, summaryWarning },
+      materialCount, hasMoreMaterials: materialCount > materials.length,
+      materials: materials.map(item => ({ ...item, content: limitedText(item.content, 2_000) })) });
+    return { ...bounded, hasMoreMaterials: materialCount > bounded.materials.length };
+  });
 }
 
 export function compactMcpApplication(application: NonNullable<ReturnType<typeof getApplicationById>>) {

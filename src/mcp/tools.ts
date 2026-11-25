@@ -87,7 +87,7 @@ export class McpTools {
       timer.unref();
       const meta = () => ({ requestId, durationMs: Math.max(0, Math.round(performance.now() - started)) });
       const args = request.params.arguments ?? {};
-      const requestedTarget = args.applicationId ?? args.id ?? args.resumeId ?? args.draftId ?? args.parentId;
+      const requestedTarget = args.applicationId ?? args.id ?? args.resumeId ?? args.draftId ?? args.parentId ?? args.questionId ?? args.interviewId ?? args.introId ?? args.projectId;
       let targetId = typeof requestedTarget === "number" && Number.isSafeInteger(requestedTarget) && requestedTarget > 0 ? requestedTarget : null;
       try {
         if (!entry) throw new McpOperationError("NOT_FOUND", "工具不存在");

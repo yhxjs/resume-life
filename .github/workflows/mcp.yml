@@ -6,6 +6,10 @@ on:
       - 'src/lib/**'
       - 'scripts/*mcp*.mjs'
       - 'src/app/api/applications/**'
+      - 'src/app/api/bank/**'
+      - 'src/app/api/drills/**'
+      - 'src/app/api/projects/**'
+      - 'src/app/api/interviews/**'
       - 'src/app/api/notebook/**'
       - 'src/app/api/reviews/**'
       - 'src/app/api/intros/**'
@@ -44,6 +48,8 @@ jobs:
           src/lib/__tests__/notebook-notes-backup.integration.test.ts
           src/lib/__tests__/application-interview-review.integration.test.ts
           src/lib/__tests__/notebook-favorite.test.ts src/lib/__tests__/reviews.integration.test.ts
+          src/app/api/drills/[id]/questions/[qid]/__tests__/output-contract.integration.test.ts
+          src/lib/__tests__/project-drill-table-provenance.integration.test.ts
           src/lib/__tests__/docs-capability-contract.test.ts
       - run: npm run example:mcp
       - run: npm run typecheck

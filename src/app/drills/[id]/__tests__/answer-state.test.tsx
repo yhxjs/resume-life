@@ -36,6 +36,16 @@ function deferred<T>() {
 afterEach(() => { cleanup(); vi.resetAllMocks(); navigation.id = "1"; });
 
 describe("专项练习的草稿与评分归属", () => {
+  it.each(["", "后端、产品"])("完成方向为 '%s' 的题库练习后，使用原场次 ID 重练", async direction => {
+    const data = drill(); data.direction = direction;
+    data.questions = data.questions.map(question => ({ ...question, answer: "已保存原答", comment: "已保存点评", answered_at: "2026-11-25" }));
+    vi.mocked(jsonFetch).mockResolvedValueOnce(data).mockResolvedValueOnce({ id: 4 });
+    render(<Page />);
+    fireEvent.click(await screen.findByRole("button", { name: "再来一套新题" }));
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/drills/4"));
+    expect(jsonFetch).toHaveBeenNthCalledWith(2, "/api/drills", expect.objectContaining({ method: "POST", body: JSON.stringify({ source: "bank", previous_drill_id: 1, count: 2 }) }));
+  });
+
   it("切题保留各题草稿，不把第一题草稿带入第二题", async () => {
     vi.mocked(jsonFetch).mockResolvedValue(drill());
     render(<Page />);

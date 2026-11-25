@@ -56,6 +56,14 @@ ${REFERENCE_ANSWER_RULES}
 ${DRILL_SCOPE_RULES}
 ${DRILL_OUTPUT_RULES}`;
 
+export function drillEvaluationRules(params: { isBankDrill: boolean; projectContext: string }) {
+  return {
+    systemPrompt: params.isBankDrill ? BANK_EVAL_PROMPT : PROJECT_EVAL_PROMPT,
+    contextRules: !params.isBankDrill && projectInterviewContextHasTableDocument(params.projectContext)
+      ? PROJECT_INTERVIEW_TABLE_DOCUMENT_RULES : "",
+  };
+}
+
 export function buildDrillEvaluation(params: {
   isBankDrill: boolean;
   direction: string;
@@ -65,6 +73,7 @@ export function buildDrillEvaluation(params: {
   answer: string;
 }): { systemPrompt: string; messages: SafeMessage[] } {
   const isBankDrill = params.isBankDrill;
+  const { systemPrompt, contextRules } = drillEvaluationRules(params);
   const contextParts: PromptPart[] = [];
   if (isBankDrill) {
     contextParts.push({ trust: "trusted", text: "【岗位背景】\n" });
@@ -83,12 +92,12 @@ export function buildDrillEvaluation(params: {
       { trust: "trusted", text: "【项目档案】\n" },
       { trust: "untrusted", tag: "project_context", text: params.projectContext },
     );
-    if (projectInterviewContextHasTableDocument(params.projectContext)) {
-      contextParts.push({ trust: "trusted", text: PROJECT_INTERVIEW_TABLE_DOCUMENT_RULES });
+    if (contextRules) {
+      contextParts.push({ trust: "trusted", text: contextRules });
     }
   }
   return {
-    systemPrompt: isBankDrill ? BANK_EVAL_PROMPT : PROJECT_EVAL_PROMPT,
+    systemPrompt,
     messages: [{ role: "user", parts: [
       ...contextParts,
       { trust: "trusted", text: "\n\n【面试题】\n" },

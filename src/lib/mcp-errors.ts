@@ -12,6 +12,11 @@ import { BackupLimitError } from "./backup-limits";
 import { ModelInputBudgetError } from "./llm-input-budget";
 import { ReviewError } from "./spaced-repetition-cards";
 import { NotebookMutationError } from "./notebook-storage";
+import { DrillGradeError } from "./drill-grading";
+import { ProjectNotFoundError } from "./projects";
+import { ProjectSummaryCorruptError } from "./summary";
+import { DocumentTableProvenanceError } from "./document-table-provenance";
+import { ModelProtocolError } from "./model-protocol";
 
 /** Stable machine codes for MCP clients; messages contain no model/provider payloads. */
 export const MCP_ERROR_CODES = ["INVALID_ARGUMENT", "NOT_FOUND", "CONFLICT", "FORBIDDEN", "CONFIGURATION", "BUSY", "CANCELLED", "TIMEOUT", "MODEL_OUTPUT", "INTERNAL"] as const;
@@ -38,10 +43,11 @@ export function classifyMcpError(error: unknown): { code: McpErrorCode; message:
   if (error instanceof LlmHttpError && (error.status === 401 || error.status === 403)) return { code: "CONFIGURATION", message: "模型服务拒绝授权，请检查模型凭证与访问权限" };
   if (error instanceof SettingsSecretError) return { code: "CONFIGURATION", message: "无法读取模型凭证，请核对 MCP 与网页端的 RESUME_LIFE_SETTINGS_KEY" };
   if (error instanceof LlmConfigError) return { code: "CONFIGURATION", message: error.message };
-  if (error instanceof ResumeNotFoundError) return { code: "NOT_FOUND", message: error.message };
-  if (error instanceof ResumeVersionError || error instanceof InterviewReviewError || error instanceof PreparationInputError || error instanceof ReviewError || error instanceof NotebookMutationError) {
+  if (error instanceof ResumeNotFoundError || error instanceof ProjectNotFoundError) return { code: "NOT_FOUND", message: error.message };
+  if (error instanceof ProjectSummaryCorruptError || error instanceof DocumentTableProvenanceError) return { code: "INVALID_ARGUMENT", message: "项目资料异常，不能用作评分依据" };
+  if (error instanceof ResumeVersionError || error instanceof InterviewReviewError || error instanceof PreparationInputError || error instanceof ReviewError || error instanceof NotebookMutationError || error instanceof DrillGradeError) {
     return { code: error.status === 404 ? "NOT_FOUND" : error.status === 409 ? "CONFLICT" : "INVALID_ARGUMENT", message: error.message };
   }
-  if (error instanceof ApplicationInputError || error instanceof ResumeContextError || error instanceof ModelInputBudgetError) return { code: "INVALID_ARGUMENT", message: error.message };
+  if (error instanceof ApplicationInputError || error instanceof ResumeContextError || error instanceof ModelInputBudgetError || error instanceof ModelProtocolError) return { code: "INVALID_ARGUMENT", message: error.message };
   return { code: "INTERNAL", message: "MCP 操作失败，请按 requestId 检查本机日志。" };
 }

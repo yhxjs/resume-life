@@ -13,6 +13,9 @@ import { registerBusinessTools } from "./business-tools";
 import { registerMaterialTools } from "./material-tools";
 import { registerReviewTools } from "./review-tools";
 import { registerMaintenanceTools } from "./maintenance-tools";
+import { registerPracticeTools } from "./practice-tools";
+import { registerAuthoringTools } from "./authoring-tools";
+import { registerMockInterviewTools } from "./mock-interview-tools";
 import { wrapUntrustedData } from "@/lib/prompt-safety";
 import { PreparationInputError } from "@/lib/application-preparation";
 import { ResumeContextError, ResumeNotFoundError } from "@/lib/resume-errors";
@@ -266,6 +269,9 @@ export function createResumeLifeMcpServer(config = readMcpConfig()) {
   registerMaterialTools(tools);
   registerReviewTools(tools);
   registerMaintenanceTools(tools);
+  registerPracticeTools(tools);
+  registerAuthoringTools(tools);
+  registerMockInterviewTools(tools);
   tools.install();
   return server;
 }

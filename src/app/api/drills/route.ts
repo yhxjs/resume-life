@@ -24,10 +24,14 @@ async function handlePost(req: Request) {
     direction?: unknown;
     jd?: unknown;
     interview_id?: unknown;
+    previous_drill_id?: unknown;
     count?: unknown;
   };
   if (body.source !== undefined && body.source !== "project" && body.source !== "bank" && body.source !== "interview") {
     return NextResponse.json({ error: "无效的练习来源" }, { status: 400 });
+  }
+  if (body.previous_drill_id !== undefined && body.source !== "bank") {
+    return NextResponse.json({ error: "原练习 ID 仅用于题库重练" }, { status: 400 });
   }
   if (body.count !== undefined && (typeof body.count !== "number" || !Number.isFinite(body.count))) {
     return NextResponse.json({ error: "练习题量必须是有限数字" }, { status: 400 });

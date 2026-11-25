@@ -14,10 +14,11 @@ import { loadMcpPreparationMaterial } from "./mcp-materials";
 import { loadMcpReviewAttempt, loadMcpReviewCard, loadMcpReviewSubmission } from "./mcp-review";
 import { getNotebookNote } from "./notebook-storage";
 import { getNotebookReviewLink } from "./spaced-repetition-cards";
+import { readPracticeAnswerContext, readBankEntry, type GradeAccess } from "./mcp-practice";
 
 export const MCP_COLLECTIONS = ["project_materials", "resume_versions", "application_history", "preparation_tasks", "application_interviews", "operation_logs"] as const;
 export type McpCollection = typeof MCP_COLLECTIONS[number];
-export const MCP_RECORD_KINDS = ["resume", "project", "project_material", "application", "application_submission", "application_interview", "application_interview_questions", "interview", "interview_turn", "practice_session", "practice_question", "interview_review", "notebook", "ai_draft", "resume_diagnosis", "jd_portrait", "intro", "interview_series", "ai_workflow_context", "review_card", "review_attempt", "review_submission"] as const;
+export const MCP_RECORD_KINDS = ["resume", "project", "project_material", "application", "application_submission", "application_interview", "application_interview_questions", "interview", "interview_turn", "practice_session", "practice_question", "interview_review", "notebook", "ai_draft", "resume_diagnosis", "jd_portrait", "intro", "interview_series", "ai_workflow_context", "review_card", "review_attempt", "review_submission", "bank_entry", "practice_answer_context"] as const;
 export type McpRecordKind = typeof MCP_RECORD_KINDS[number];
 
 const collections: Record<McpCollection, { sql: string; parent?: string }> = {
@@ -57,9 +58,14 @@ export function listMcpOperations(input: PageInput & { requestId?: string; tool?
   return fitPage(items, rows.length > limit ? String(items.at(-1)!.id) : null, item => String(item.id));
 }
 
-function record(kind: McpRecordKind, id: number, versionId?: number, workflowKind?: "jd" | "diagnosis" | "review", interviewId?: number, requestId?: string, timeZone?: string): object | null {
+function record(kind: McpRecordKind, id: number, versionId?: number, workflowKind?: "jd" | "diagnosis" | "review", interviewId?: number, requestId?: string, timeZone?: string, gradeAccess?: GradeAccess): object | null {
   const db = getDb();
   switch (kind) {
+    case "bank_entry": return readBankEntry(id) ?? null;
+    case "practice_answer_context": {
+      if (!gradeAccess) throw new McpOperationError("FORBIDDEN", "评分依据需要来源权限");
+      return readPracticeAnswerContext(id, gradeAccess);
+    }
     case "resume": return loadResumeForModel(id, versionId);
     case "application": return getApplicationById(id);
     case "application_submission": return getApplicationSubmission(id);
@@ -102,13 +108,13 @@ export function getMcpRecord(kind: McpRecordKind, id: number) {
 }
 
 /** UTF-16 offsets are explicit and revision-bound. JSON fragments can be concatenated losslessly. */
-export function readMcpRecordSection(input: { kind: McpRecordKind; id: number; versionId?: number; workflowKind?: "jd" | "diagnosis" | "review"; interviewId?: number; requestId?: string; timeZone?: string; offset?: number; length?: number; expectedRevision?: string }) {
+export function readMcpRecordSection(input: { kind: McpRecordKind; id: number; versionId?: number; workflowKind?: "jd" | "diagnosis" | "review"; interviewId?: number; requestId?: string; timeZone?: string; offset?: number; length?: number; expectedRevision?: string }, gradeAccess?: GradeAccess) {
   if (input.versionId !== undefined && input.kind !== "resume") throw new McpOperationError("INVALID_ARGUMENT", "versionId 仅用于简历");
   if (input.requestId !== undefined && input.kind !== "review_submission") throw new McpOperationError("INVALID_ARGUMENT", "requestId 仅用于复习提交");
   if (input.timeZone !== undefined && input.kind !== "review_card") throw new McpOperationError("INVALID_ARGUMENT", "timeZone 仅用于复习卡片");
   if (input.kind !== "ai_workflow_context" && (input.workflowKind !== undefined || input.interviewId !== undefined)) throw new McpOperationError("INVALID_ARGUMENT", "workflowKind 与 interviewId 仅用于 AI 上下文");
   if (input.kind === "ai_workflow_context" && (!input.workflowKind || (input.workflowKind === "review" ? !input.interviewId : input.interviewId !== undefined))) throw new McpOperationError("INVALID_ARGUMENT", "复盘上下文需面试 ID，其余上下文不接受面试 ID");
-  const value = record(input.kind, input.id, input.versionId, input.workflowKind, input.interviewId, input.requestId, input.timeZone);
+  const value = record(input.kind, input.id, input.versionId, input.workflowKind, input.interviewId, input.requestId, input.timeZone, gradeAccess);
   if (!value) throw new McpOperationError("NOT_FOUND", "记录不存在或已过期");
   const text = JSON.stringify(value);
   const revision = createHash("sha256").update(JSON.stringify([dataGeneration(), input.kind, input.id, input.versionId, text])).digest("hex");

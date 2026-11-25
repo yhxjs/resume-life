@@ -16,9 +16,13 @@ export const toolAccess = Object.freeze({
   get_ai_workflow_context: "read", list_review_cards: "read", get_review_card: "read", get_review_submission: "read", get_mcp_status: "read",
   set_preparation_resource: "write", update_application_interview: "write", submit_ai_draft: "write",
   bookmark_practice_question: "write", save_notebook_note: "write", submit_review: "write", maintain_mcp_state: "write",
+  list_bank_entries: "read", list_notebook_categories: "read", get_practice_answer_context: "read",
+  create_practice_session: "write", submit_practice_answer: "write",
+  preview_intro_edit: "read", save_intro_edit: "write", create_project: "write", add_project_material: "write",
+  get_mock_interview_state: "read", start_mock_interview: "write", answer_mock_interview: "write", finish_mock_interview: "write",
 });
 
-export const MCP_SERVER_VERSION = "1.1.0";
+export const MCP_SERVER_VERSION = "1.2.0";
 
 const reads = Object.keys(toolAccess).filter(name => toolAccess[name] === "read");
 const preparationWrites = ["create_application", "update_application", "generate_preparation_plan", "set_preparation_step",

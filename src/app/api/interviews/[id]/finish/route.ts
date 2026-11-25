@@ -7,7 +7,6 @@ import { LlmConfigError } from "@/lib/llm";
 import { captureInterviewResumeContext } from "@/lib/interview-resume-context";
 import {
   normalizeCompleteReport,
-  validateGeneratedReport,
   validateGeneratedEvaluatorReport,
   type ScoreMap,
 } from "@/lib/scores";
@@ -17,6 +16,7 @@ import { errorMessage } from "@/lib/error-message";
 import { answeredInterviewReportParts, reverseInterviewReportParts } from "@/lib/interview-report-context";
 import { readInterviewOriginalScores } from "@/lib/interview-original-scores";
 import { buildInterviewFinishMessages, buildInterviewFinishPrompt, parseInterviewFinishPayload } from "@/lib/interview-finish-llm";
+import { aggregateInterviewReport, storeInterviewReport } from "@/lib/interview-session-store";
 
 async function handlePost(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -106,36 +106,8 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
     }
 
     const parsed = parseInterviewFinishPayload(raw, isMining);
-    const jdMatch = parsed?.jd_match;
-    const strengths = parsed?.strengths ?? "";
-    const weaknesses = parsed?.weaknesses ?? "";
-    const suggestions = parsed?.suggestions ?? "";
-    const rawMiningSummary = parsed?.mining_summary ?? null;
     const rawEvaluatorReport = parsed?.evaluator_report ?? null;
-
-    // 用字面量键元组遍历，可直接按维度键索引评分表，无需对评分对象做强转
-    const dimensionKeys = ["depth", "structure", "authenticity", "completeness"] as const;
-    const avg: Record<(typeof dimensionKeys)[number], number> = {
-      depth: 0,
-      structure: 0,
-      authenticity: 0,
-      completeness: 0,
-    };
-    for (const d of dimensionKeys) {
-      const sum = scoreMaps.reduce((acc, s) => acc + s[d], 0);
-      avg[d] = Math.round((sum / scoreMaps.length) * 10) / 10;
-    }
-    const validated = validateGeneratedReport({
-      depth: avg.depth,
-      structure: avg.structure,
-      authenticity: avg.authenticity,
-      completeness: avg.completeness,
-      jd_match: jdMatch,
-      strengths,
-      weaknesses,
-      suggestions,
-      ...(isMining ? { mining_summary: rawMiningSummary } : {}),
-    }, isMining);
+    const validated = aggregateInterviewReport(parsed, scoreMaps, isMining);
     if (!validated) {
       return NextResponse.json({ error: "AI 总结结果异常（岗位匹配分须为 0-10 整数，并提供完整总结与所需经历挖掘成果），请重试" }, { status: 502 });
     }
@@ -149,9 +121,7 @@ async function handlePost(req: Request, { params }: { params: Promise<{ id: stri
       if (JSON.stringify(interviewQuery.get(interviewId)) !== JSON.stringify(interview) ||
           !resumeMaterial.isCurrent() ||
           JSON.stringify(turnsQuery.all(interviewId)) !== JSON.stringify(allTurns)) return 409;
-      db.prepare(
-        "UPDATE interviews SET status = 'finished', report = ?, evaluator_report = ?, finished_at = ? WHERE id = ?"
-      ).run(JSON.stringify(validated), evaluatorReport ? JSON.stringify(evaluatorReport) : "", ts, interviewId);
+      storeInterviewReport(interviewId, validated, evaluatorReport, ts);
       return 200;
     });
     if (status !== 200) {

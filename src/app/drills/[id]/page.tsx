@@ -208,7 +208,7 @@ function DrillSession({ drillId }: { drillId: string }) {
     try {
       const payload =
         data!.source === "bank"
-          ? { source: "bank", direction: data!.direction, jd: data!.jd, count: data!.questions.length }
+          ? { source: "bank", previous_drill_id: data!.id, count: data!.questions.length }
           : { source: "project", project_id: data!.project_id, count: data!.questions.length };
       const body = await jsonFetch<{ id: number }>("/api/drills", {
         method: "POST",

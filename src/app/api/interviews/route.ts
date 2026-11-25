@@ -20,6 +20,7 @@ import { logServerError, requestIdFrom } from "@/lib/server-errors";
 import { createCursorPage, parsePaginationParams } from "@/lib/cursor-pagination";
 import { ModelProtocolError, validateInterviewQuestion } from "@/lib/model-protocol";
 import { buildFirstInterviewQuestionMessages, firstInterviewQuestionPrompt } from "@/lib/interview-question-llm";
+import { createInterviewSession } from "@/lib/interview-session-store";
 
 async function handlePost(req: Request) {
   const parsedBody = await parseApiJson<unknown>(req);
@@ -138,15 +139,8 @@ async function handlePost(req: Request) {
               .run(resumeId, resumeVersionId, jd, rounds, ts).lastInsertRowid
           );
         }
-        const result = db
-          .prepare(
-            "INSERT INTO interviews (resume_id, resume_version_id, jd, rounds, style, series_id, round_no, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'ongoing', ?)"
-          )
-          .run(resumeId, resumeVersionId, jd, rounds, style, newSeriesId, seriesMode ? 1 : 0, ts);
-        const newId = Number(result.lastInsertRowid);
-        db.prepare(
-          "INSERT INTO interview_turns (interview_id, idx, kind, question) VALUES (?, 1, 'question', ?)"
-        ).run(newId, question);
+        const newId = createInterviewSession({ resumeId, versionId: resumeVersionId, jd, rounds, style, seriesId: newSeriesId,
+          roundNo: seriesMode ? 1 : 0, question, at: ts });
         if (applicationId !== null) linkPreparationResource(applicationId, newSeriesId === null ? "interview" : "series", newSeriesId ?? newId);
         return { interviewId: newId, seriesId: newSeriesId };
       });

@@ -13,7 +13,7 @@ import { assertDiagnosisBudget, canArchiveDiagnosisSnapshot, findMatchingDiagnos
 import { buildInterviewReviewMessages, getInterviewReviewDraftInput, InterviewReviewError, INTERVIEW_REVIEW_SYSTEM_PROMPT, parseInterviewReviewResult, saveGeneratedInterviewReview } from "./application-interview-review";
 import { saveJdPortrait } from "./jd-portrait-store";
 import { McpOperationError, classifyMcpError } from "./mcp-errors";
-import { mcpRevision } from "./mcp-revision";
+import { canonicalMcpJson, mcpRevision } from "./mcp-revision";
 import { mcpDraftResultSchema } from "./mcp-draft-format";
 import { mcpCreateOnce } from "./mcp-state";
 import { boundMcpOutput } from "./mcp-output";
@@ -139,9 +139,9 @@ function storeDraft(kind: Kind, applicationId: number, interviewId: number | und
 }
 
 export function submitMcpDraft(input: { kind: Kind; applicationId: number; interviewId?: number; expectedSourceRevision: string; idempotencyKey: string; result: unknown }) {
+  if (!input.result || typeof input.result !== "object" || Array.isArray(input.result)) throw new McpOperationError("INVALID_ARGUMENT", "提交草稿必须是 JSON 对象");
   const raw = JSON.stringify(input.result);
-  const canonical = JSON.stringify(input.result, (_key, value: unknown) => value && typeof value === "object" && !Array.isArray(value)
-    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value);
+  const canonical = canonicalMcpJson(input.result);
   return inTransaction(() => {
     const signature = { kind: input.kind, applicationId: input.applicationId, interviewId: input.interviewId,
       submission: { sourceRevision: input.expectedSourceRevision, payloadHash: createHash("sha256").update(canonical).digest("hex") } };

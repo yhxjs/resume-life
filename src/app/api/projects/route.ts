@@ -1,7 +1,8 @@
 import { withRouteErrorHandling } from "@/lib/api-route";
 import { parseApiJson } from "@/lib/api-request";
 import { NextResponse } from "next/server";
-import { getDb, inTransaction, now } from "@/lib/db";
+import { getDb } from "@/lib/db";
+import { createProjectRecord } from "@/lib/projects";
 
 async function handleGet() {
   const db = getDb();
@@ -33,12 +34,7 @@ async function handlePost(req: Request) {
   if (!name) {
     return NextResponse.json({ error: "项目名称不能为空" }, { status: 400 });
   }
-  const db = getDb();
-  const ts = now();
-  const result = inTransaction(() => db
-    .prepare("INSERT INTO projects (name, created_at, updated_at) VALUES (?, ?, ?)")
-    .run(name, ts, ts));
-  return NextResponse.json({ id: Number(result.lastInsertRowid), name }, { status: 201 });
+  return NextResponse.json({ id: createProjectRecord(name), name }, { status: 201 });
 }
 
 export const GET = withRouteErrorHandling("GET /api/projects", handleGet);

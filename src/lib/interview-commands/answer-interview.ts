@@ -1,4 +1,4 @@
-import { acquireCommandLock, getDb, inTransaction, now } from "@/lib/db";
+import { acquireCommandLock, getDb, inTransaction } from "@/lib/db";
 import { DataGenerationConflictError } from "@/lib/data-generation";
 import { interviewStyleOf } from "@/lib/interview";
 import { LlmConfigError } from "@/lib/llm";
@@ -13,7 +13,7 @@ import type { SseEmitter } from "@/lib/sse";
 import { InterviewCommandError } from "./errors";
 import { errorMessage } from "@/lib/error-message";
 import { logServerError } from "@/lib/server-errors";
-import { syncNotebookSnapshot } from "@/lib/notebook";
+import { commitInterviewTurn } from "@/lib/interview-session-store";
 import { loadPriorSeriesContext } from "./series-context";
 import { questionComparisonKey } from "@/lib/question-normalization";
 import { buildInterviewAnswerMessages, interviewAnswerPrompt } from "@/lib/interview-answer-llm";
@@ -127,19 +127,7 @@ export function prepareAnswerInterview(args: {
               (interview.series_id !== null && priorContext !== null && JSON.stringify(loadPriorSeriesContext(interview.series_id, interview.round_no).parts) !== JSON.stringify(priorContext.parts))) {
             throw new InterviewCommandError(contextConflict, 409);
           }
-          const updated = db.prepare(`UPDATE interview_turns SET answer = ?, comment = ?, scores = ?, answered_at = ?
-            WHERE id = ? AND interview_id = ? AND answered_at = '' AND question = ?
-              AND EXISTS (SELECT 1 FROM interviews WHERE id = ? AND status = 'ongoing')
-              AND NOT EXISTS (SELECT 1 FROM interview_turns WHERE interview_id = ? AND idx > ?)`)
-            .run(answer, comment, JSON.stringify(scores), now(), turnId, interviewId, turn.question, interviewId, interviewId, turn.idx);
-          if (updated.changes !== 1) throw new InterviewCommandError(contextConflict, 409);
-          syncNotebookSnapshot(db, "interview", turnId, {
-            answer,
-            comment,
-            scores: JSON.stringify(scores),
-          });
-          if (!finished) db.prepare("INSERT INTO interview_turns (interview_id, idx, kind, question) VALUES (?, ?, ?, ?)").run(interviewId, turn.idx + 1, nextKind, nextQuestion);
-          else db.prepare("UPDATE interviews SET status = 'finished', finished_at = ? WHERE id = ?").run(now(), interviewId);
+          commitInterviewTurn({ interviewId, turn, answer, comment, scores, nextKind, nextQuestion, finished });
         });
       } catch (error) {
         if (!(error instanceof InterviewCommandError)) throw error;
