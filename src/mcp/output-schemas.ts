@@ -5,6 +5,7 @@ import { PLAN_STEP_KEYS } from "@/lib/preparation-plan-types";
 import { PREPARATION_KINDS } from "@/lib/application-preparation-types";
 import { INTRO_KINDS } from "@/lib/intro";
 import { CAREER_RECORD_KINDS } from "@/lib/mcp-career";
+import { REBASE_OUTPUT_SCHEMAS } from "@/lib/mcp-rebase-types";
 
 // Restore preserves historical IDs across the full safe-integer range.
 const id = z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER);
@@ -82,8 +83,11 @@ const searchEntry = object({ id, title: z.string(), created_at: z.string(), full
 const jobSchema = object({ jobId: revision, operation: z.string(), idempotencyKey: z.string(),
   status: z.enum(["running", "succeeded", "failed", "cancelled", "interrupted", "invalidated"]), errorCode: z.string().nullable(),
   resultAvailable: z.boolean(), createdAt: z.string(), updatedAt: z.string(), deadlineAt: z.string(),
+  elapsedMs: count, lastHeartbeatAt: z.string(),
+  progress: object({ phase: z.string(), completed: count, total: count.nullable(), unit: z.enum(["steps", "files", "bytes", "pages"]), updatedAt: z.string() }).nullable(),
   result: object({ tool: z.literal("get_mcp_job_result"), jobId: revision }) });
 const core: Record<string, z.ZodType> = {
+  ...REBASE_OUTPUT_SCHEMAS,
   search_records_page: page(object({ id, domain: z.string(), title: z.string(), created_at: z.string(), project_id: id.nullable(), stage: z.string().nullable(), snippet: z.string(),
     fullContent: object({ tool: z.string(), arguments: object({ id, kind: z.string().optional() }) }) })).extend({ query: z.string(), domains: z.array(z.string()), revision, total: count }),
   get_repository_evidence_diff: contextSection, get_repository_evidence_version: contextSection,
@@ -223,6 +227,8 @@ const core: Record<string, z.ZodType> = {
   get_review_submission: object({ request_id: z.string(), card: reviewCard, attempt: reviewAttempt, fullContent }),
   submit_review: object({ id, cardId: id, requestId: z.uuid() }), bookmark_practice_question: record, save_notebook_note: record,
   get_mcp_status: object({ serverVersion: z.string(), databaseVersion: count, enabledTools: z.array(z.string()),
+    workspaceBinding: revision, jobs: object({ running: count, waiting: count, interrupted: count, succeeded: count, failed: count, cancelled: count, invalidated: count }),
+    leases: z.array(object({ resource: z.enum(["render", "capture", "parse"]), active: count })), cache: object({ totalBytes: count, maxBytes: count, ttlHours: count }),
     drafts: object({ total: count, available: count, expired: count }), generationRequests: object({ pending: count, interrupted: count, succeeded: count, failed: count }), operationLogCount: count }),
   maintain_mcp_state: object({ removedDrafts: count, clearedResponses: count }),
 };

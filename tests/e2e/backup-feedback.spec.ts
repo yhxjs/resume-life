@@ -354,7 +354,7 @@ test("加密备份 UI 遵循导出、验证、恢复与手动刷新合同", asyn
   }]);
   await expect(exportPassword).toHaveValue("");
   await expect(exportConfirmation).toHaveValue("");
-  await expect(page.getByRole("status")).toContainText("导出成功");
+  await expect(page.getByRole("status").filter({ hasText: "导出成功" })).toHaveText("加密备份导出成功");
 
   const importPassword = page.getByLabel("导入密码", { exact: true });
   const fileInput = page.locator('input[type="file"]');

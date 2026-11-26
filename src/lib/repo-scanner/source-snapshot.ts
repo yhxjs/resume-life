@@ -5,6 +5,7 @@ import type { RepoTarget } from "./prompts";
 import { repoRootPathError } from "./path-policy";
 import { decodeRepoSourcePrefix, sliceRepoSourcePrefix } from "./source-text";
 import { REPO_MANIFEST_NAMES } from "./project-files";
+import { reportMcpProgress } from "../mcp-progress";
 
 const MAX_SNAPSHOT_CHARS = 180_000;
 const MAX_SNAPSHOT_ENTRIES = 10_000;
@@ -71,6 +72,7 @@ export async function collectRepoSourceSnapshot(targets: readonly RepoTarget[], 
   let used = 0;
   let inspected = 0;
   let hasSource = false;
+  let collectedFiles = 0;
   let charLimit = MAX_SNAPSHOT_CHARS;
   const append = (value: string): boolean => {
     const remaining = charLimit - used;
@@ -168,7 +170,10 @@ export async function collectRepoSourceSnapshot(targets: readonly RepoTarget[], 
             serialized = serializeRecord(record);
           }
           // 只有实际保留的非空白正文才算材料，元数据和截断状态不能充当源码。
-          if (record.content && append(serialized)) hasSource ||= record.content.trim().length > 0;
+          if (record.content && append(serialized)) {
+            hasSource ||= record.content.trim().length > 0;
+            reportMcpProgress("reading", ++collectedFiles, null, "files");
+          }
           if (budgetLimited) charLimit = used;
         } finally {
           await file.close();

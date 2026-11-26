@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { reportMcpProgress } from "./mcp-progress";
 import { readMcpRepositoryRoots } from "@/mcp/repository-config.mjs";
 import { getDb, inTransaction } from "./db";
 import { loadProjectRow } from "./projects";
@@ -94,6 +95,7 @@ async function captureRepository(input: CaptureInput, signal: AbortSignal) {
   let collected: RepositoryCapture | undefined;
   if (!replay) {
     const repository = inTransaction(() => prepareCapture(input));
+    reportMcpProgress("reading", 0, null, "files");
     const snapshot = await collectRepoSourceSnapshot([{ path: repository.path }], signal);
     if (!snapshot.trim() && !input.baselineCaptureKey) throw new McpOperationError("INVALID_ARGUMENT", "仓库中没有可采集的非空源码或文档");
     const files: RepositoryCapture["files"] = [];
@@ -103,6 +105,7 @@ async function captureRepository(input: CaptureInput, signal: AbortSignal) {
         locator: `${repository.name}/${row.path}`, content: row.content, truncated: row.truncated === true, sha256: createHash("sha256").update(row.content).digest("hex") });
     }
     collected = { id: input.projectId, root: repository.path, repositoryName: repository.name, capturedAt: new Date().toISOString(), snapshot, files };
+    reportMcpProgress("committing", files.length, files.length, "files");
     if (input.baselineCaptureKey) {
       const baseline = readCapture(input.baselineCaptureKey), captured = new Set(files.map(file => file.locator));
       const missingFiles: NonNullable<RepositoryCapture["missingFiles"]> = [];

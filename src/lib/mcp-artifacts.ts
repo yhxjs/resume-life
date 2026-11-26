@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { reportMcpProgress } from "./mcp-progress";
 import { createHash, randomUUID } from "node:crypto";
 import * as z from "zod/v4";
 import { DATA_DIR, dataGeneration, getDb } from "./db";
@@ -122,10 +123,12 @@ export async function createMcpArtifact(creator: Creator, key: string, payload: 
   }
   const generation = dataGeneration() ?? "initial";
   return withMcpWorkLease("render", signal, async activeSignal => {
+  reportMcpProgress("rendering", 0, 1, "files");
   const output = await render(activeSignal);
   if (output.bytes.length > MAX_ARTIFACT_BYTES) throw new McpOperationError("INVALID_ARGUMENT", "导出文件超过 20 MiB 上限，请减少选材");
   assertOperationActive(); assertDataGeneration();
   if (generation !== (dataGeneration() ?? "initial")) throw new McpOperationError("CONFLICT", "数据已恢复，请重新读取来源");
+  reportMcpProgress("committing", output.bytes.length, output.bytes.length, "bytes");
   mcpCreateOnce(creator, key, payload, () => {
     output.validate(); assertOperationActive(); assertDataGeneration();
     const manifest = manifestSchema.parse({ artifactId, creator, requestKey: key, generation, inputHash: hash(JSON.stringify(payload)),

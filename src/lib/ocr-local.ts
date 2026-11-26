@@ -4,6 +4,7 @@ import path from "node:path";
 import { retainParseResource } from "./parse-concurrency";
 import { logServerEvent } from "./server-errors";
 import { hasOcrText } from "./ocr-output";
+import { reportMcpProgress } from "./mcp-progress";
 
 const LOCAL_OCR_TIMEOUT_MS = 60_000;
 
@@ -93,6 +94,8 @@ export async function ocrPdfPagesLocally(
 
       signal?.throwIfAborted();
       const pageTexts: string[] = [];
+      let processed = 0;
+      reportMcpProgress("parsing", processed, pages.length, "pages");
       for (const page of pages) {
         if (stopped) throw new Error("本地 OCR 已停止");
         signal?.throwIfAborted();
@@ -105,6 +108,7 @@ export async function ocrPdfPagesLocally(
         if (text) {
           pageTexts.push(text);
         }
+        reportMcpProgress("parsing", ++processed, pages.length, "pages");
       }
 
       return pageTexts.join("\n\n");

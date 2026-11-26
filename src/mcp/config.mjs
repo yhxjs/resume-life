@@ -1,5 +1,6 @@
 /** Capability policy shared by doctor, the stdio handshake and tools/call. No DB or SDK imports. */
 export const toolAccess = Object.freeze({
+  preview_resume_draft_rebase: "read", preview_application_rebase: "read", preview_application_edit: "read", save_application_edit: "write",
   search_records_page: "read",
   get_repository_evidence_diff: "read", preview_repository_evidence_update: "read", save_repository_evidence_update: "write",
   list_repository_evidence_history: "read", get_repository_evidence_version: "read",
@@ -48,10 +49,10 @@ export const toolAccess = Object.freeze({
   get_resume_version_context: "read", compare_resume_versions: "read", publish_resume_version: "write", preview_resume_version_branch: "read", branch_resume_version: "write",
 });
 
-export const MCP_SERVER_VERSION = "1.5.0";
+export const MCP_SERVER_VERSION = "1.6.0";
 
 const reads = Object.keys(toolAccess).filter(name => toolAccess[name] === "read");
-const preparationWrites = ["create_application", "update_application", "generate_preparation_plan", "set_preparation_step",
+const preparationWrites = ["create_application", "update_application", "save_application_edit", "generate_preparation_plan", "set_preparation_step",
   "create_preparation_task", "update_preparation_task", "schedule_application_interview", "reschedule_application_interview",
   "update_application_interview", "save_application_interview_questions", "set_preparation_resource"];
 const preset = (tools, writeEnabled) => Object.freeze({ tools: Object.freeze(tools), writeEnabled, llmEnabled: false });
@@ -70,6 +71,7 @@ const trainingTools = [...commonReads,
   "start_mock_interview", "answer_mock_interview", "finish_mock_interview", "save_interview_training_result",
   "save_interview_series_result", "answer_series_interview", "finish_series_interview", "save_career_result"];
 const authoringTools = [...commonReads,
+  "preview_resume_draft_rebase",
   "get_repository_evidence_diff", "preview_repository_evidence_update", "save_repository_evidence_update", "list_repository_evidence_history", "get_repository_evidence_version",
   "get_resume_template_context", "create_resume_template", "preview_resume_template", "save_resume_template", "get_resume_avatar_context", "set_resume_avatar",
   "begin_mcp_upload", "append_mcp_upload", "complete_mcp_upload", "get_mcp_upload", "extract_uploaded_file", "get_file_extraction", "get_file_import_context", "submit_file_import", "preview_file_import", "save_file_import",

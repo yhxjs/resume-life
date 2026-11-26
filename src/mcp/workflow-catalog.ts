@@ -74,7 +74,7 @@ export const MCP_WORKFLOWS: Workflow[] = [
 export function getWorkflowCatalog(permits: (name: Tool) => boolean, workflowId: string | undefined, page: ContextPageInput) {
   const selected = workflowId ? MCP_WORKFLOWS.filter(workflow => workflow.id === workflowId) : MCP_WORKFLOWS;
   if (!selected.length) throw new McpOperationError("NOT_FOUND", "工作流不存在");
-  return mcpContextPage({ catalogVersion: "1.5", workflows: selected.map(workflow => {
+  return mcpContextPage({ catalogVersion: "1.6", workflows: selected.map(workflow => {
     const requiredTools = [...new Set([...workflow.dependencies, ...workflow.steps.map(step => step.tool)])];
     const missingTools = requiredTools.filter(name => !permits(name));
     return { ...workflow, requiredTools, missingTools, available: missingTools.length === 0,

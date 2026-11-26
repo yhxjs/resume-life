@@ -17,8 +17,11 @@ on:
       - 'src/app/api/templates/**'
       - 'src/app/api/upload/**'
       - 'src/app/api/tools/**'
+      - 'src/app/api/settings/mcp/**'
+      - 'src/app/settings/**'
+      - 'src/components/settings/**'
       - 'examples/mcp/**'
-      - 'docs/MCP.md'
+      - 'docs/MCP*.md'
       - 'README.md'
       - 'package*.json'
       - 'tsconfig.json'
@@ -70,5 +73,7 @@ jobs:
           src/app/api/templates/__tests__/route.test.ts
           src/app/api/upload/__tests__/route.test.ts
           src/lib/__tests__/avatar-lifecycle.integration.test.ts
+          src/lib/mcp-rebase-merge.test.ts
+          src/components/settings/__tests__/mcp-connection-panel.test.tsx
       - run: npm run example:mcp
       - run: npm run typecheck

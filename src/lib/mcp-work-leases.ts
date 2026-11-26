@@ -3,6 +3,8 @@ import { dataGeneration, getDb, inTransaction, now } from "./db";
 import { withoutDataGenerationScope } from "./data-generation";
 import { McpOperationError } from "./mcp-errors";
 import { withOperationGuard, withOperationLimits } from "./operation-deadline";
+import { hasMcpProgressReporter, reportMcpProgress } from "./mcp-progress";
+import { setTimeout as delay } from "node:timers/promises";
 
 export type McpWorkResource = "render" | "capture" | "parse";
 export const MCP_WORK_LEASE_MS = 30_000;
@@ -21,7 +23,9 @@ export function mcpCleanupScope<T>(run: () => T): T {
 /** One shared pool per data directory, including legacy synchronous calls. */
 export async function withMcpWorkLease<T>(resource: McpWorkResource, signal: AbortSignal, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const db = getDb(), generation = dataGeneration(db) ?? "initial", token = randomUUID();
-  inTransaction(() => {
+  for (;;) {
+    signal.throwIfAborted();
+    try { inTransaction(() => {
     const rows = db.prepare("SELECT token,owner_pid FROM mcp_work_leases WHERE resource=?").all(resource) as { token: string; owner_pid: number }[];
     for (const row of rows) if (!isMcpProcessAlive(row.owner_pid)) db.prepare("DELETE FROM mcp_work_leases WHERE token=?").run(row.token);
     db.prepare("DELETE FROM mcp_work_leases WHERE expires_at <= ? OR generation <> ?").run(now(), generation);
@@ -29,7 +33,13 @@ export async function withMcpWorkLease<T>(resource: McpWorkResource, signal: Abo
     if (count >= limits[resource]) throw new McpOperationError("BUSY", "同一数据目录的任务并发已满，请稍后以原参数和幂等键重试");
     db.prepare("INSERT INTO mcp_work_leases(token,resource,generation,owner_pid,expires_at) VALUES(?,?,?,?,?)")
       .run(token, resource, generation, process.pid, new Date(Date.now() + MCP_WORK_LEASE_MS).toISOString());
-  });
+    }); break; }
+    catch (error) {
+      if (!(error instanceof McpOperationError) || error.code !== "BUSY" || !hasMcpProgressReporter()) throw error;
+      reportMcpProgress("waiting_resource");
+      await delay(200, undefined, { signal });
+    }
+  }
   const lost = new AbortController();
   const combined = AbortSignal.any([signal, lost.signal]);
   const validate = () => {

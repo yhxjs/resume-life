@@ -2,7 +2,7 @@
 
 由 `node scripts/check-mcp-contract.mjs --write` 从实际 stdio tools/list 和工作流目录生成。CI 使用无参数命令检查漂移。
 
-版本 1.5.0；165 个工具（99 只读、63 写入、3 模型）；26 个工作流。
+版本 1.6.0；169 个工具（102 只读、64 写入、3 模型）；28 个工作流。
 
 | 工具 | 权限 | 输入契约 SHA-256 | 输出契约 SHA-256 |
 |---|---|---|---|
@@ -14,7 +14,7 @@
 | `begin_mcp_upload` | write | `93df411ca01732f7fba26ecc4265bc01590fdce7af51e166a4f8a3958d63af5c` | `7ff73896563525ebf0afd8c9b316c9b23ecaad6de66eb219f054b818e75b8a88` |
 | `bookmark_practice_question` | write | `d22694fabf534faf2cf9651281b69e9b0677180aa155377b604ac6128adcceca` | `b577c7e23babd11c60ae8b9d22ef3d210604ccd3ee6841d5583f280d575d63b6` |
 | `branch_resume_version` | write | `4ca4bf201edb03196ee4e0cb765474cdc397daf79d805801f51761c362fcb4ae` | `b577c7e23babd11c60ae8b9d22ef3d210604ccd3ee6841d5583f280d575d63b6` |
-| `cancel_mcp_job` | write | `2c0596318d5f09fa1c477dce11e99d7280a2cbdb269f6a4571f86143304a5839` | `485e54e8bd66b18d58174fb9afc4a143289d19cd1d6e9fd06b7c0b19486e98a4` |
+| `cancel_mcp_job` | write | `2c0596318d5f09fa1c477dce11e99d7280a2cbdb269f6a4571f86143304a5839` | `3ae4a1504bfec48054ef8e421745ebf98b8bbcaaf42a8393262c11b398276612` |
 | `capture_project_repository` | write | `3595e39f5743d7ee9b03e8f68df9258ea97188a79813dd98792490a5bc63200e` | `a27e797b34345b97b3582d90ca5b57f81fb95c8219949478e6df59982df5f936` |
 | `cleanup_mcp_cache` | write | `da6b1ca54dbfff58e0b1c2f0ae3f14aa48fa5ea38929073da4bb947b39fae3f2` | `bd823735c0a5c28e2109968c46b43dac65158e71bd97d17452465d46d9fd0c44` |
 | `compare_resume_versions` | read | `3a5e22b1644f47fbfde6ebb5066e5df477ec00d5e2dc9df636f881698b346ec6` | `ff6ddf576082d3697a8148d515d189982b4fa99281e0fb7f12a946517aa20b6f` |
@@ -55,9 +55,9 @@
 | `get_intro_generation_context` | read | `100b3ad40f28cbe41674f330ab3e2104c6d7992220cddd8cff260fa2ae6db9c1` | `ff6ddf576082d3697a8148d515d189982b4fa99281e0fb7f12a946517aa20b6f` |
 | `get_jargon_generation_context` | read | `cb591d40d0de978768b4fbf8823d54339a490c485a6019d796826747b50c2d9a` | `ff6ddf576082d3697a8148d515d189982b4fa99281e0fb7f12a946517aa20b6f` |
 | `get_jd_portrait` | read | `d54ec4ea57bbd42b77cbd6ddf24916f08bf3b293fbde7a20183e93b19523e86e` | `b07681c7373ca3a4cc4edb5acd1a7c80119a864e543b0a2e9577fb60347ece88` |
-| `get_mcp_job` | read | `2c0596318d5f09fa1c477dce11e99d7280a2cbdb269f6a4571f86143304a5839` | `485e54e8bd66b18d58174fb9afc4a143289d19cd1d6e9fd06b7c0b19486e98a4` |
+| `get_mcp_job` | read | `2c0596318d5f09fa1c477dce11e99d7280a2cbdb269f6a4571f86143304a5839` | `3ae4a1504bfec48054ef8e421745ebf98b8bbcaaf42a8393262c11b398276612` |
 | `get_mcp_job_result` | read | `7874ddf62bee890861cd12ba56f3ce62f09b1cd4a45cf15f54eb0c02e2ad6a44` | `ff6ddf576082d3697a8148d515d189982b4fa99281e0fb7f12a946517aa20b6f` |
-| `get_mcp_status` | read | `8fd2f3a9f585458d28f458b18645b0336925be162090e94d153d80c9a0385370` | `4eccd969be3820399e04a34bce0764e2ccb64835f305a0c1c8b786b1d09426d8` |
+| `get_mcp_status` | read | `8fd2f3a9f585458d28f458b18645b0336925be162090e94d153d80c9a0385370` | `f192e6ede80adeb428c40f068a78293f4d80a1da425013441da293b4728d1c99` |
 | `get_mcp_upload` | read | `b943b363ff1a0b38c4c50b64177e45eb508a0e6365fd7431f5c7b0a780442ce9` | `7ff73896563525ebf0afd8c9b316c9b23ecaad6de66eb219f054b818e75b8a88` |
 | `get_mock_interview_state` | read | `58925fa6e56670c42259b96f0544af5c253c38de8752d6da068abb3625a6b553` | `8972c4d345ae7e0a8f4216f2706fdedf2f9f00e1cd0e6cbd3ecac18c8652e063` |
 | `get_notebook_entry` | read | `d54ec4ea57bbd42b77cbd6ddf24916f08bf3b293fbde7a20183e93b19523e86e` | `2d4ad92566910dba9d5f768b18e18ea6eeaafb6ec4e7a5a8363884260f5131de` |
@@ -101,8 +101,8 @@
 | `list_interviews` | read | `042d41ff76ac5a2b2c4ec0c8f0e27e223cc2c36d38677ae77a31c4103b1a575b` | `8ac1de999c249313d1b961861116b4f26fab944d12122d43044fae35cd2e222f` |
 | `list_intros` | read | `049d005f9001881440c3b2e515955e3bd142e97beaa7d69a6898f6041b8847ef` | `e3036c50596e4e85cf86bf2919b18e9a01d535f741f92cee23f3499467279f45` |
 | `list_jd_portraits` | read | `986ce9a330b95ad4320e169942a159ab0d2810ef4a18b2dc89683ba485232a2d` | `b6d6425f6ae7d9964beae5320ea55cdb20678edec8963a9e8336ad773546168c` |
-| `list_mcp_jobs` | read | `675587a6402a36e25a4eb60be4bc7b7c4c0ce577fe82de47a019a277f521325a` | `4c5f0e8acba1ee5eacadc8f6cfbecd0fdbba36777ef629bb504010eae2d5ab22` |
-| `list_mcp_operations` | read | `fb516deb6e1bff1f1c2d7f8d292e7603a1537408b5c06a020977409f318f2432` | `2d484d7f29e384777385433331141484f9cd72bbb1059125b0e05d44e3a9e581` |
+| `list_mcp_jobs` | read | `675587a6402a36e25a4eb60be4bc7b7c4c0ce577fe82de47a019a277f521325a` | `0e61c6b871ee78427a6c9c44605dd5ab078c5eb5c53f901d849a0422d0307a29` |
+| `list_mcp_operations` | read | `32eb8d4d3095139db68a0838da529856a367ca4fbb89b6ec8c3399c4470b4b7d` | `2d484d7f29e384777385433331141484f9cd72bbb1059125b0e05d44e3a9e581` |
 | `list_notebook` | read | `cdeb1c0d8ae7d77ccadf5dc3e9148912b9d2a08e35d50e27929d7e46c2431819` | `ac8bc0eefb9ac09014984a3e74e81ecab9f29af2eab0c7529544994afede31c6` |
 | `list_notebook_categories` | read | `675587a6402a36e25a4eb60be4bc7b7c4c0ce577fe82de47a019a277f521325a` | `32e1660ef759c1e27d474611979f2d2bc07305d9b420330ba33c31c5d008c5e4` |
 | `list_practice_questions` | read | `2966f276024203caa67f68250725c88ffe7149ad5050a5e22291aeb66df4fe94` | `2217055bc68ea5fcb718c2f7afbe7f756f82434ef794e8c2813dac3cbe029796` |
@@ -118,6 +118,8 @@
 | `list_review_cards` | read | `01e32413274e80a349b79d58bf9b8bbfb94556c64570a168b092791f3ce95a47` | `38b47c46da63e372e1c6531ce6459d778e800bdeb8ac7c84a3d29f9a069b0f2c` |
 | `maintain_mcp_state` | write | `f52204dcae3055803afef9714bbc9730a869db36ffc2fb69b8c59438a20d05cd` | `61004e401a35aa9e6087d8a3f16259b9989b1617b64f2d815860c4483d1f931b` |
 | `move_notebook_entry` | write | `54272ba12316b5bdb24c378e90815f2b0dfb502e3b60aed222c79405d0f4887c` | `b577c7e23babd11c60ae8b9d22ef3d210604ccd3ee6841d5583f280d575d63b6` |
+| `preview_application_edit` | read | `faa58dc1e3478f5420e72c10dcbd12d0c09473319aea31834e20cfd457e155ed` | `2dbd07db50c3b6667cdb8f63700d72ec82e8641584fd2b35cb7d7a77dd5abf73` |
+| `preview_application_rebase` | read | `b6cab2a61cb84a71aa500c92b7ab21769b6dcb48923b655f402cc2caf5e5e163` | `71fc6b5107892c0de644d72981ae225b2925ab7c35922b822ec2ae0342b39f8b` |
 | `preview_bank_import` | read | `f82f5b0a7bed0fbcb8fdf7f36d4dd549585b331769693256d42d3ce2ff63c390` | `ea78d562563735ef2e757669d3bf42b2260e4220bab047d593b2a58f8009650d` |
 | `preview_diagnosis_adoption` | read | `cb39096c8e0b19f2db0994389ae22c6613b2a14668fe91c576eb9ea680ba2fc5` | `ea78d562563735ef2e757669d3bf42b2260e4220bab047d593b2a58f8009650d` |
 | `preview_file_import` | read | `53c3ee0eecc7df0487407271c390bb89b2ccda6bf8b31d557692a06090cb8ab0` | `ea78d562563735ef2e757669d3bf42b2260e4220bab047d593b2a58f8009650d` |
@@ -127,6 +129,7 @@
 | `preview_project_summary` | read | `14ff04b90815a280f521fa24bd99a3ecd428dc4815c8ccb9d27aff3372259dc5` | `ea78d562563735ef2e757669d3bf42b2260e4220bab047d593b2a58f8009650d` |
 | `preview_repository_evidence_update` | read | `9be59ccf81c5a657493156d7bef4971e08a7d49915e9071f1ae6817f00d79f7e` | `ea78d562563735ef2e757669d3bf42b2260e4220bab047d593b2a58f8009650d` |
 | `preview_resume_draft_edit` | read | `3814103c4f700d8dab0c9ab98d6c40c8eba606cbc10ded793031dbb7b187a54f` | `ea78d562563735ef2e757669d3bf42b2260e4220bab047d593b2a58f8009650d` |
+| `preview_resume_draft_rebase` | read | `0780346c4c04966d69db2e8fd8b4282f563b0856921c9820c59ad25255955d70` | `71fc6b5107892c0de644d72981ae225b2925ab7c35922b822ec2ae0342b39f8b` |
 | `preview_resume_layout` | read | `5aa3ba2be397f8dbe701adcb1a93c8c8fa0ef86c48052eefc6b572930824998a` | `ea78d562563735ef2e757669d3bf42b2260e4220bab047d593b2a58f8009650d` |
 | `preview_resume_template` | read | `1a37b1280372fcf054633ea8da08b78c6743f997e71aad6fb096f1fdf38938f7` | `ea78d562563735ef2e757669d3bf42b2260e4220bab047d593b2a58f8009650d` |
 | `preview_resume_version_branch` | read | `2dc34eca497e4bbbd67655d67ea618ee3d68caf073f4b4e91b62ec0abf791c25` | `ea78d562563735ef2e757669d3bf42b2260e4220bab047d593b2a58f8009650d` |
@@ -136,6 +139,7 @@
 | `rename_notebook_category` | write | `9059ea5b88dd81e845101c36134b5659562381d52faa69cbab1b1f473876869e` | `b577c7e23babd11c60ae8b9d22ef3d210604ccd3ee6841d5583f280d575d63b6` |
 | `reschedule_application_interview` | write | `f61760b8d067f6a94b6a5c2df3cb65c34b8eea308ab55ba0e892368c91731512` | `b577c7e23babd11c60ae8b9d22ef3d210604ccd3ee6841d5583f280d575d63b6` |
 | `save_ai_draft` | write | `88256764353e62ee6baabdf1c4387862f6d490038ae2051351a159897221c9ca` | `d2de81b11023e39e8c52bdaf31aab6d78a30e3449b02bb3646d4264f08230bd0` |
+| `save_application_edit` | write | `032fdc28385c0c23cc293ea793db69bde02c88b74bd3b9631861c10c8df51158` | `4ad631bf629579e2f3b339380708041b09404fa216ebbb41fd9c63e147d85aef` |
 | `save_application_interview_questions` | write | `5159f7719b8bc196c1b58bc31dc45f2c303fe2ca3d59b2cb0b59875b017d7747` | `b577c7e23babd11c60ae8b9d22ef3d210604ccd3ee6841d5583f280d575d63b6` |
 | `save_bank_import` | write | `08e6973c4243849d0efc60f787fa43a3f3d447ece4488255939aba1a28dd180f` | `ec9766e07a554c06c9541cbed4acfbbb205bfcee6cec748e83b699499cb27685` |
 | `save_career_result` | write | `00f11b3e455b00f5764cb4cbe3a1e22cd827e68c734ffc95f77d6a68e72311b9` | `b577c7e23babd11c60ae8b9d22ef3d210604ccd3ee6841d5583f280d575d63b6` |
@@ -162,7 +166,7 @@
 | `set_preparation_resource` | write | `202bd6fd9a04acc53198f737f6b40a337e8d85668b00fd2390f7e0c28ad0e1b8` | `4594a3134e51171466549196b566f48f96349659b55b91c31ef7acbeb58a21ab` |
 | `set_preparation_step` | write | `b8ce46cf476846ee89f397403e1903e69bbcbfc8422237d162289e4c0420ed1c` | `96e362f0c408c0d2466f2771ec475c590255b37877295f658f4dbceeaf6dc9bd` |
 | `set_resume_avatar` | write | `7f05a4c614f8a5d8d37f49f54c8e006be973c7d2c318aa62383cae61653f5988` | `b577c7e23babd11c60ae8b9d22ef3d210604ccd3ee6841d5583f280d575d63b6` |
-| `start_mcp_job` | write | `358bcf6b0e282fdcfcae26bce9fe6164ebff473806ccd2387bff677657f18c96` | `485e54e8bd66b18d58174fb9afc4a143289d19cd1d6e9fd06b7c0b19486e98a4` |
+| `start_mcp_job` | write | `358bcf6b0e282fdcfcae26bce9fe6164ebff473806ccd2387bff677657f18c96` | `3ae4a1504bfec48054ef8e421745ebf98b8bbcaaf42a8393262c11b398276612` |
 | `start_mock_interview` | write | `80a159c63cb9350001e84c8b6b6e98b3f63261aa003feb6f9880feeec0b6bf58` | `b577c7e23babd11c60ae8b9d22ef3d210604ccd3ee6841d5583f280d575d63b6` |
 | `submit_ai_draft` | write | `62e66db96e3181388f772ede78b5a937b25b04b5976d4b21566fb3297548977d` | `54ec419f0cfed7d6af83d9139557eef9f63413edfef01443206c9cdef58c45ec` |
 | `submit_file_import` | write | `8e211d2add6bcb0f3d343c4810db530e9194e47e62efdd899d38c0b25613cac5` | `85489b7aff57739160f9815a126b5fdb4321fc4ad0c825e2b6ce53f30be97516` |
@@ -183,6 +187,8 @@
 | `series-advance` | `get_interview`、`get_resume`、`get_interview_series`、`get_interview_series_context`、`save_interview_series_result` |
 | `series-finalize` | `get_interview`、`get_resume`、`get_interview_series`、`get_interview_series_context`、`save_interview_series_result` |
 | `salary-training` | `get_career_workflow_context`、`save_career_result`、`get_career_record` |
+| `application-conflict-resolution` | `get_application`、`preview_application_rebase`、`preview_application_edit`、`save_application_edit` |
+| `resume-conflict-resolution` | `get_resume`、`get_resume_draft_context`、`preview_resume_draft_rebase`、`preview_resume_draft_edit`、`save_resume_draft_edit` |
 | `file-upload` | `begin_mcp_upload`、`get_mcp_upload`、`append_mcp_upload`、`complete_mcp_upload` |
 | `file-import` | `get_mcp_upload`、`get_file_extraction`、`extract_uploaded_file`、`start_mcp_job`、`get_mcp_job`、`get_mcp_job_result`、`get_file_import_context`、`submit_file_import`、`preview_file_import`、`save_file_import` |
 | `template-authoring` | `get_resume`、`get_resume_template_context`、`create_resume_template`、`preview_resume_template`、`save_resume_template` |
@@ -201,12 +207,12 @@
 | `jargon-decoding` | `get_jargon_generation_context`、`save_jargon_result`、`get_career_record` |
 | `portfolio-export` | `get_resume`、`get_project`、`get_portfolio_sources`、`get_portfolio_context`、`export_portfolio`、`read_export_artifact` |
 
-工作流完整绑定契约 SHA-256：`bf9050c83064526f96cf788d06b4e8db35d48bc3d6305aa25811180fe721619b`。
+工作流完整绑定契约 SHA-256：`ecda8146ea464445c4e85d38760ea7bf2f890b4db2c1ea3973a66b6d50822f85`。
 
 | 预设 | 工具数 |
 |---|---|
-| readonly | 99 |
-| preparation | 106 |
-| collaboration | 162 |
+| readonly | 102 |
+| preparation | 110 |
+| collaboration | 166 |
 | training | 63 |
-| authoring | 100 |
+| authoring | 101 |

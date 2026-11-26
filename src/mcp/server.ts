@@ -10,6 +10,7 @@ import { assertDataGeneration, DataGenerationConflictError, withDataGenerationSc
 import { updateMcpApplication, setMcpPreparationStep } from "@/lib/mcp-write";
 import { registerWorkflowTools } from "./workflows";
 import { registerJobTools } from "./job-tools";
+import { registerRebaseTools } from "./rebase-tools";
 import { registerSearchTools } from "./search-tools";
 import { registerFileImportTools } from "./file-import-tools";
 import { registerTemplateAvatarTools } from "./template-avatar-tools";
@@ -300,6 +301,7 @@ export function createResumeLifeMcpServer(config = readMcpConfig()) {
   registerProjectMaterialTools(tools);
   registerPortfolioTools(tools);
   registerCareerTools(tools);
+  registerRebaseTools(tools);
   tools.install();
   return server;
 }

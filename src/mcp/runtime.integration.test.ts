@@ -70,7 +70,31 @@ it("reconnects to one persisted export and reads its exact result without relaun
   expect(await ok("read_export_artifact", { artifactId: artifact.artifactId })).toMatchObject({ sha256: artifact.sha256 });
   expect(db.prepare("SELECT COUNT(*) n FROM mcp_creation_receipts").get()).toEqual({ n: 1 });
   expect(db.prepare("SELECT COUNT(*) n FROM mcp_jobs").get()).toEqual({ n: 1 });
+  expect(await ok("get_mcp_job", { jobId: first.jobId })).toMatchObject({ progress: { phase: "succeeded", unit: "bytes", completed: artifact.byteLength, total: artifact.byteLength }, elapsedMs: expect.any(Number), lastHeartbeatAt: expect.any(String) });
   await fails("start_mcp_job", { operation: "export_resume", arguments: { ...input, format: "docx" } }, "CONFLICT");
+});
+
+it.each([false, true])("reports resource waiting, resumes on release, or cancels without entering the worker (%s)", async cancel => {
+  const { startMcpJob, cancelMcpJob, getMcpJob } = await import("@/lib/mcp-jobs");
+  const { withMcpWorkLease } = await import("@/lib/mcp-work-leases");
+  const { reportMcpProgress } = await import("@/lib/mcp-progress");
+  for (const token of ["busy-one", "busy-two"]) db.prepare("INSERT INTO mcp_work_leases VALUES(?,'render','initial',?,'2099-01-01')").run(token, process.pid);
+  let ran = false;
+  const job = startMcpJob({ operation: "export_resume", payload: { idempotencyKey: "waiting-progress-job" }, requiredTools: ["get_resume"], timeoutMs: 5000 }, signal => withMcpWorkLease("render", signal, async () => {
+    ran = true; reportMcpProgress("rendering", 1, 1, "files"); return { id: 1 };
+  }));
+  await vi.waitFor(() => expect(getMcpJob(job.jobId, allowed).progress).toMatchObject({ phase: "waiting_resource", completed: 0, total: null }));
+  const waiting = getMcpJob(job.jobId, allowed);
+  expect(waiting.elapsedMs).toBeGreaterThanOrEqual(0);
+  expect(waiting.progress?.updatedAt).toEqual(expect.any(String));
+  expect(await ok("get_mcp_status")).toMatchObject({ jobs: { running: 1, waiting: 1 }, leases: [{ resource: "render", active: 2 }, { resource: "capture", active: 0 }, { resource: "parse", active: 0 }] });
+  await connect(new Set(["get_mcp_status"]));
+  expect(await ok("get_mcp_status")).toMatchObject({ jobs: { running: 0, waiting: 0 } });
+  if (cancel) cancelMcpJob(job.jobId, allowed);
+  else db.exec("DELETE FROM mcp_work_leases");
+  await vi.waitFor(() => expect(getMcpJob(job.jobId, allowed).status).toBe(cancel ? "cancelled" : "succeeded"));
+  expect(ran).toBe(!cancel);
+  if (!cancel) expect(getMcpJob(job.jobId, allowed).progress).toMatchObject({ phase: "succeeded", completed: 1, total: 1, unit: "files" });
 });
 
 it("checks the original synchronous receipt before recovering a new asynchronous job", async () => {
@@ -119,6 +143,17 @@ it("records timeout without committing late changes", async () => {
   });
   await vi.waitFor(() => expect(getMcpJob(job.jobId, allowed)).toMatchObject({ status: "failed", errorCode: "TIMEOUT" }));
   expect(db.prepare("SELECT title FROM resumes WHERE id=1").get()).toEqual({ title: "固定履历" });
+});
+
+it("reports TIMEOUT when polling wins the race with the worker timer", async () => {
+  const { startMcpJob, getMcpJob } = await import("@/lib/mcp-jobs");
+  const run = vi.fn(async () => ({ id: 1 }));
+  const job = startMcpJob({ operation: "export_resume", payload: { idempotencyKey: "poll-before-timeout" }, requiredTools: [], timeoutMs: 5000 }, run);
+  db.prepare("UPDATE mcp_jobs SET deadline_at='2000-01-01' WHERE job_id=?").run(job.jobId);
+  expect((await import("@/lib/mcp-status")).getMcpStatus().jobs).toMatchObject({ failed: 1, interrupted: 0 });
+  expect(getMcpJob(job.jobId, allowed)).toMatchObject({ status: "failed", errorCode: "TIMEOUT" });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(run).not.toHaveBeenCalled();
 });
 
 it("recovers committed work after owner loss and identifies interrupted work without restarting", async () => {

@@ -1,7 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { createSearchIndexes, SEARCH_INDEX_OBJECT_NAMES } from "./search-index";
+import { createMcpSearchEpochs } from "./mcp-search-epochs";
 
-export const CURRENT_DB_VERSION = 13;
+export const CURRENT_DB_VERSION = 14;
 
 /** Formal evidence history is included in encrypted user backups. */
 const PROJECT_REPOSITORY_EVIDENCE_SCHEMA_SQL = `
@@ -26,6 +27,22 @@ CREATE INDEX IF NOT EXISTS idx_repository_evidence_source ON project_repository_
 
 /** Local MCP receipts/drafts/audit metadata are deliberately excluded from user backups. */
 const MCP_STATE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS mcp_runtime_identity (
+  id INTEGER PRIMARY KEY CHECK (id=1),
+  instance_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mcp_search_epochs (
+  domain TEXT PRIMARY KEY NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision>=0)
+);
+CREATE TABLE IF NOT EXISTS mcp_job_progress (
+  job_id TEXT PRIMARY KEY NOT NULL REFERENCES mcp_jobs(job_id) ON DELETE CASCADE,
+  phase TEXT NOT NULL,
+  completed INTEGER NOT NULL DEFAULT 0 CHECK (completed>=0),
+  total INTEGER CHECK (total IS NULL OR total>=completed),
+  unit TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS mcp_uploads (
   upload_id TEXT PRIMARY KEY NOT NULL,
   generation TEXT NOT NULL,
@@ -824,6 +841,7 @@ function expectedSchema(): Map<string, ExpectedTableSchema> {
   try {
     expected.exec(SCHEMA_SQL);
     createSearchIndexes(expected);
+    createMcpSearchEpochs(expected);
     const tables = expected
       .prepare("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
       .all() as Array<{ name: string; sql: string }>;
@@ -843,6 +861,7 @@ const EXPECTED_OBJECTS = (() => {
   try {
     database.exec(SCHEMA_SQL);
     createSearchIndexes(database);
+    createMcpSearchEpochs(database);
     return database.prepare("SELECT name, tbl_name, sql FROM sqlite_master WHERE type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY name").all() as { name: string; tbl_name: string; sql: string }[];
   } finally {
     database.close();
@@ -865,7 +884,8 @@ export function validateDatabaseSchema(database: DatabaseSync, version = CURRENT
     !(version < 10 && table === "mcp_generation_requests") &&
     !(version < 11 && ["notebook_notes", "mcp_generation_progress"].includes(table)) &&
     !(version < 12 && table === "mcp_operation_results") &&
-    !(version < 13 && ["mcp_jobs", "mcp_work_leases", "mcp_uploads", "mcp_upload_chunks", "project_repository_evidence"].includes(table));
+    !(version < 13 && ["mcp_jobs", "mcp_work_leases", "mcp_uploads", "mcp_upload_chunks", "project_repository_evidence"].includes(table)) &&
+    !(version < 14 && ["mcp_runtime_identity", "mcp_search_epochs", "mcp_job_progress"].includes(table));
   const expectedTables = [...EXPECTED_SCHEMA.keys()].filter(included);
   const actualTables = (database
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -900,6 +920,7 @@ export function validateDatabaseSchema(database: DatabaseSync, version = CURRENT
     }
   }
   for (const expected of EXPECTED_OBJECTS) {
+    if (version < 14 && expected.name.startsWith("mcp_search_epoch_")) continue;
     if (!included(expected.tbl_name)) continue;
     const actual = database.prepare("SELECT sql FROM sqlite_master WHERE name=?").get(expected.name) as { sql: string } | undefined;
     if (!actual || normalizedSql(actual.sql) !== normalizedSql(expected.sql)) {
@@ -928,7 +949,7 @@ export function rollbackIgnoringAutoRollback(
 
 export function initializeDatabase(database: DatabaseSync): void {
   const version = database.prepare("PRAGMA user_version").get() as { user_version: number };
-  if (![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, CURRENT_DB_VERSION].includes(version.user_version)) {
+  if (![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, CURRENT_DB_VERSION].includes(version.user_version)) {
     throw new Error(`不支持数据库版本 ${version.user_version}：仅支持数据库版本 ${CURRENT_DB_VERSION}`);
   }
   if (version.user_version !== 0) {
@@ -941,7 +962,7 @@ export function initializeDatabase(database: DatabaseSync): void {
     try {
       // 取得写锁后重验，支持多个进程同时打开同一份旧版本库。
       const locked = database.prepare("PRAGMA user_version").get() as { user_version: number };
-      if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
+      if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
       validateDatabaseSchema(database, locked.user_version);
       database.exec(SALARY_REQUEST_SCHEMA_SQL);
       database.exec(RESUME_REQUEST_SCHEMA_SQL);
@@ -953,6 +974,8 @@ export function initializeDatabase(database: DatabaseSync): void {
       database.exec(INTERVIEW_QUESTION_GRAPH_SCHEMA_SQL);
       database.exec(MCP_STATE_SCHEMA_SQL);
       database.exec(NOTEBOOK_NOTES_SCHEMA_SQL);
+      createMcpSearchEpochs(database);
+      database.exec("INSERT OR IGNORE INTO mcp_runtime_identity(id,instance_id) VALUES(1,lower(hex(randomblob(32))))");
       validateDatabaseSchema(database);
       database.exec(`PRAGMA user_version = ${CURRENT_DB_VERSION}`);
       database.exec("COMMIT");
@@ -970,6 +993,8 @@ export function initializeDatabase(database: DatabaseSync): void {
     database.exec(TABLE_SCHEMA_SQL);
     database.exec(INDEX_SCHEMA_SQL);
     createSearchIndexes(database);
+    createMcpSearchEpochs(database);
+    database.exec("INSERT OR IGNORE INTO mcp_runtime_identity(id,instance_id) VALUES(1,lower(hex(randomblob(32))))");
     validateDatabaseSchema(database);
     database.exec(`PRAGMA user_version = ${CURRENT_DB_VERSION}`);
     database.exec("COMMIT");

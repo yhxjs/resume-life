@@ -10,7 +10,9 @@ async function main() {
   const { serveStdio } = await import("@modelcontextprotocol/server/stdio");
   const { createResumeLifeMcpServer } = await import("./server");
   const { logServerError } = await import("@/lib/server-errors");
-  serveStdio(() => createResumeLifeMcpServer(config), { onerror: error => { logServerError("mcp.transport", error); } });
+  // tsx can load the wrapper through CJS while serveStdio is ESM. Passing the
+  // protocol Server avoids a cross-module instanceof check during discovery.
+  serveStdio(() => createResumeLifeMcpServer(config).server, { onerror: error => { logServerError("mcp.transport", error); } });
 }
 
 void main().catch(error => {

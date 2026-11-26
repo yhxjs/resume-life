@@ -8,6 +8,7 @@ import { btnGhost, btnPrimary } from "@/lib/ui";
 import { resolveUsageRange } from "@/lib/llm-usage-range";
 import { BackupManager, type BackupManagerHandle } from "@/components/settings/backup-manager";
 import { LocalDataCleanup } from "@/components/settings/local-data-cleanup";
+import { McpConnectionPanel } from "@/components/settings/mcp-connection-panel";
 import { errorMessage } from "@/lib/error-message";
 import { ModelSettingsSection, OcrSettingsSection } from "@/components/settings/model-settings-section";
 import { ProxySettingsSection } from "@/components/settings/proxy-settings-section";
@@ -325,6 +326,7 @@ export default function SettingsPage() {
       </div>
 
       {/* 数据管理与灾备恢复组件 */}
+      <McpConnectionPanel />
       <BackupManager ref={backupRef} />
       <LocalDataCleanup />
     </div>

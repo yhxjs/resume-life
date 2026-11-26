@@ -3,6 +3,7 @@ import type { ModuleData } from "../../src/lib/modules";
 import type { Application, ApplicationStage } from "../../src/lib/applications-types";
 import { applicationStatsFixture } from "../support/application-stats";
 import type { ResumeStyleOverrides } from "../../src/lib/templates";
+import type { McpConnectionReport } from "../../src/lib/mcp-connection-types";
 import { getReviewDate } from "../../src/lib/spaced-repetition";
 
 export function syntheticResume() {
@@ -158,6 +159,14 @@ export async function mockApi(page: Page, applications: Application[] = []) {
       response = { ok: true };
     }
     else if (path === "/api/settings/configured") response = { configured: false };
+    else if (path === "/api/settings/mcp" && method === "GET") response = {
+      node: "v24.21.0", nodePath: "/synthetic/node", projectRoot: "/synthetic/resume-life",
+      dataDirectory: "/synthetic/data", repositoryRoots: [],
+      presets: (["readonly", "preparation", "collaboration", "training", "authoring"] as const)
+        .map(name => ({ name, label: name, description: "合成权限预设" })),
+      checks: [{ id: "synthetic", label: "合成诊断", state: "pass", detail: "界面测试使用隔离数据", repair: "" }],
+      canGenerate: true, status: null,
+    } satisfies McpConnectionReport;
     else if (path === "/api/projects" && method === "GET") response = [];
     else if (/^\/api\/projects\/\d+\/summary-history$/.test(path) && method === "GET") response = { projectId: Number(path.split("/")[3]), items: [], nextCursor: null };
     else if (path === "/api/bank/directions" && method === "GET") response = [];

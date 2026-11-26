@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { mockApi } from "./synthetic-api";
 
 const SUMMARY = {
   calls: 42, failed: 2, cancelled: 1,
@@ -26,8 +27,8 @@ const LOGS = {
 
 async function mockUsage(page: import("@playwright/test").Page, summary = SUMMARY) {
   const seen: string[] = [];
-  // 与 tests/e2e/synthetic-api.ts 一致：用 **/api/** 兜底拦截，未列出的请求返回空对象，
-  // 避免任何组件请求落到真实 dev server。
+  // 复用公共夹具处理设置页的诊断等请求，未列出的 API 仍不会落到真实服务。
+  await mockApi(page);
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -50,7 +51,7 @@ async function mockUsage(page: import("@playwright/test").Page, summary = SUMMAR
       });
       return;
     }
-    await route.fulfill({ json: {} });
+    await route.fallback();
   });
   return seen;
 }

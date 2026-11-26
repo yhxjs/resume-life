@@ -4,13 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mcpPresets } from "../../src/mcp/config.mjs";
 import { readContext, readAllPages, readArtifact, recoverReceipt, waitForJob, uploadBytes } from "./helpers.mjs";
+import { runWorkflow } from "./workflow-runner.mjs";
 
 const launcher = fileURLToPath(new URL("../../scripts/mcp.mjs", import.meta.url));
 
 export class ResumeLifeClient {
   constructor(client) { this.client = client; }
 
-  static async connect({ dataDirectory, preset = "readonly", timeoutMs = 120_000, cwd, repositoryRoots = [] } = {}) {
+  /** @param {{ dataDirectory: string, preset?: keyof typeof mcpPresets, timeoutMs?: number, cwd?: string, repositoryRoots?: string[] }} options */
+  static async connect({ dataDirectory, preset = "readonly", timeoutMs = 120_000, cwd, repositoryRoots = [] }) {
     if (!path.isAbsolute(dataDirectory ?? "")) throw new Error("dataDirectory 必须为绝对路径");
     if (!Object.hasOwn(mcpPresets, preset)) throw new Error("未知的 MCP 权限预设");
     if (!Array.isArray(repositoryRoots) || repositoryRoots.some(root => typeof root !== "string" || !path.isAbsolute(root))) throw new Error("repositoryRoots 必须是绝对目录数组");
@@ -47,6 +49,7 @@ export class ResumeLifeClient {
   recoverReceipt(receipt, options = {}) { return recoverReceipt(this.call.bind(this), receipt, options); }
   waitForJob(jobId, options = {}) { return waitForJob(this.call.bind(this), jobId, options); }
   uploadBytes(input, options = {}) { return uploadBytes(this.call.bind(this), input, options); }
+  runWorkflow(plan, options) { return runWorkflow(this.call.bind(this), plan, options); }
 
   async close() { await this.client.close(); }
 }

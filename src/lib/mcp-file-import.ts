@@ -15,6 +15,7 @@ import { createProjectMaterial } from "./project-materials";
 import { getProjectMaterialContext } from "./mcp-project-materials";
 import { assertProjectMaterial, assertProjectMaterialTitle } from "./request-limits";
 import { documentTableSegments, parseDocumentTableProvenance } from "./document-table-provenance";
+import { reportMcpProgress } from "./mcp-progress";
 
 export type FileExtractionInput = { uploadId: string; ocrMode: "off" | "local" | "vision"; pdfMode: "auto" | "image"; idempotencyKey: string };
 export type FileImportSource = { extractionKey: string; target: { kind: "resume" } | { kind: "project"; projectId: number } };
@@ -55,6 +56,7 @@ export async function extractUploadedFile(input: FileExtractionInput, signal: Ab
   const cached = inTransaction(() => replayExtraction(idempotencyKey, payload));
   if (cached) return cached;
   return withMcpWorkLease("parse", signal, async activeSignal => {
+    reportMcpProgress("reading", 0, 1, "files");
     const upload = readMcpUploadBytes(input.uploadId);
     if (upload.purpose === "avatar") throw new McpOperationError("INVALID_ARGUMENT", "头像上传不能用于文档导入");
     const state = inTransaction(() => {
@@ -66,6 +68,7 @@ export async function extractUploadedFile(input: FileExtractionInput, signal: Ab
     try {
       activeSignal.throwIfAborted();
       let parsed: ExtractedFileContent;
+      reportMcpProgress("parsing", 0, 1, "files");
       try { parsed = await extractContentFromFile(upload.filename, upload.bytes, { signal: activeSignal, ocrMode: input.ocrMode, pdfMode: input.pdfMode }); }
       catch (error) {
         if (error instanceof ParseBusyError) throw new McpOperationError("BUSY", error.message);
@@ -77,6 +80,7 @@ export async function extractUploadedFile(input: FileExtractionInput, signal: Ab
       }
       activeSignal.throwIfAborted();
       if (!parsed.text.trim()) throw new McpOperationError("INVALID_ARGUMENT", "没有提取到文本，请检查文件或明确选择 OCR 方式");
+      reportMcpProgress("committing", 1, 1, "files");
       return inTransaction(() => {
         const result = mcpCreateWithResult("extract_uploaded_file", idempotencyKey, payload, (): Extraction => ({
           ...parsed, id: stableId(idempotencyKey), uploadId: upload.uploadId, filename: upload.filename, purpose: upload.purpose as "resume" | "project", sha256: upload.sha256,

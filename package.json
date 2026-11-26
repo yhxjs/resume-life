@@ -36,8 +36,10 @@
     "mcp:doctor": "node scripts/mcp.mjs doctor",
     "mcp:config": "node scripts/mcp.mjs config",
     "check:mcp:codex": "node scripts/check-mcp-codex.mjs",
+    "check:mcp:hosts": "node scripts/check-mcp-hosts.mjs",
     "check:mcp:contract": "node scripts/check-mcp-contract.mjs",
     "benchmark:mcp": "node scripts/benchmark-mcp.mjs",
+    "benchmark:mcp:search": "node scripts/benchmark-mcp-search.mjs",
     "test:mcp": "cross-env NODE_OPTIONS=--experimental-sqlite vitest run src/mcp",
     "example:mcp": "node examples/mcp/workflow.mjs"
   },

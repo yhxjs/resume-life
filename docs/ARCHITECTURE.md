@@ -77,7 +77,7 @@ v9 的 MCP 回执、操作日志、临时草稿，v10 的生成请求、v11 的�
 
 持久任务由 `mcp-jobs` 管理，跨进程渲染/采集/解析租约由 `mcp-work-leases` 管理；原操作及原幂等回执仍是提交事实的依据。事务提交前检查期限、取消、租约和恢复世代。`mcp-cache` 统一管理缓存期限、容量及可预览清理，`mcp-uploads` 验证分块偏移与完整哈希；文件解析复用网页领域规则。
 
-模板与头像的网页/MCP 写入分别共享 `template-store` 和 `avatar-upload`。仓库增量更新将正式版本原文与材料快照存入 v13 的 `project_repository_evidence`，随业务备份保留；`mcp_*` 运行状态不导出。`mcp-search` 在授权领域内提供有界片段和绑定匹配结果版本的分页。26 项工作流及 165 个工具的契约由 `scripts/check-mcp-contract.mjs` 从真实 stdio 服务生成并核对。
+模板与头像的网页/MCP 写入分别共享 `template-store` 和 `avatar-upload`。仓库增量更新将正式版本原文与材料快照存入 v13 的 `project_repository_evidence`，随业务备份保留；`mcp_*` 运行状态不导出。`mcp-search` 在授权领域内提供有界片段和基于只读快照、领域变动计数及键集游标的分页。28 项工作流及 169 个工具的契约由 `scripts/check-mcp-contract.mjs` 从真实 stdio 服务生成并核对。
 
 ## 安全边界
 

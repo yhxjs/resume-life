@@ -123,9 +123,34 @@ it("binds every required argument in the registered input contracts and names on
     for (const name of flow.dependencies) expect(tools.has(name), flow.id + ":" + name).toBe(true);
     for (const step of flow.steps) {
       const tool = tools.get(step.tool)!; expect(tool, flow.id + ":" + step.tool).toBeDefined();
-      for (const required of tool.inputSchema.required ?? []) expect(Object.hasOwn(step.inputs, required), flow.id + ":" + step.tool + ":" + required).toBe(true);
-      for (const bound of Object.keys(step.inputs)) expect(Object.hasOwn(tool.inputSchema.properties ?? {}, bound), flow.id + ":" + step.tool + ":" + bound).toBe(true);
+      const schema = tool.inputSchema;
+      for (const required of schema.required ?? []) expect(Object.hasOwn(step.inputs, required), flow.id + ":" + step.tool + ":" + required).toBe(true);
+      for (const bound of Object.keys(step.inputs)) expect(Object.hasOwn(schema.properties ?? {}, bound), flow.id + ":" + step.tool + ":" + bound).toBe(true);
     }
+  }
+});
+
+it.each(["application", "resume"])("executes %s three-way conflict resolution through the production registrar and exact catalog permissions", async kind => {
+  const app = await call("create_application", { company: "并发公司", role: "开发", stage: "interested", idempotencyKey: "rebase-catalog-app" });
+  const id = kind + "-conflict-resolution";
+  await connect(id);
+  const vars: Bag = { applicationId: app.id, resumeId: 1, proposed: kind === "application" ? { notes: "Agent 备注" } : { title: "Agent 标题", modules: [] }, persisted: { saveKey: "catalog-rebase-save" } };
+  vars.basis = kind === "application" ? await run(id, 0, vars) : await run(id, 0, vars, "context");
+  vars.base = (await run<Context>(id, 1, vars, "preview")).value;
+  if (kind === "application") db.prepare("UPDATE applications SET notes='网页备注',jd='网页保留 JD' WHERE id=?").run(Number(app.id));
+  else db.exec("UPDATE resumes SET title='网页标题' WHERE id=1");
+  vars.comparison = (await run<Context>(id, 2, vars, "preview")).value;
+  expect(vars.comparison).toMatchObject({ unresolved: 1, prepared: null });
+  vars.choices = [{ path: [kind === "application" ? "notes" : "title"], take: "proposed" }];
+  vars.resolved = (await run<Context>(id, 3, vars, "preview")).value;
+  expect(vars.resolved).toMatchObject({ unresolved: 0 });
+  vars.preview = await run<Context>(id, 4, vars, "preview");
+  const saved = await run(id, 5, vars);
+  expect(await run(id, 5, vars)).toEqual(saved);
+  if (kind === "application") expect(db.prepare("SELECT notes,jd FROM applications WHERE id=?").get(Number(app.id))).toEqual({ notes: "Agent 备注", jd: "网页保留 JD" });
+  else {
+    expect(db.prepare("SELECT title FROM resumes WHERE id=1").get()).toEqual({ title: "Agent 标题" });
+    expect(db.prepare("SELECT json_extract(snapshot,'$.title') title FROM resume_versions WHERE id=?").get(versionId)).toEqual({ title: "资料" });
   }
 });
 

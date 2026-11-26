@@ -1,3 +1,4 @@
+import { dropMcpRuntimeV14 } from "./mcp-runtime-fixture";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -146,7 +147,7 @@ it("API 拒绝无效编号、请求体与过期上下文，内部故障返回 re
 
 it("v6 原子升级且保留旧数据，失败时表与版本一并回滚", async () => {
   const { initializeDatabase, validateDatabaseSchema, CURRENT_DB_VERSION } = await import("../db-schema");
-  db.exec("DROP TABLE application_preparation_plans; DROP TABLE project_repository_evidence; DROP TABLE mcp_upload_chunks; DROP TABLE mcp_uploads; DROP TABLE mcp_jobs; DROP TABLE mcp_work_leases; DROP TABLE mcp_operation_results; DROP TABLE mcp_generation_progress; DROP TABLE notebook_notes; DROP TABLE mcp_generation_requests; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; PRAGMA user_version=6");
+  (dropMcpRuntimeV14(db), db).exec("DROP TABLE application_preparation_plans; DROP TABLE project_repository_evidence; DROP TABLE mcp_upload_chunks; DROP TABLE mcp_uploads; DROP TABLE mcp_jobs; DROP TABLE mcp_work_leases; DROP TABLE mcp_operation_results; DROP TABLE mcp_generation_progress; DROP TABLE notebook_notes; DROP TABLE mcp_generation_requests; DROP TABLE mcp_drafts; DROP TABLE mcp_creation_receipts; DROP TABLE mcp_operation_logs; DROP TABLE interview_question_graphs; PRAGMA user_version=6");
   expect(() => validateDatabaseSchema(db, 6)).not.toThrow();
   const original = db.exec.bind(db);
   const spy = vi.spyOn(db, "exec").mockImplementation(sql => {

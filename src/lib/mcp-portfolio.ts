@@ -11,6 +11,7 @@ import { isLocalAvatarUrl, type BasicContent } from "./modules";
 import { readUploadFile, uploadPathFromUrl } from "./upload-storage";
 import { assertMcpContext, mcpContextPage, mcpContextRevision, type ContextPageInput } from "./mcp-context";
 import { createMcpArtifact } from "./mcp-artifacts";
+import { reportMcpProgress } from "./mcp-progress";
 
 export function getPortfolioSources(page: ContextPageInput) {
   return inTransaction(() => mcpContextPage({ ...loadPortfolioSources(), templates: PORTFOLIO_TEMPLATES, defaultAnonymizeConfig: DEFAULT_ANONYMIZE_CONFIG }, page));
@@ -32,7 +33,9 @@ export async function exportMcpPortfolio(input: { options: PortfolioExportOption
   const { idempotencyKey, ...payload } = input;
   return createMcpArtifact("export_portfolio", idempotencyKey, payload, async signal => {
     const context = inTransaction(() => { const value = capture(input.options); assertMcpContext(value, input.expectedRevision); return value; });
+    reportMcpProgress("packaging", 0, 1, "files");
     const bytes = await createPortfolioZip(context.output, signal);
+    reportMcpProgress("packaging", 1, 1, "files");
     return { bytes, filename: `portfolio-${input.options.resumeId}.zip`, mimeType: "application/zip", sourceRevision: mcpContextRevision(context),
       validate: () => assertMcpContext(capture(input.options), input.expectedRevision) };
   }, signal);

@@ -1,3 +1,4 @@
+import { buildMcpConnectionConfig } from "../src/mcp/connection-config.mjs";
 import { readMcpConfig, permittedMcpTools, toolAccess, mcpPresets, MCP_SERVER_VERSION } from "../src/mcp/config.mjs";
 import { readMcpRepositoryRoots } from "../src/mcp/repository-config.mjs";
 import { readMcpCachePolicy } from "../src/mcp/cache-config.mjs";
@@ -63,25 +64,7 @@ async function main() {
   }
   if (mode === "config") {
     const format = process.argv[3] ?? "json";
-    const { allowlist, timeoutMs } = readMcpConfig();
-    const presetName = process.argv[4];
-    if (presetName !== undefined && !Object.hasOwn(mcpPresets, presetName)) throw new Error(`配置预设仅支持 ${Object.keys(mcpPresets).join("、")}。`);
-    const profile = presetName === undefined ? undefined : mcpPresets[presetName];
-    const selected = profile ? profile.tools.filter(name => allowlist === null || allowlist.has(name)) : allowlist === null ? null : [...allowlist];
-    const hostPath = value => value.split(path.sep).join("/");
-    const command = hostPath(process.execPath);
-    const args = [hostPath(path.join(root, "scripts/mcp.mjs"))];
-    // Carry restrictions into a desktop Host even when it does not inherit this shell's environment.
-    const env = { RESUME_LIFE_DATA_DIR: hostPath(directory),
-      RESUME_LIFE_MCP_REPO_ROOTS: JSON.stringify(readMcpRepositoryRoots().map(hostPath)),
-      RESUME_LIFE_MCP_WRITE_ENABLED: String(profile?.writeEnabled ?? false), RESUME_LIFE_MCP_LLM_ENABLED: "false",
-      RESUME_LIFE_MCP_TIMEOUT_MS: String(timeoutMs),
-      RESUME_LIFE_MCP_CACHE_TTL_HOURS: String(cachePolicy.ttlHours), RESUME_LIFE_MCP_CACHE_MAX_BYTES: String(cachePolicy.maxBytes),
-      ...(selected === null ? {} : { RESUME_LIFE_MCP_ALLOWED_TOOLS: selected.join(",") }) };
-    const clientTimeoutSec = Math.ceil(timeoutMs / 1000) + 30;
-    if (format === "json") console.log(JSON.stringify({ mcpServers: { "resume-life": { command, args, env } } }, null, 2));
-    else if (format === "codex") console.log(`[mcp_servers.resume-life]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\nstartup_timeout_sec = 30\ntool_timeout_sec = ${clientTimeoutSec}\n\n[mcp_servers.resume-life.env]\n${Object.entries(env).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join("\n")}`);
-    else throw new Error("配置格式仅支持 json 或 codex。");
+    console.log(buildMcpConnectionConfig({ projectRoot: root, dataDirectory: directory, preset: process.argv[4], format }).text);
     return;
   }
   globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });

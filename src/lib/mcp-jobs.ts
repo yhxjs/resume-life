@@ -7,6 +7,7 @@ import { isMcpProcessAlive, mcpCleanupScope, MCP_WORK_LEASE_MS } from "./mcp-wor
 import { mcpContextPage, type ContextPageInput } from "./mcp-context";
 import { pageParams } from "./mcp-read";
 import { assertMcpCacheCapacity, assertMcpCacheFresh, mcpCachePolicy } from "./mcp-cache";
+import { withMcpProgress, type McpProgress } from "./mcp-progress";
 
 type JobStatus = "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 type Job = { job_id: string; operation: string; request_key: string; input_hash: string; generation: string;
@@ -30,10 +31,15 @@ function resultCache(result: object, previousBytes: number): string | null {
 
 function visible(row: Job) {
   const invalidated = row.generation !== (dataGeneration() ?? "initial");
+  const progress = getDb().prepare("SELECT phase,completed,total,unit,updated_at AS updatedAt FROM mcp_job_progress WHERE job_id=?").get(row.job_id) as
+    (McpProgress & { updatedAt: string }) | undefined;
   return { jobId: row.job_id, operation: row.operation, idempotencyKey: row.request_key,
     status: invalidated ? "invalidated" : row.status, errorCode: invalidated ? "CONFLICT" : row.error_code,
     resultAvailable: !invalidated && row.status === "succeeded" && row.result_json !== null && Date.parse(row.updated_at) + mcpCachePolicy().ttlHours * 3_600_000 > Date.now(),
     createdAt: row.created_at, updatedAt: row.updated_at, deadlineAt: row.deadline_at,
+    progress: progress ?? null,
+    elapsedMs: Math.max(0, (row.status === "running" && !invalidated ? Date.now() : Date.parse(row.updated_at)) - Date.parse(row.created_at)),
+    lastHeartbeatAt: row.updated_at,
     result: { tool: "get_mcp_job_result", jobId: row.job_id } };
 }
 
@@ -51,15 +57,24 @@ export function recoverMcpJob(id: string, recover?: (operation: string, key: str
         if (!(error instanceof McpOperationError) || error.code !== "NOT_FOUND" ||
           !getDb().prepare("SELECT 1 FROM mcp_creation_receipts WHERE tool=? AND request_key=? AND generation=?").get(row.operation, row.request_key, row.generation)) throw error;
         getDb().prepare("UPDATE mcp_jobs SET status='succeeded',payload_json=NULL,result_json=NULL,error_code=NULL,updated_at=? WHERE job_id=?").run(now(), id);
+        getDb().prepare("UPDATE mcp_job_progress SET phase='succeeded',updated_at=? WHERE job_id=?").run(now(), id);
         return load(id)!;
       }
       if (result) {
         getDb().prepare("UPDATE mcp_jobs SET status='succeeded',result_json=?,payload_json=NULL,error_code=NULL,updated_at=? WHERE job_id=?")
           .run(resultCache(result, Buffer.byteLength(row.payload_json)), now(), id);
+        getDb().prepare("UPDATE mcp_job_progress SET phase='succeeded',updated_at=? WHERE job_id=?").run(now(), id);
         return load(id)!;
       }
     }
-    if (row.status === "running" && (row.lease_expires_at <= now() || row.deadline_at <= now() || !isMcpProcessAlive(row.owner_pid))) {
+    if (row.status === "running" && row.deadline_at <= now()) {
+      // A poll can beat the worker's timeout callback. Persist the same terminal
+      // outcome here so clients never observe a transient interrupted/CANCELLED.
+      getDb().prepare("UPDATE mcp_jobs SET status='failed',error_code='TIMEOUT',payload_json=NULL,updated_at=? WHERE job_id=?").run(now(), id);
+      active.get(id)?.abort(new OperationTimeoutError());
+      return load(id)!;
+    }
+    if (row.status === "running" && (row.lease_expires_at <= now() || !isMcpProcessAlive(row.owner_pid))) {
       getDb().prepare("UPDATE mcp_jobs SET status='interrupted',error_code='CANCELLED',updated_at=? WHERE job_id=?").run(now(), id);
       return load(id)!;
     }
@@ -131,6 +146,7 @@ export function startMcpJob(input: { operation: string; payload: Record<string, 
     getDb().prepare(`INSERT INTO mcp_jobs(job_id,operation,request_key,input_hash,generation,payload_json,required_tools,status,owner_token,owner_pid,lease_expires_at,deadline_at,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,'running',?,?,?,?,?,?)`).run(id, input.operation, key, fingerprint, dataGeneration() ?? "initial", JSON.stringify(input.payload),
         JSON.stringify(input.requiredTools), owner, process.pid, expiry(), new Date(Date.now() + input.timeoutMs).toISOString(), at, at);
+    getDb().prepare("INSERT INTO mcp_job_progress(job_id,phase,completed,total,unit,updated_at) VALUES(?,'starting',0,NULL,'steps',?)").run(id, at);
     return true;
   });
   if (created) {
@@ -158,7 +174,18 @@ export function startMcpJob(input: { operation: string; payload: Record<string, 
       }, 5000);
       try {
         await withOperationLimits({ deadline, signal: controller.signal }, () => withDataGenerationScope(async () => {
-          const result = await withOperationGuard(guard, () => run(controller.signal));
+          let lastPhase = "", lastReport = 0;
+          const report = (progress: McpProgress) => {
+            guard();
+            if (!Number.isSafeInteger(progress.completed) || progress.completed < 0 || progress.total !== null && (!Number.isSafeInteger(progress.total) || progress.total < progress.completed)) throw new Error("Invalid task progress");
+            if (lastPhase === progress.phase && Date.now() - lastReport < 100 && progress.completed !== progress.total) return;
+            inTransaction(() => {
+              getDb().prepare("UPDATE mcp_job_progress SET phase=?,completed=?,total=?,unit=?,updated_at=? WHERE job_id=?")
+                .run(progress.phase, progress.completed, progress.total, progress.unit, now(), id);
+            });
+            lastPhase = progress.phase; lastReport = Date.now();
+          };
+          const result = await withMcpProgress(report, () => withOperationGuard(guard, () => run(controller.signal)));
           // The domain receipt is committed already; completion must not report a retroactive timeout.
           mcpCleanupScope(() => inTransaction(() => {
             if ((dataGeneration() ?? "initial") !== (generation ?? "initial")) return;
@@ -166,6 +193,7 @@ export function startMcpJob(input: { operation: string; payload: Record<string, 
             if (!previous || previous.owner_token !== owner) return;
             getDb().prepare("UPDATE mcp_jobs SET status='succeeded',result_json=?,payload_json=NULL,error_code=NULL,updated_at=? WHERE job_id=? AND owner_token=?")
               .run(resultCache(result, Buffer.byteLength(previous.payload_json ?? "") + Buffer.byteLength(previous.result_json ?? "")), now(), id, owner);
+            getDb().prepare("UPDATE mcp_job_progress SET phase='succeeded',updated_at=? WHERE job_id=?").run(now(), id);
           }));
         }, generation));
       } catch (error) {

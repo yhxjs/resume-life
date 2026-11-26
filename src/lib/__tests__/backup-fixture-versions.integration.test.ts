@@ -79,7 +79,7 @@ async function expectRejected(payload: BackupPayload) {
   expect((await import("./backup-fixture")).validateBackupPayload(payload).valid).toBe(false);
 }
 
-it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])("辅助器与生产流均接受完整 v%s 清单，保留原载荷和未知来源", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])("辅助器与生产流均接受完整 v%s 清单，保留原载荷和未知来源", async version => {
   const payload = await payloadFor(version);
   const before = structuredClone(payload);
   const dbBefore = database.prepare(`SELECT * FROM ${contexts}`).all();
@@ -98,7 +98,7 @@ it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])("辅助器与生产流均接受完�
   }
 });
 
-it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])("v%s 校验与恢复响应均按原清单计数，可通过设置页读取边界", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])("v%s 校验与恢复响应均按原清单计数，可通过设置页读取边界", async version => {
   const payload = await payloadFor(version);
   const { createEncryptedBackupStream, encodeBackupPasswordHeader } = await import("../backup-container");
   const { readBackupValidation, readBackupRestoreConfirmation } = await import("@/components/settings/backup-manager-utils");
@@ -148,7 +148,7 @@ it.each(["data", "stats", "both"])("v4 快照表缺少 %s 时与生产一致拒�
   await expectRejected(payload);
 });
 
-it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])("v%s 不能借兼容规则省略其他业务表", async version => {
+it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])("v%s 不能借兼容规则省略其他业务表", async version => {
   const payload = await payloadFor(version);
   delete payload.data.jd_portraits;
   delete payload.meta.stats.jd_portraits;

@@ -381,6 +381,7 @@ export function restoreAllData(
     db.exec("DELETE FROM mcp_operation_results");
     db.exec("UPDATE mcp_jobs SET payload_json=NULL,result_json=NULL,status=CASE WHEN status='running' THEN 'interrupted' ELSE status END,error_code=CASE WHEN status='running' THEN 'CONFLICT' ELSE error_code END");
     db.exec("DELETE FROM mcp_work_leases");
+    db.exec("DELETE FROM mcp_job_progress");
     db.exec("DELETE FROM mcp_upload_chunks");
     db.exec("UPDATE mcp_generation_requests SET response_json=NULL");
     // 逆序清空所有数据表。

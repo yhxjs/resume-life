@@ -962,8 +962,8 @@ describe("真实加密备份 Route Handler", () => {
     const tableSql = (routeDatabase.prepare(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'notebook_entries'",
     ).get() as { sql: string }).sql;
-    const indexSql = (routeDatabase.prepare(
-      "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'notebook_entries' AND sql IS NOT NULL",
+    const schemaObjects = (routeDatabase.prepare(
+      "SELECT sql FROM sqlite_master WHERE type IN ('index', 'trigger') AND tbl_name = 'notebook_entries' AND sql IS NOT NULL",
     ).all() as Array<{ sql: string }>).map(({ sql }) => sql);
     const connection = observeExportConnection();
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -978,7 +978,7 @@ describe("真实加密备份 Route Handler", () => {
     } finally {
       if (response?.status === 200) await response.body?.cancel().catch(() => undefined);
       routeDatabase.exec(tableSql);
-      for (const sql of indexSql) routeDatabase.exec(sql);
+      for (const sql of schemaObjects) routeDatabase.exec(sql);
       consoleSpy.mockRestore();
       connection.restore();
     }

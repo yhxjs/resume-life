@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { SQLInputValue } from "node:sqlite";
-import { dataGeneration, getDb, inTransaction } from "./db";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { dataGeneration, withReadSnapshot } from "./db";
 import { parsePaginationParams } from "./cursor-pagination";
 import { McpOperationError } from "./mcp-errors";
 import { APPLICATION_STAGES, type ApplicationStage } from "./applications-types";
@@ -65,7 +65,8 @@ function dateBound(value?: string) {
   return new Date(milliseconds).toISOString();
 }
 /** Fixed SQL fragments only. User terms are bound parameters, including SQL wildcard characters. */
-function rows(domain: SearchDomain, input: SearchInput, from: string | null, to: string | null) {
+function queryRows(db: DatabaseSync, domain: SearchDomain, input: SearchInput, from: string | null, to: string | null,
+  options: { count: true } | { count?: false; after: number | null; take: number }) {
   const spec = specs[domain], params: Record<string, SQLInputValue> = { ":query": input.query };
   const text = "CASE " + spec.texts.map(expr => "WHEN instr(lower(" + expr + "),lower(:query))>0 THEN " + expr).join(" ") + " END";
   const where = ["matched_text IS NOT NULL"];
@@ -76,16 +77,19 @@ function rows(domain: SearchDomain, input: SearchInput, from: string | null, to:
   }
   if (from) { where.push("julianday(created_at)>=julianday(:from)"); params[":from"] = from; }
   if (to) { where.push("julianday(created_at)<julianday(:to)"); params[":to"] = to; }
+  if (!options.count && options.after !== null) { where.push("id<:after"); params[":after"] = options.after; }
+  if (!options.count) params[":take"] = options.take;
   // Return a bounded match window per row; never materialize all matching bodies in JS.
   const sql = "WITH documents AS (SELECT r.id,substr(" + spec.title + ",1,160) AS title," + (spec.created ?? "r.created_at") +
     " AS created_at," + (spec.project ?? "NULL") + " AS project_id," + (spec.stage ?? "NULL") + " AS stage," + text +
-    " AS matched_text FROM " + spec.from + ") SELECT id,title,created_at,project_id,stage," +
-    "substr(matched_text,max(1,instr(lower(matched_text),lower(:query))-80),280) AS snippet FROM documents WHERE " +
-    where.join(" AND ") + " ORDER BY id DESC";
-  return getDb().prepare(sql).iterate(params) as IterableIterator<Row>;
+    " AS matched_text FROM " + spec.from + ") SELECT " + (options.count ? "COUNT(*) AS count" : "id,title,created_at,project_id,stage," +
+    "substr(matched_text,max(1,instr(lower(matched_text),lower(:query))-80),280) AS snippet") + " FROM documents WHERE " +
+    where.join(" AND ") + (options.count ? "" : " ORDER BY id DESC LIMIT :take");
+  return { statement: db.prepare(sql), params };
 }
+const countCache = new Map<string, { total: number; at: number }>();
 export function searchRecordsPage(input: SearchInput, permits: (tool: string) => boolean) {
-  return inTransaction(() => {
+  return withReadSnapshot(db => {
     const query = input.query.trim();
     if (query.length < 2 || query.length > 100) throw new McpOperationError("INVALID_ARGUMENT", "搜索词须为 2–100 个字符");
     if (input.domains && (!input.domains.length || new Set(input.domains).size !== input.domains.length || input.domains.some(domain => !MCP_SEARCH_DOMAINS.includes(domain)))) throw new McpOperationError("INVALID_ARGUMENT", "检索领域无效或重复");
@@ -100,25 +104,41 @@ export function searchRecordsPage(input: SearchInput, permits: (tool: string) =>
     const pagination = parsePaginationParams(new URLSearchParams(input.limit === undefined ? {} : { limit: String(input.limit) }), "none");
     if (!pagination.ok || pagination.limit > 50) throw new McpOperationError("INVALID_ARGUMENT", "检索分页大小必须为 1–50");
     const cursor = readCursor(input.cursor);
-    const fingerprint = createHash("sha256").update(JSON.stringify([dataGeneration(), query, domains, input.projectId ?? null, input.stages?.slice().sort() ?? null, from, to]));
+    const identity = db.prepare("SELECT instance_id FROM mcp_runtime_identity WHERE id=1").get();
+    const epochs = domains.map(domain => [domain, db.prepare("SELECT revision FROM mcp_search_epochs WHERE domain=?").get(domain)]);
+    const revision = createHash("sha256").update(JSON.stringify([identity, dataGeneration(db), query, epochs, input.projectId ?? null, input.stages?.slice().sort() ?? null, from, to])).digest("hex");
+    if (cursor && cursor.r !== revision) throw new McpOperationError("CONFLICT", "筛选、权限或查询领域已变化，请从第一页重新检索");
+    let cached = countCache.get(revision);
+    if (!cached || cached.at + 60_000 < Date.now()) {
+      let total = 0;
+      for (const domain of domains) {
+        assertOperationActive();
+        const { statement, params } = queryRows(db, domain, { ...input, query }, from, to, { count: true });
+        total += (statement.get(params) as { count: number }).count;
+      }
+      cached = { total, at: Date.now() };
+      countCache.delete(revision);
+      while (countCache.size >= 128) countCache.delete(countCache.keys().next().value!);
+      countCache.set(revision, cached);
+    }
     const items: (Row & { domain: SearchDomain; fullContent: { tool: string; arguments: { id: number; kind?: string } } })[] = [];
-    let total = 0, more = false, size = 0;
+    let more = false, size = 0;
     for (const domain of domains) {
       const position = MCP_SEARCH_DOMAINS.indexOf(domain);
-      for (const row of rows(domain, { ...input, query }, from, to)) {
-        if (total % 100 === 0) assertOperationActive();
-        total++; fingerprint.update(JSON.stringify([domain, row]));
-        if (cursor && (position < cursor.d || (position === cursor.d && row.id >= cursor.i))) continue;
+      if (cursor && position < cursor.d) continue;
+      assertOperationActive();
+      const { statement, params } = queryRows(db, domain, { ...input, query }, from, to,
+        { after: cursor && position === cursor.d ? cursor.i : null, take: pagination.limit - items.length + 1 });
+      for (const row of statement.iterate(params) as IterableIterator<Row>) {
         const snippet = extractSnippetsFromText(row.snippet, query, { maxSnippets: 1, contextBefore: 60, contextAfter: 100 })[0]?.text ?? row.snippet;
         const spec = specs[domain], item = { ...row, snippet, domain, fullContent: { tool: spec.tool, arguments: { id: row.id, ...(spec.kind ? { kind: spec.kind } : {}) } } };
         const itemBytes = JSON.stringify(item).length;
-        if (more || items.length >= pagination.limit || (items.length > 0 && size + itemBytes > MCP_LIST_BUDGET - 1000)) { more = true; continue; }
+        if (items.length >= pagination.limit || (items.length > 0 && size + itemBytes > MCP_LIST_BUDGET - 1000)) { more = true; break; }
         items.push(item); size += itemBytes;
       }
+      if (more) break;
     }
-    const revision = fingerprint.digest("hex");
-    if (cursor && cursor.r !== revision) throw new McpOperationError("CONFLICT", "筛选、权限或匹配结果已变化，请从第一页重新检索");
     const last = items.at(-1);
-    return { query, domains, revision, total, items, nextCursor: more && last ? cursorOf({ r: revision, d: MCP_SEARCH_DOMAINS.indexOf(last.domain), i: last.id }) : null };
+    return { query, domains, revision, total: cached.total, items, nextCursor: more && last ? cursorOf({ r: revision, d: MCP_SEARCH_DOMAINS.indexOf(last.domain), i: last.id }) : null };
   });
 }

@@ -1,6 +1,22 @@
 import { step, type Workflow } from "./workflow-catalog-types";
 
 export const MCP_RUNTIME_WORKFLOWS: Workflow[] = [
+  { id: "application-conflict-resolution", title: "三方合并投递字段", prerequisites: ["编辑前读取投递并 capture；冲突时不能用事后状态冒充原始 base", "比较结果按 JSON 分页读全；choices 逐项使用冲突 path，指定 base/proposed/current；无未解决冲突且 prepared 非空才继续", "保存使用 prepared.arguments 中的完整字段与最新 expectedRevision，重新核对预览"], dependencies: [], steps: [
+    step("get_application", "读取原始投递 revision", { id: "$applicationId" }, "$basis.application.revision"),
+    step("preview_application_rebase", "固定原始数据", { mode: "capture", applicationId: "$applicationId", expectedRevision: "$basis.application.revision" }, "$base.baseToken"),
+    step("preview_application_rebase", "比较原始、当前与提案", { mode: "rebase", applicationId: "$applicationId", baseToken: "$base.baseToken", proposed: "$proposed" }, "$comparison"),
+    step("preview_application_rebase", "显式解决冲突", { mode: "rebase", applicationId: "$applicationId", baseToken: "$base.baseToken", proposed: "$proposed", choices: "$choices", expectedRevision: "$comparison.currentRevision" }, "$resolved"),
+    step("preview_application_edit", "重新预览可保存提案", { applicationId: "$applicationId", fields: "$resolved.prepared.arguments.fields", expectedRevision: "$resolved.currentRevision" }, "$preview.previewToken"),
+    step("save_application_edit", "原子保存已核对字段", { applicationId: "$applicationId", fields: "$resolved.prepared.arguments.fields", expectedRevision: "$resolved.currentRevision", previewToken: "$preview.previewToken", idempotencyKey: "$persisted.saveKey" }, "$application.id"),
+  ] },
+  { id: "resume-conflict-resolution", title: "三方合并简历草稿", prerequisites: ["编辑前 capture 完整原始草稿；proposed.modules 使用稳定模块 key 和条目 ID", "比较和选择结果按 page 分页读全；没有未解决冲突、blockers 且 prepared 非空才继续", "metadata 变化需要明确保留 current；不支持保存的历史字段保持阻断"], dependencies: ["get_resume"], steps: [
+    step("get_resume_draft_context", "读取原始草稿 revision", { resumeId: "$resumeId" }, "$basis.revision"),
+    step("preview_resume_draft_rebase", "固定修改前草稿", { mode: "capture", resumeId: "$resumeId", expectedRevision: "$basis.revision" }, "$base.baseToken"),
+    step("preview_resume_draft_rebase", "比较双方修改", { mode: "rebase", resumeId: "$resumeId", baseToken: "$base.baseToken", proposed: "$proposed" }, "$comparison"),
+    step("preview_resume_draft_rebase", "选择冲突并保留未冲突修改", { mode: "rebase", resumeId: "$resumeId", baseToken: "$base.baseToken", proposed: "$proposed", choices: "$choices", expectedRevision: "$comparison.currentRevision" }, "$resolved"),
+    step("preview_resume_draft_edit", "重新预览合并结果", { resumeId: "$resumeId", title: "$resolved.prepared.arguments.title", modules: "$resolved.prepared.arguments.modules", expectedRevision: "$resolved.currentRevision" }, "$preview.previewToken"),
+    step("save_resume_draft_edit", "保存已核对草稿", { resumeId: "$resumeId", title: "$resolved.prepared.arguments.title", modules: "$resolved.prepared.arguments.modules", expectedRevision: "$resolved.currentRevision", previewToken: "$preview.previewToken", idempotencyKey: "$persisted.saveKey" }, "$resume.id"),
+  ] },
   { id: "file-upload", title: "分块上传与断线续传", prerequisites: ["先持久保存原文件与 uploadKey；计算 byteLength 与 SHA-256", "循环 append 步骤直到 receivedBytes=byteLength，每块独立 base64 编码，最多 49152 字节；可用 uploadBytes 辅助函数"], dependencies: [], steps: [
     step("begin_mcp_upload", "创建上传或找回同键回执", { filename: "$filename", purpose: "$purpose", byteLength: "$byteLength", sha256: "$sha256", idempotencyKey: "$persisted.uploadKey" }, "$upload.uploadId"),
     step("get_mcp_upload", "重连后取得当前字节偏移", { uploadId: "$upload.uploadId" }, "$offset.receivedBytes"),
