@@ -1,6 +1,6 @@
 # MCP 接入
 
-resume-life 提供本机 **stdio MCP Server**，使同一台机器上的 MCP Agent 能在获得用户配置后读取简历和求职数据。当前版本 **1.4.0，共 136 个工具**（83 个只读、50 个业务写入、3 个可选服务端模型工具），数据库 v12。默认只注册只读工具、资源和提示词；不会新增网络监听端口，也不接收浏览器登录 Cookie。
+resume-life 提供本机 **stdio MCP Server**，使同一台机器上的 MCP Agent 能在获得用户配置后读取简历和求职数据。当前版本 **1.5.0，共 165 个工具**（99 个只读、63 个业务写入、3 个可选服务端模型工具），数据库 v13。默认只注册只读工具、资源和提示词；不会新增网络监听端口，也不接收浏览器登录 Cookie。
 
 ## 启动与 MCP Host 配置
 
@@ -27,11 +27,11 @@ node scripts/mcp.mjs config codex collaboration
 
 | 预设 | 工具数 | 用途 |
 | --- | --- | --- |
-| `readonly` | 83 | 资料、训练状态、生成上下文、差异预览、复习、工作流与产物读取 |
-| `preparation` | 90 | 资料读取、投递、准备计划、待办、真实面试记录和关联管理；不含 AI 草稿上下文与查询 |
-| `collaboration` | 133 | 全部只读与业务写工具，包括训练、资料创作、文件交付及外部模型协作 |
-| `training` | 58 | 练习、错题分类与复习、单场和三轮面试、求职工具、题库导入 |
-| `authoring` | 72 | 自我介绍、项目材料及证据、简历诊断采纳、排版、发布及文件与作品集导出 |
+| `readonly` | 99 | 资料、训练状态、生成上下文、差异预览、复习、工作流与产物读取 |
+| `preparation` | 106 | 资料读取、投递、准备计划、待办、真实面试记录和关联管理；不含 AI 草稿上下文与查询 |
+| `collaboration` | 162 | 全部只读与业务写工具，包括训练、资料创作、文件交付及外部模型协作 |
+| `training` | 63 | 练习、错题分类与复习、单场和三轮面试、求职工具、题库导入 |
+| `authoring` | 100 | 自我介绍、项目材料及证据、简历诊断采纳、排版、发布及文件与作品集导出 |
 
 使用 `config json <预设>` 或 `config codex <预设>` 输出具体白名单；已有 `RESUME_LIFE_MCP_ALLOWED_TOOLS` 会与预设取交集，显式空串保持为空。五种预设均设置 `RESUME_LIFE_MCP_LLM_ENABLED=false`；应用模型的三个生成工具通过独立开关启用。
 
@@ -74,10 +74,10 @@ RESUME_LIFE_MCP_LLM_ENABLED = "false"
 
 ## 权限开关
 
-- 默认注册 83 个只读工具；首次开库会执行共用的初始化/迁移，每次工具调用会保存操作元数据。
+- 默认注册 99 个只读工具；首次开库会执行共用的初始化/迁移，每次工具调用会保存操作元数据。
 - 设置 `RESUME_LIFE_MCP_WRITE_ENABLED=true` 后，服务注册 `update_application`（有限修改投递阶段/备注/终止信息）与 `set_preparation_step`（更新可手动完成的准备步骤）。投递更新的 `expectedRevision` 必须取自刚读取的 `application.revision`；计划更新要求读取计划返回的 `revision` 作为 `expectedRevision`，同时提供 `contextKey`，且计划已经生成、对应步骤可手动完成。修订令牌绑定完整内容和数据恢复世代，同毫秒修改或恢复数据后均须重新读取；不再接受仅凭 `expectedUpdatedAt` 写入。只有同时授权 `get_application` 或 `get_preparation_plan` 时，相应更新工具才会在回执中附上投递或计划详情。
 - 将投递首次改为 `rejected` 时，同时提供 `terminal_stage`（`resume_screening` / `technical_interview` / `hr_interview` / `other`）和非空 `terminal_reason`（最多 1,000 字）。已终止投递可以单独更正终止信息；活动投递不能单独设置终止字段。
-- 写开关共启用 50 个业务写工具。除投递、准备、草稿、错题与复习外，可独立授权内容生成结果保存、诊断采纳、简历排版/发布/导出、题库导入、分类管理、仓库采集、作品集导出、练习及面试训练。`preparation` 预设不授予内容创作、导出与训练写权限。
+- 写开关共启用 63 个业务写工具。除投递、准备、草稿、错题与复习外，可独立授权内容生成结果保存、诊断采纳、简历排版/发布/导出、题库导入、分类管理、仓库采集、作品集导出、练习及面试训练。`preparation` 预设不授予内容创作、导出与训练写权限。
 - `RESUME_LIFE_MCP_LLM_ENABLED=true` 独立启用 3 个生成工具：`analyze_application_jd`、`diagnose_application_resume`、`draft_interview_review`。它们通过 `safe-llm` 将相关职业资料发送给当前配置模型，返回可检查的草稿；不直接修改正式资料。
 - 可选 `RESUME_LIFE_MCP_ALLOWED_TOOLS` 为逗号分隔的工具白名单。未设置表示保留总开关允许的工具；显式空串表示禁用所有工具；未知名称导致启动失败；`mcp:config`、`mcp:doctor` 与 stdio 启动会在打开数据库前使用相同规则检查白名单及超时。例如只开放投递读取与备注更新可设为 `get_application,list_applications,update_application`，同时开启写开关。白名单不能绕过总开关。对应 Resources/Prompts 也受读取能力限制；分段读取还要求对应领域的读取工具在白名单内。
 - `RESUME_LIFE_MCP_TIMEOUT_MS` 设置服务端工具调用超时，默认 120000，范围 100–600000 毫秒；客户端超时应更长。取消、断连与超时会传递给模型请求，取消后的结果不会落为草稿。SQLite 争锁使用剩余时间；取得写锁后、提交前都会检查截止时间，未提交的业务修改和幂等回执一起回滚。同步 SQL 不能在执行中强制中断，已提交的修改不会因响应稍晚而报超时。
@@ -181,9 +181,9 @@ RESUME_LIFE_MCP_LLM_ENABLED = "false"
 | 仓库证据 | `get_repository_catalog` → `get_project_material_context({projectId})` → `capture_project_repository({projectId,repositoryIndex,expectedCatalogRevision,expectedProjectRevision,idempotencyKey})` → `get_repository_capture({idempotencyKey})`。完整读取采集范围后，`save_repository_evidence({projectId,captureKey,fileIndexes,expectedCaptureRevision,expectedProjectRevision,idempotencyKey})` 选择最多 20 份文件片段存为材料，返回 `materialIds`。 |
 | 黑话解码 | `get_jargon_generation_context({text})` → 外部生成 → `save_jargon_result({text,expectedRevision,result,idempotencyKey})`。校验原文引文、风险分档、问题及无依据分支；使用 `get_career_record({kind:"jargon_decoding",id})` 回读正式存档，网页读取相同记录。 |
 | 作品集 | `get_portfolio_sources` → `get_portfolio_context({options})` → `export_portfolio({options,expectedRevision,idempotencyKey})`。options 选择 `resumeId,versionId?,selectedProjects` 和可选模板、主题、自定义链接、匿名化配置；上下文提供实际输出，默认匿名化与网页一致。生成离线 ZIP，不发布到网络。 |
-| 工作流指引 | `get_workflow_catalog({workflowId?})` 返回九种流程的来源要求、调用顺序、参数绑定示例、依赖工具、`missingTools` 与可用预设。`available=false` 时先调整 Host 配置；具体请求以 `tools/list` 的输入契约为准。 |
+| 工作流指引 | `get_workflow_catalog({workflowId?})` 返回26 种流程的来源要求、调用顺序、参数绑定示例、依赖工具、`missingTools` 与可用预设。`available=false` 时先调整 Host 配置；具体请求以 `tools/list` 的输入契约为准。 |
 
-导出返回 `{artifactId,filename,mimeType,byteLength,sha256,sourceRevision,createdAt,read}`。用 `read_export_artifact({artifactId,offset?,length?})` 按字节读取，每段最多 8000 字节，逐段 base64 解码后拼接，直到 `nextOffset=null`，核对长度和 SHA-256 后在 Agent 端写文件。服务不接受输出路径。单产物上限 20 MiB、每进程最多两个渲染任务；超限或排队繁忙给出明确错误。同键同参数重试返回同一产物，不随后来草稿变化。文件位于数据目录的 `mcp-artifacts/`，只读工具同时检查领域读取权限、已提交回执、数据世代和完整性；无回执、缺失或被改动的文件不可读取。产物是本机缓存，不进入业务备份，也不由现有草稿维护工具自动清理；恢复后须重新读取来源并以新键导出。
+导出返回 `{artifactId,filename,mimeType,byteLength,sha256,sourceRevision,createdAt,read}`。用 `read_export_artifact({artifactId,offset?,length?})` 按字节读取，每段最多 8000 字节，逐段 base64 解码后拼接，直到 `nextOffset=null`，核对长度和 SHA-256 后在 Agent 端写文件。服务不接受输出路径。单产物上限 20 MiB、同一数据目录跨进程最多两个渲染任务；超限或排队繁忙给出明确错误。同键同参数重试返回同一产物，不随后来草稿变化。文件位于数据目录的 `mcp-artifacts/`，只读工具同时检查领域读取权限、已提交回执、数据世代和完整性；无回执、缺失或被改动的文件不可读取。产物是本机缓存，不进入业务备份；1.5 起纳入统一期限、容量限制与缓存维护。恢复后须重新读取来源并以新键导出。
 
 简历导出预览和生成共用 4 MiB 来源及脱敏展开预算，标题与正文累计最多替换 100000 次；替换链在展开前检查，超限返回 `INVALID_ARGUMENT`。已验证的产物内容在每个进程中最多缓存 40 MiB、16 个文件，每次分段读取仍重新验证权限、回执及文件身份、大小和时间戳；文件变化后重新完整校验，避免每一段重复读取整个文件。
 
@@ -223,9 +223,71 @@ node scripts/mcp.mjs config codex training
 
 精简权限时，生成保存必须同时授权对应上下文读取。介绍创建需 `get_resume`，重生成另需 `get_intro`；点评需 `get_intro`。项目总结需 `get_project,list_project_materials,preview_project_summary`；简历复制和修改需 `get_resume,get_resume_draft_context`，保存修改还需预览工具。面试训练需 `get_interview,get_resume`，系列推进另需 `get_interview_series`；逐轮提交还需系列状态工具。排雷使用发布简历时需 `get_resume`；演练和谈薪推进需 `get_career_record`。预设已包含这些依赖。
 
+## 长任务、文件导入与维护（1.5）
+
+1.5 新增 29 个工具，工作流目录扩展到 26 项。完整工具、输入输出指纹、工作流依赖及预设清单从实际 stdio 服务生成，见 [能力契约](MCP-TOOLS.md)。每项工作流都给出完整参数绑定和缺少的权限。
+
+### 持久任务和重连
+
+`start_mcp_job({operation,arguments,timeoutMs?})` 支持 `export_resume`、`export_portfolio`、`capture_project_repository`、`extract_uploaded_file`。`arguments` 使用原工具完整输入及原 `idempotencyKey`；原同步工具继续可用。最长时限 600000 毫秒，同一数据目录最多 8 个进行中的任务；渲染、采集、解析分别跨进程最多 2 个，繁忙返回 `BUSY`。
+
+用 `get_mcp_job` 查询、`list_mcp_jobs` 分页发现、`get_mcp_job_result` 完整读取结果；`cancel_mcp_job` 需要原操作写权限。提交前复核取消、期限、租约和数据世代。连接断开不主动取消任务，但若 Host 随之终止 stdio 进程，任务不会自动继续：下次查询先恢复已提交回执，否则标记 `interrupted`。
+
+| 状态 | 客户端处理 |
+|---|---|
+| `running` | 继续查询，需要停止时显式取消 |
+| `succeeded` | `resultAvailable=true` 时读结果；正文过期仍保留完成事实，不自动重做 |
+| `failed` / `cancelled` / `interrupted` | 核对回执与业务记录，再决定是否以新键重做 |
+| `invalidated` | 数据已恢复，重新读取来源并建立新流程 |
+
+客户端应保存原工具名、完整参数、幂等键和任务 ID。相同键更换输入会冲突；结果过期不表示业务写入失败。
+
+### 上传和文件导入
+
+调用顺序为 `begin_mcp_upload → append_mcp_upload → complete_mcp_upload`。声明文件名、用途、字节数和 SHA-256；文档上限 10 MiB、头像 5 MiB，每块至多 49152 字节。偏移使用 `receivedBytes`，相同块可重发。工具不接受本机路径；重连后用 `get_mcp_upload` 查询进度，完成时校验大小与哈希。
+
+文档用 `extract_uploaded_file` 提取，也可通过持久任务执行，再用 `get_file_extraction` 读取原文。复用网页解析和 DOCX 表格来源规则；OCR 默认 `off`，`local` 使用已配置的本地 OCR，`vision` 要求显式启用服务端模型开关和可用模型配置。外部 Agent 提供结构化结果无需服务端模型凭证。
+
+提取开始前持久化认领幂等键，同步调用、后台任务及其他进程共享该记录。同键正在执行时返回 `BUSY`、`retryable:true`，可继续查询 `get_file_extraction`；完成后重放原结果。认领后失败、取消或超时返回对应错误码和 `retryable:false`，中断或状态缓存已清理时返回 `CONFLICT`；这些键不会再次执行 OCR。核对原请求后，确认需要重新提取时使用新键。模型配置/授权失败为 `CONFIGURATION`，限流为 `BUSY`，文件格式无效才是 `INVALID_ARGUMENT`。
+
+导入流程为 `get_file_import_context → submit_file_import → preview_file_import → save_file_import`。`source.target.kind` 选择 `resume` 或 `project`，项目还需 `projectId`。提案不修改正式资料；保存使用返回的预览令牌和独立幂等键。简历创建为可编辑草稿。项目保留原文时保留服务器生成的表格来源；改写正文会清除旧来源，客户端不能伪造表格证据。来源变化后需重新预览。
+
+### 自定义模板和头像
+
+`get_resume_template_context` 返回模板目录，`create_resume_template` 支持复制现有模板或提供完整样式。修改采用 `preview_resume_template → save_resume_template`，预览展示受影响草稿及解析后的样式。新增引用或并发修改使旧预览失效。网页与 MCP 共用写入规则，已发布简历使用冻结样式。
+
+头像先以 `purpose:"avatar"` 上传，再读取 `get_resume_avatar_context`，选择基本信息模块的 `moduleKey`，用 `set_resume_avatar` 替换；`uploadId:null` 清除。图像验证、方向修正和尺寸限制与网页共用；发布版引用的旧图片保留，导出使用对应版本的头像。
+
+### 仓库证据增量更新
+
+后一次 `capture_project_repository` 传入前一次的 `baselineCaptureKey`，服务器在受限目录内检查缺失文件。用 `get_repository_evidence_diff` 对比，再通过 `preview_repository_evidence_update → save_repository_evidence_update` 选择 `upsert` 或 `remove`。未采集、预算截断和符号链接不能视为删除；仅本次对指定基准确认缺失的文件可移除。
+
+同一文件内容未变化时不因采集时间不同重复生成材料。不同或人工编辑的证据需先预览更新；旧版证据通过精确基准识别接续。更新不会自动改写正式项目总结，但使旧总结提案失效并提示重新核对。`list_repository_evidence_history` 和 `get_repository_evidence_version` 读取正式历史原文及材料快照；历史随业务备份保留，采集缓存过期或仓库移出允许目录后仍可在项目读取权限内追溯。
+
+### 检索和缓存
+
+`search_records_page` 支持 16 类领域、项目、投递阶段、创建时间及稳定分页，每页最多 50 条。阶段仅适用于投递，项目仅适用于项目及其材料/练习；不支持的显式组合返回参数错误。时间需含时区，`createdFrom` 包含起点、`createdTo` 不包含终点。命中含片段和完整读取入口，仅查询已授权领域。翻页沿用相同条件和 `nextCursor`；匹配结果、权限或数据世代变化返回 `CONFLICT`，需从第一页重查。旧 `search_records` 保留。
+
+| 缓存配置 | 默认值 | 范围 |
+|---|---|---|
+| `RESUME_LIFE_MCP_CACHE_TTL_HOURS` | 168 小时 | 1–8760 小时 |
+| `RESUME_LIFE_MCP_CACHE_MAX_BYTES` | 268435456（256 MiB） | 1 MiB–4 GiB |
+
+产物、批次/采集/提取正文、任务结果和上传块共用容量预算，并限制缓存条目数；容量不足时拒绝新缓存。用 `preview_mcp_cache_cleanup({limit?})` 查看候选，再以相同 `limit` 和 `previewToken` 调用 `cleanup_mcp_cache`。预览变化需重读，运行中任务保留；符合文件名规则的孤立产物经过一小时宽限后可回收。正式资料、证据历史、业务头像和防重墓碑不属于可清理缓存。删除缓存块不保证 SQLite 文件立即缩小。
+
+### 客户端辅助和契约验证
+
+[`helpers.mjs`](../examples/mcp/helpers.mjs) 提供 `bindInputs` 参数绑定、`readContext` 完整上下文、`readAllPages` 列表遍历、`readArtifact` 文件校验、`uploadBytes` 断点上传、`createReceipt/recoverReceipt` 原请求重试及 `waitForJob` 轮询。它们检查长度、偏移、修订和循环分页，不执行输入中的代码。上传重试复用同一字节、文件名、用途及幂等键。
+
+`recoverReceipt` 遇到显式 `retryable:false` 会立即返回错误，即使错误码为 `BUSY` 或 `TIMEOUT`；调用方应按工具说明查询持久状态。未声明终态的传输中断仍可重连并使用原参数恢复。
+
+[`runtime-workflow.mjs`](../examples/mcp/runtime-workflow.mjs) 演示导入、模板、头像、异步导出、证据更新和检索；`npm run example:mcp` 在隔离库运行并重连。`npm run check:mcp:contract` 核对真实注册、输入输出、权限注解、静态读取依赖、工作流绑定、预设和生成文档；更新契约后运行 `node scripts/check-mcp-contract.mjs --write`。条件权限由最小权限集成测试验证。
+
+旧 Host 配置、同步工具和白名单继续生效。旧固定白名单不会自动增加能力；先查询 `doctor` 或工作流的 `missingTools`，再更新预设或加入所需工具。默认仍只读，配置生成器不修改客户端文件。
+
 ## 返回结构与错误处理
 
-全部 136 个工具声明具体 `outputSchema`，包括分页条目、业务字段、不同草稿类型的结果和恢复状态，成功响应在服务端按对应 schema 校验。JSON schema 用 `oneOf` 约束互斥的成功/失败结构：成功必须包含 `data`，失败必须包含 `error`。输出 ID 使用安全整数约束，兼容历史备份中的零或负数 ID。成功时 `structuredContent` 包含：
+全部 165 个工具声明具体 `outputSchema`，包括分页条目、业务字段、不同草稿类型的结果和恢复状态，成功响应在服务端按对应 schema 校验。JSON schema 用 `oneOf` 约束互斥的成功/失败结构：成功必须包含 `data`，失败必须包含 `error`。输出 ID 使用安全整数约束，兼容历史备份中的零或负数 ID。成功时 `structuredContent` 包含：
 
 ```json
 {"ok":true,"data":{"items":[],"nextCursor":null},"meta":{"requestId":"...","durationMs":3}}
@@ -322,10 +384,11 @@ AI 工作流：
 
 `list_mcp_operations` 可组合 `requestId`（响应 `meta.requestId`）、`tool`、`targetId`、`status`（`success`/`error`）与 `errorCode` 筛选，继续使用 `limit`/`cursor` 分页。生成的 `idempotencyKey` 是工作流恢复编号；`meta.requestId` 是每次工具调用的排障编号，两者用途不同。
 
-数据库结构升级至 v12，完整 v11 原子补入 `mcp_operation_results`，保存题库批次逐项结果、仓库采集及证据回执；迁移保留旧业务、草稿与请求墓碑。更早受支持的完整旧库沿用逐版本迁移。`notebook_notes` 为用户业务表，进入备份；所有 `mcp_*` 表为本机运行状态，不导出。业务备份兼容 v1–v12；恢复 v10 及更早备份时补充笔记保持为空。恢复事务清除临时草稿、生成响应缓存及批量结果，失败时一并回滚；旧创建和生成请求保留防重墓碑，由世代变化标记失效，旧文件产物也不能继续读取。正式题目、材料、版本和采纳历史正常备份恢复。升级代码后应重启网页与 MCP 进程。
+数据库结构升级至 v13：新增持久任务、跨进程租约、分块上传运行表，以及正式业务表 `project_repository_evidence`。完整旧库 v1–v12 校验后原子迁移，保留业务、旧草稿和请求墓碑。所有 `mcp_*` 表均为本机运行状态，不导出；证据版本原文、材料修改前后快照和私有头像随业务备份恢复。备份兼容 v1–v13；旧备份缺少的证据历史保持为空。恢复事务清空临时正文、批次结果、任务载荷和上传块，移除租约；任务与回执保留元数据并由数据世代变化标记失效。失败时数据库变更一并回滚。升级后重启网页和 MCP 进程。
 
 ```sh
 npm run test:mcp
+npm run check:mcp:contract
 npm run typecheck
 # 已安装 Codex CLI 的本机客户端验证
 npm run check:mcp:codex
@@ -335,7 +398,7 @@ npm run benchmark:mcp
 
 MCP 集成测试使用临时数据库和真实 stdio 子进程，覆盖不同工作目录启动、协议输出、白名单、网页/MCP 冲突、跨进程生成认领与重启恢复、完整读取、草稿保存和取消/超时。AI 使用模拟模型响应，不产生真实模型费用。PR 的 `MCP checks` 在 Windows/Linux 执行快速检查，发布仍走完整检查流程。
 
-`check:mcp:codex` 使用已安装的 Codex CLI，通过隔离配置和数据目录启动实际 app-server；从项目外验证 83 个默认只读工具、133 个协作工具、互斥输出契约及准备、资料创作、训练和求职工具流程。重连后重放原题作答、复习、内容保存及面试回合，核对并完成原场次；通过生产流式备份/恢复，确认旧创建键、草稿请求、新增保存请求和修订令牌失效，正式复盘、三轮面试报告、谈薪、诊断采纳、发布版本、题库及代码证据仍可读。新增交付流程覆盖排版、历史分支、Markdown/DOCX、分类、黑话及作品集 ZIP；重连重放同一批回执，恢复后旧批次结果和文件产物失效。Windows 可用 `RESUME_LIFE_CODEX_BIN` 指定 `codex.exe`。不修改用户客户端设置，不发起模型对话。
+`check:mcp:codex` 使用已安装的 Codex CLI，通过隔离配置和数据目录启动实际 app-server；从项目外验证 99 个默认只读工具、162 个协作工具、互斥输出契约及准备、资料创作、训练和求职工具流程。重连后重放原题作答、复习、内容保存及面试回合，核对并完成原场次；通过生产流式备份/恢复，确认旧创建键、草稿请求、新增保存请求和修订令牌失效，正式复盘、三轮面试报告、谈薪、诊断采纳、发布版本、题库及代码证据仍可读。新增流程覆盖排版、历史分支、Markdown/DOCX、分类、黑话、作品集 ZIP、文件导入、模板头像、持久任务、仓库增量更新及分页检索；重连重放同一批回执，恢复后旧批次结果和文件产物失效。Windows 可用 `RESUME_LIFE_CODEX_BIN` 指定 `codex.exe`。不修改用户客户端设置，不发起模型对话。
 
 `benchmark:mcp` 在临时数据库中读取 608000 UTF-16 单位材料，同时执行 100 次带有效会话的网页 route 写入，再查询 5000 条操作记录中的目标请求；检查完整拼接和最终网页状态，报告写入 `.test-artifacts/mcp-benchmark.json`。2026-11-25（香港时间）Windows / Node 24.21.0 本机测量：分段读取 P95 约 32 ms，日志查询 P95 约 4 ms；这是开发机测量，不作为 CI 耗时门槛。
 

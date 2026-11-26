@@ -44,7 +44,7 @@ async function exported(): Promise<BackupRecord[]> {
 }
 
 function legacy(records: BackupRecord[], version: number): BackupRecord[] {
-  const excluded = new Set([contexts, "project_material_table_provenance", "application_preparation_plans", "interview_question_graphs", "notebook_notes"]);
+  const excluded = new Set([contexts, "project_material_table_provenance", "application_preparation_plans", "interview_question_graphs", "notebook_notes", "project_repository_evidence"]);
   const count = records.filter(record => record.kind === "row" && excluded.has(record.table)).length;
   return records.filter(record => record.kind !== "row" || !excluded.has(record.table)).map(record => {
     if (record.kind === "manifest") {

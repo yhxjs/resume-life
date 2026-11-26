@@ -966,6 +966,8 @@ function decodeTextBuffer(data: Buffer): string {
 
 export type ExtractTextOptions = {
   signal?: AbortSignal;
+  /** Explicit per-call policy; omitted Web calls continue to use system settings. */
+  ocrMode?: "off" | "local" | "vision";
   /** Explicitly inspect all PDF pages as images when the text layer loses layout or content. */
   pdfMode?: "auto" | "image";
 };
@@ -1009,11 +1011,12 @@ async function extractFileContent(
         options?.signal?.throwIfAborted();
         if (err instanceof PdfNoTextError || err instanceof PdfPartialTextError) {
           try {
+            const ocrArgs: [("off" | "local" | "vision")?] = options?.ocrMode === undefined ? [] : [options.ocrMode];
             const ocrResult = err instanceof PdfPartialTextError
-              ? await recognizeMixedPdf(data, err.pageTexts, err.pageNumbers, options?.signal)
+              ? await recognizeMixedPdf(data, err.pageTexts, err.pageNumbers, options?.signal, ...ocrArgs)
               : options?.pdfMode === "image"
-                ? await recognizeScannedPdf(data, options?.signal, "requested")
-              : await recognizeScannedPdf(data, options?.signal);
+                ? await recognizeScannedPdf(data, options?.signal, "requested", ...ocrArgs)
+              : options?.ocrMode === undefined ? await recognizeScannedPdf(data, options?.signal) : await recognizeScannedPdf(data, options?.signal, "scanned", options.ocrMode);
             if (exceedsMaxChars(ocrResult.text, MAX_TEXT_CHARS)) {
               throw new FileFormatError(`PDF 提取文本不得超过 ${MAX_TEXT_CHARS} 字符`);
             }
@@ -1032,7 +1035,8 @@ async function extractFileContent(
               : new FileFormatError(
                   ocrErr instanceof Error
                     ? `${options?.pdfMode === "image" ? "PDF 图片" : "扫描版 PDF"}识别失败：${ocrErr.message}`
-                    : "扫描版 PDF OCR 识别失败"
+                    : "扫描版 PDF OCR 识别失败",
+                  { cause: ocrErr }
                 );
           }
         }
@@ -1048,7 +1052,7 @@ async function extractFileContent(
     case ".webp":
     case ".bmp": {
       try {
-        const ocrResult = await recognizeImage(data, options?.signal);
+        const ocrResult = options?.ocrMode === undefined ? await recognizeImage(data, options?.signal) : await recognizeImage(data, options?.signal, options.ocrMode);
         if (exceedsMaxChars(ocrResult.text, MAX_TEXT_CHARS)) {
           throw new FileFormatError(`图片提取文本不得超过 ${MAX_TEXT_CHARS} 字符`);
         }
@@ -1067,7 +1071,8 @@ async function extractFileContent(
           : new FileFormatError(
               ocrErr instanceof Error
                 ? `图片识别失败：${ocrErr.message}`
-                : "图片 OCR 识别失败"
+                : "图片 OCR 识别失败",
+              { cause: ocrErr }
             );
       }
     }

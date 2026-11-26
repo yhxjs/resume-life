@@ -60,14 +60,15 @@ it("backs up independent notes, restores their exact content and invalidates old
 
 it("restores a v10 backup with empty supplementary notes while preserving the original notebook snapshot", async () => {
   const input = await records();
-  const noteRows = input.filter(record => record.kind === "row" && record.table === "notebook_notes").length;
-  const legacy = input.filter(record => record.kind !== "row" || record.table !== "notebook_notes").map(record => {
+  const absent = new Set(["notebook_notes", "project_repository_evidence"]);
+  const noteRows = input.filter(record => record.kind === "row" && absent.has(record.table)).length;
+  const legacy = input.filter(record => record.kind !== "row" || !absent.has(record.table)).map(record => {
     if (record.kind === "manifest") {
-      const sequences = { ...record.sequences }; delete sequences.notebook_notes;
-      return { ...record, dbVersion: 10, tables: record.tables.filter(table => table !== "notebook_notes"), sequences };
+      const sequences = { ...record.sequences }; delete sequences.notebook_notes; delete sequences.project_repository_evidence;
+      return { ...record, dbVersion: 10, tables: record.tables.filter(table => !absent.has(table)), sequences };
     }
     if (record.kind === "end") {
-      const stats = { ...record.stats }; delete stats.notebook_notes;
+      const stats = { ...record.stats }; delete stats.notebook_notes; delete stats.project_repository_evidence;
       return { ...record, stats, totalRecords: record.totalRecords - noteRows };
     }
     return record;

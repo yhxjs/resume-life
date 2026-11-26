@@ -1,5 +1,6 @@
 import { readMcpConfig, permittedMcpTools, toolAccess, mcpPresets, MCP_SERVER_VERSION } from "../src/mcp/config.mjs";
 import { readMcpRepositoryRoots } from "../src/mcp/repository-config.mjs";
+import { readMcpCachePolicy } from "../src/mcp/cache-config.mjs";
 import { Console } from "node:console";
 import fs from "node:fs";
 import path from "node:path";
@@ -44,6 +45,7 @@ async function main() {
   catch { throw new Error("项目依赖不完整，请在项目目录执行 npm ci。"); }
   try { await import("node:sqlite"); }
   catch { throw new Error("当前 Node 不支持 node:sqlite，请检查运行时安装。"); }
+  const cachePolicy = readMcpCachePolicy();
 
   if (mode === "doctor") {
     const config = readMcpConfig();
@@ -51,7 +53,7 @@ async function main() {
     // This check intentionally does not open, initialize or migrate a database.
     const enabledTools = permittedMcpTools(config);
     console.log(JSON.stringify({ ok: true, serverVersion: MCP_SERVER_VERSION, availablePresets: Object.keys(mcpPresets), node: process.version, project: root, dataDirectory: directory,
-      databaseExists: fs.existsSync(databasePath), repositoryRoots,
+      databaseExists: fs.existsSync(databasePath), repositoryRoots, cachePolicy,
       writeEnabled: config.writeEnabled, llmEnabled: config.llmEnabled, timeoutMs: config.timeoutMs,
       allowedTools: config.allowlist === null ? null : [...config.allowlist],
       enabledTools, toolCount: enabledTools.length,
@@ -74,6 +76,7 @@ async function main() {
       RESUME_LIFE_MCP_REPO_ROOTS: JSON.stringify(readMcpRepositoryRoots().map(hostPath)),
       RESUME_LIFE_MCP_WRITE_ENABLED: String(profile?.writeEnabled ?? false), RESUME_LIFE_MCP_LLM_ENABLED: "false",
       RESUME_LIFE_MCP_TIMEOUT_MS: String(timeoutMs),
+      RESUME_LIFE_MCP_CACHE_TTL_HOURS: String(cachePolicy.ttlHours), RESUME_LIFE_MCP_CACHE_MAX_BYTES: String(cachePolicy.maxBytes),
       ...(selected === null ? {} : { RESUME_LIFE_MCP_ALLOWED_TOOLS: selected.join(",") }) };
     const clientTimeoutSec = Math.ceil(timeoutMs / 1000) + 30;
     if (format === "json") console.log(JSON.stringify({ mcpServers: { "resume-life": { command, args, env } } }, null, 2));

@@ -30,10 +30,10 @@ function capture(options: PortfolioExportOptions) {
 export function getPortfolioContext(options: PortfolioExportOptions, page: ContextPageInput) { return inTransaction(() => mcpContextPage(capture(options), page)); }
 export async function exportMcpPortfolio(input: { options: PortfolioExportOptions; expectedRevision: string; idempotencyKey: string }, signal: AbortSignal) {
   const { idempotencyKey, ...payload } = input;
-  return createMcpArtifact("export_portfolio", idempotencyKey, payload, async () => {
+  return createMcpArtifact("export_portfolio", idempotencyKey, payload, async signal => {
     const context = inTransaction(() => { const value = capture(input.options); assertMcpContext(value, input.expectedRevision); return value; });
     const bytes = await createPortfolioZip(context.output, signal);
     return { bytes, filename: `portfolio-${input.options.resumeId}.zip`, mimeType: "application/zip", sourceRevision: mcpContextRevision(context),
       validate: () => assertMcpContext(capture(input.options), input.expectedRevision) };
-  });
+  }, signal);
 }

@@ -7,13 +7,14 @@ import { mcpCreateOnce } from "./mcp-state";
 import { McpOperationError } from "./mcp-errors";
 import { assertDataGeneration } from "./data-generation";
 import { assertOperationActive } from "./operation-deadline";
+import { withMcpWorkLease } from "./mcp-work-leases";
+import { assertMcpCacheCapacity, assertMcpCacheFresh } from "./mcp-cache";
 
 const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
 const MAX_CACHE_BYTES = 2 * MAX_ARTIFACT_BYTES;
 const MAX_CACHE_ENTRIES = 16;
 const verifiedFiles = new Map<string, { fingerprint: string; sha256: string; bytes: Buffer }>();
 let cachedBytes = 0;
-let activeRenders = 0;
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const manifestSchema = z.strictObject({ artifactId: z.string().regex(/^[a-f0-9]{64}$/), creator: z.enum(["export_resume", "export_portfolio"]),
   requestKey: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/), generation: z.string(), inputHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -41,11 +42,12 @@ function load(id: string): Manifest {
 }
 const receiptId = (id: string) => Number.parseInt(id.slice(0, 13), 16) || 1;
 function validateReceipt(manifest: Manifest) {
-  const receipt = getDb().prepare("SELECT generation,input_hash,target_id FROM mcp_creation_receipts WHERE tool=? AND request_key=?")
-    .get(manifest.creator, manifest.requestKey) as { generation: string; input_hash: string; target_id: number } | undefined;
+  const receipt = getDb().prepare("SELECT generation,input_hash,target_id,created_at FROM mcp_creation_receipts WHERE tool=? AND request_key=?")
+    .get(manifest.creator, manifest.requestKey) as { generation: string; input_hash: string; target_id: number; created_at: string } | undefined;
   if (!receipt) throw new McpOperationError("NOT_FOUND", "产物尚未提交或已失效");
   if (manifest.generation !== (dataGeneration() ?? "initial") || receipt.generation !== manifest.generation) throw new McpOperationError("CONFLICT", "数据已恢复，旧导出产物已失效");
   if (receipt.input_hash !== manifest.inputHash || receipt.target_id !== receiptId(manifest.artifactId)) throw new McpOperationError("CONFLICT", "产物与导出回执不一致");
+  assertMcpCacheFresh(receipt.created_at);
 }
 export function artifactDescriptor(manifest: Manifest) {
   return { artifactId: manifest.artifactId, filename: manifest.filename, mimeType: manifest.mimeType, byteLength: manifest.byteLength,
@@ -111,7 +113,7 @@ function verifiedBytes(file: string, manifest: Manifest): Buffer {
 }
 /** Files become readable only with the atomic DB receipt. Restores invalidate receipts and cached files together. */
 export async function createMcpArtifact(creator: Creator, key: string, payload: object,
-  render: () => Promise<{ bytes: Buffer; filename: string; mimeType: string; sourceRevision: string; validate: () => void }>) {
+  render: (signal: AbortSignal) => Promise<{ bytes: Buffer; filename: string; mimeType: string; sourceRevision: string; validate: () => void }>, signal: AbortSignal = new AbortController().signal) {
   const artifactId = hash(JSON.stringify([creator, key]));
   const existing = getDb().prepare("SELECT 1 FROM mcp_creation_receipts WHERE tool=? AND request_key=?").get(creator, key);
   if (existing) {
@@ -119,10 +121,8 @@ export async function createMcpArtifact(creator: Creator, key: string, payload: 
     const manifest = load(artifactId); validateReceipt(manifest); return artifactDescriptor(manifest);
   }
   const generation = dataGeneration() ?? "initial";
-  if (activeRenders >= 2) throw new McpOperationError("BUSY", "导出队列正忙，请稍后重试");
-  activeRenders++;
-  let output: Awaited<ReturnType<typeof render>>;
-  try { output = await render(); } finally { activeRenders--; }
+  return withMcpWorkLease("render", signal, async activeSignal => {
+  const output = await render(activeSignal);
   if (output.bytes.length > MAX_ARTIFACT_BYTES) throw new McpOperationError("INVALID_ARGUMENT", "导出文件超过 20 MiB 上限，请减少选材");
   assertOperationActive(); assertDataGeneration();
   if (generation !== (dataGeneration() ?? "initial")) throw new McpOperationError("CONFLICT", "数据已恢复，请重新读取来源");
@@ -131,11 +131,18 @@ export async function createMcpArtifact(creator: Creator, key: string, payload: 
     const manifest = manifestSchema.parse({ artifactId, creator, requestKey: key, generation, inputHash: hash(JSON.stringify(payload)),
       sourceRevision: output.sourceRevision, filename: output.filename, mimeType: output.mimeType, byteLength: output.bytes.length,
       sha256: hash(output.bytes), createdAt: new Date().toISOString() });
+    assertMcpCacheCapacity(output.bytes.length + Buffer.byteLength(JSON.stringify(manifest)));
     atomicWrite(artifactPath(artifactId, "bin"), output.bytes);
     atomicWrite(artifactPath(artifactId, "json"), JSON.stringify(manifest));
     return { id: receiptId(artifactId) };
   }, () => fs.existsSync(artifactPath(artifactId, "json")) && fs.existsSync(artifactPath(artifactId, "bin")));
   const manifest = load(artifactId); validateReceipt(manifest); return artifactDescriptor(manifest);
+  });
+}
+
+export function recoverMcpArtifact(creator: Creator, key: string) {
+  if (!getDb().prepare("SELECT 1 FROM mcp_creation_receipts WHERE tool=? AND request_key=?").get(creator, key)) return undefined;
+  const manifest = load(hash(JSON.stringify([creator, key]))); validateReceipt(manifest); return artifactDescriptor(manifest);
 }
 export function readMcpArtifact(input: { artifactId: string; offset?: number; length?: number }, authorize: (creator: Creator) => void) {
   const manifest = load(input.artifactId); authorize(manifest.creator); validateReceipt(manifest);

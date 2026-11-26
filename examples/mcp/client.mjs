@@ -3,6 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mcpPresets } from "../../src/mcp/config.mjs";
+import { readContext, readAllPages, readArtifact, recoverReceipt, waitForJob, uploadBytes } from "./helpers.mjs";
 
 const launcher = fileURLToPath(new URL("../../scripts/mcp.mjs", import.meta.url));
 
@@ -37,17 +38,15 @@ export class ResumeLifeClient {
   async readFull(pointer) {
     if (pointer.tool !== "read_record_section") throw new Error("不支持的完整正文入口");
     const { tool, ...identity } = pointer;
-    let offset = 0, expectedRevision;
-    const fragments = [];
-    for (;;) {
-      const part = await this.call(tool, { ...identity, offset, ...(expectedRevision ? { expectedRevision } : {}) });
-      if (part.encoding !== "json/utf-16" || part.offset !== offset || (expectedRevision && part.revision !== expectedRevision)) throw new Error("正文片段与读取版本不符");
-      fragments.push(part.text);
-      if (part.nextOffset === null) return JSON.parse(fragments.join(""));
-      if (part.nextOffset <= offset) throw new Error("正文游标没有推进");
-      offset = part.nextOffset; expectedRevision = part.revision;
-    }
+    return (await this.readContext(tool, identity)).value;
   }
+
+  readContext(name, args = {}, preview = false, options = {}) { return readContext(this.call.bind(this), name, args, preview, options); }
+  readAllPages(name, args = {}, options = {}) { return readAllPages(this.call.bind(this), name, args, options); }
+  readArtifact(artifact, options = {}) { return readArtifact(this.call.bind(this), artifact, options); }
+  recoverReceipt(receipt, options = {}) { return recoverReceipt(this.call.bind(this), receipt, options); }
+  waitForJob(jobId, options = {}) { return waitForJob(this.call.bind(this), jobId, options); }
+  uploadBytes(input, options = {}) { return uploadBytes(this.call.bind(this), input, options); }
 
   async close() { await this.client.close(); }
 }

@@ -1,4 +1,5 @@
 import { isStoredProjectSummary } from "./summary";
+import { createHash } from "node:crypto";
 import { isPreparationCompletion } from "./preparation-plan-types";
 import type { DatabaseSync } from "node:sqlite";
 import { BASIC_REORDERABLE_FIELD_KEYS } from "./modules";
@@ -243,6 +244,12 @@ const fields: Record<string, Record<string, Check>> = {
     }))),
   },
   projects: { summary: json(isStoredProjectSummary) },
+  project_repository_evidence: {
+    repository_key: value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
+    sha256: value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
+    material_snapshot: json(object({ id: value => Number.isSafeInteger(value) && (value as number) > 0, title: string, filename: string, content: string })),
+    previous_material_snapshot: nullable(json(object({ id: value => Number.isSafeInteger(value) && (value as number) > 0, title: string, filename: string, content: string }))),
+  },
   project_summary_history: {
     summary: json(isStoredProjectSummary),
     ai_baseline: json(isStoredSummaryAiBaseline),
@@ -324,6 +331,12 @@ export function validateProjectMaterialTableProvenance(
   database: DatabaseSync,
   InvalidData: new (message: string) => Error = Error,
 ): void {
+  if (database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_repository_evidence'").get()) {
+    for (const row of database.prepare("SELECT e.id,e.project_id,e.sha256,e.content,m.project_id AS material_project FROM project_repository_evidence e LEFT JOIN project_materials m ON m.id=e.material_id").iterate()) {
+      if (typeof row.content !== "string" || createHash("sha256").update(row.content).digest("hex") !== row.sha256 ||
+          (row.material_project !== null && row.material_project !== row.project_id)) throw new InvalidData("项目仓库证据历史无效：id=" + String(row.id));
+    }
+  }
   const rows = database.prepare(`SELECT p.material_id, p.provenance, m.content
     FROM project_material_table_provenance p LEFT JOIN project_materials m ON m.id = p.material_id`);
   for (const row of rows.iterate()) {

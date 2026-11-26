@@ -51,6 +51,17 @@ it("preserves repository restrictions in independent clients and rejects relativ
   await expect(launch(["config"], { RESUME_LIFE_MCP_REPO_ROOTS: '["relative"]' })).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("RESUME_LIFE_MCP_REPO_ROOTS") });
 });
 
+it("preserves cache limits and rejects invalid policy before touching a database", async () => {
+  const env = { RESUME_LIFE_MCP_CACHE_TTL_HOURS: "24", RESUME_LIFE_MCP_CACHE_MAX_BYTES: "1048576" };
+  const generated = JSON.parse((await launch(["config"], env)).stdout).mcpServers["resume-life"];
+  expect(generated.env).toMatchObject(env);
+  expect(JSON.parse((await launch(["doctor"], env)).stdout).cachePolicy).toMatchObject({ ttlHours: 24, maxBytes: 1048576 });
+  for (const mode of ["config", "doctor", "serve"]) {
+    await expect(launch([mode], { RESUME_LIFE_MCP_CACHE_TTL_HOURS: "0" })).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("RESUME_LIFE_MCP_CACHE_TTL_HOURS") });
+  }
+  expect(fs.existsSync(path.join(directory, "new-data"))).toBe(false);
+});
+
 it.each(["readonly", "preparation", "collaboration", "training", "authoring"] as const)("generates the %s preset with its exact capability inventory", async preset => {
   const generated = JSON.parse((await launch(["config", "json", preset], { RESUME_LIFE_MCP_ALLOWED_TOOLS: undefined })).stdout).mcpServers["resume-life"];
   expect(generated.env.RESUME_LIFE_MCP_WRITE_ENABLED).toBe(String(mcpPresets[preset].writeEnabled));

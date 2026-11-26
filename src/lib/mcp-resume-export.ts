@@ -67,7 +67,7 @@ export function getResumeExportContext(source: ResumeExportSource, page: Context
 }
 export async function exportMcpResume(input: { source: ResumeExportSource; format: "markdown" | "pdf" | "docx"; expectedRevision: string; idempotencyKey: string }, signal: AbortSignal) {
   const { idempotencyKey, ...payload } = input;
-  return createMcpArtifact("export_resume", idempotencyKey, payload, async () => {
+  return createMcpArtifact("export_resume", idempotencyKey, payload, async signal => {
     const prepared = inTransaction(() => { const value = prepare(input.source); assertMcpContext(value.context, input.expectedRevision); return value; });
     if (!prepared.context.canExport) throw new McpOperationError("CONFLICT", "导出存在未核对阻塞项，请读取导出上下文");
     const { data, avatarBytes } = prepared;
@@ -79,5 +79,5 @@ export async function exportMcpResume(input: { source: ResumeExportSource; forma
     return { bytes, filename: `resume-${input.source.resumeId}${input.source.versionId ? `-v${input.source.versionId}` : "-draft"}.${input.format === "markdown" ? "md" : input.format}`,
       mimeType: input.format === "markdown" ? "text/markdown; charset=utf-8" : input.format === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       sourceRevision: mcpContextRevision(prepared.context), validate: () => assertMcpContext(prepare(input.source).context, input.expectedRevision) };
-  });
+  }, signal);
 }

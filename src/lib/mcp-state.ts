@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { dataGeneration, getDb, inTransaction, now } from "./db";
 import { withoutWaitingForLock } from "./operation-deadline";
 import { McpOperationError } from "./mcp-errors";
+import { assertMcpCacheCapacity, assertMcpCacheFresh } from "./mcp-cache";
 
 /** Receipt and business mutation commit together. Keep tombstones across deletion/restore. */
 export function mcpCreateOnce(tool: string, key: string, input: object,
@@ -47,6 +48,7 @@ export function mcpCreateWithResult<T extends { id: number }>(tool: string, key:
     if (created) {
       const result = JSON.stringify(created);
       if (Buffer.byteLength(result) > 2 * 1024 * 1024) throw new McpOperationError("INVALID_ARGUMENT", "批量操作结果过大，请分批提交");
+      assertMcpCacheCapacity(Buffer.byteLength(result));
       getDb().prepare("INSERT INTO mcp_operation_results(tool,request_key,result_json) VALUES(?,?,?)").run(tool, key, result);
       return created;
     }
@@ -55,11 +57,12 @@ export function mcpCreateWithResult<T extends { id: number }>(tool: string, key:
 }
 
 export function readMcpOperationResult(tool: string, key: string): object {
-  const row = getDb().prepare(`SELECT r.generation,o.result_json FROM mcp_creation_receipts r
+  const row = getDb().prepare(`SELECT r.generation,r.created_at,o.result_json FROM mcp_creation_receipts r
     LEFT JOIN mcp_operation_results o ON o.tool=r.tool AND o.request_key=r.request_key WHERE r.tool=? AND r.request_key=?`)
-    .get(tool, key) as { generation: string; result_json: string | null } | undefined;
+    .get(tool, key) as { generation: string; created_at: string; result_json: string | null } | undefined;
   if (!row) throw new McpOperationError("NOT_FOUND", "操作回执不存在");
   if (row.generation !== (dataGeneration() ?? "initial")) throw new McpOperationError("CONFLICT", "数据已恢复，旧批量结果失效");
   if (!row.result_json) throw new McpOperationError("NOT_FOUND", "操作结果已失效");
+  assertMcpCacheFresh(row.created_at);
   return JSON.parse(row.result_json) as object;
 }

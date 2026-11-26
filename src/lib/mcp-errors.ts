@@ -25,6 +25,7 @@ import { PortfolioError } from "./portfolio-export-budget";
 import { CorruptedTemplateError } from "./custom-templates";
 import { PdfExportBusyError, PdfExportCancelledError, PdfExportTimeoutError } from "./pdf-render";
 import { RequestTooLargeError, RequestFormatError } from "./request-limits";
+import { AvatarInputError } from "./avatar-upload";
 
 /** Stable machine codes for MCP clients; messages contain no model/provider payloads. */
 export const MCP_ERROR_CODES = ["INVALID_ARGUMENT", "NOT_FOUND", "CONFLICT", "FORBIDDEN", "CONFIGURATION", "BUSY", "CANCELLED", "TIMEOUT", "MODEL_OUTPUT", "INTERNAL"] as const;
@@ -39,6 +40,7 @@ export class McpOperationError extends Error {
 }
 
 export function classifyMcpError(error: unknown): { code: McpErrorCode; message: string } {
+  if (error instanceof AvatarInputError) return { code: "INVALID_ARGUMENT", message: error.message };
   if (error instanceof McpOperationError) return { code: error.code, message: error.message };
   if (error instanceof PdfExportBusyError) return { code: "BUSY", message: error.message };
   if (error instanceof PdfExportCancelledError) return { code: "CANCELLED", message: error.message };

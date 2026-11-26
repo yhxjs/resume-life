@@ -9,6 +9,10 @@ import { dataGeneration } from "@/lib/db";
 import { assertDataGeneration, DataGenerationConflictError, withDataGenerationScope } from "@/lib/data-generation";
 import { updateMcpApplication, setMcpPreparationStep } from "@/lib/mcp-write";
 import { registerWorkflowTools } from "./workflows";
+import { registerJobTools } from "./job-tools";
+import { registerSearchTools } from "./search-tools";
+import { registerFileImportTools } from "./file-import-tools";
+import { registerTemplateAvatarTools } from "./template-avatar-tools";
 import { registerResumeLifecycleTools } from "./resume-lifecycle-tools";
 import { registerExportTools } from "./export-tools";
 import { registerKnowledgeTools } from "./knowledge-tools";
@@ -87,6 +91,10 @@ function parsePositiveId(value: string | string[] | undefined): number {
 export function createResumeLifeMcpServer(config = readMcpConfig()) {
   const server = new McpServer({ name: "resume-life", version: MCP_SERVER_VERSION }, { maxToolInputElements: 1_000 });
   const tools = new McpTools(server, config);
+  registerJobTools(tools);
+  registerSearchTools(tools);
+  registerFileImportTools(tools);
+  registerTemplateAvatarTools(tools);
 
   tools.register("search_records", {
     title: "搜索求职资料",

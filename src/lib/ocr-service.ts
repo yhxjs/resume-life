@@ -83,7 +83,8 @@ export async function recognizeMixedPdf(
   pdfBuffer: Buffer,
   pageTexts: string[],
   pageNumbers: number[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  modeOverride?: OcrMode
 ): Promise<{ text: string; engine: "vision" | "local" | null; pageCount: number }> {
   signal?.throwIfAborted();
   // 只渲染缺少文字层且可能有图形的页，原页号与整批像素/页数预算仍受校验。
@@ -106,7 +107,7 @@ export async function recognizeMixedPdf(
   }
   if (!groups.length) return { text: pageTexts.join("\n\n").trim(), engine: null, pageCount: 0 };
 
-  const mode = (readSettings().ocr_mode || "auto") as OcrMode;
+  const mode = modeOverride ?? (readSettings().ocr_mode || "auto") as OcrMode;
   if (mode === "off") {
     throw new FileFormatError("PDF 部分页面没有可选文字，系统当前已关闭 OCR 识别。请开启 OCR 或上传完整的文字版 PDF。");
   }
@@ -135,11 +136,11 @@ export async function recognizeMixedPdf(
 export async function recognizeScannedPdf(
   pdfBuffer: Buffer,
   signal?: AbortSignal,
-  reason: "scanned" | "requested" = "scanned"
+  reason: "scanned" | "requested" = "scanned",
+  modeOverride?: OcrMode
 ): Promise<OcrServiceResult> {
   signal?.throwIfAborted();
-  const settings = readSettings();
-  const mode = (settings.ocr_mode || "auto") as OcrMode;
+  const mode = modeOverride ?? (readSettings().ocr_mode || "auto") as OcrMode;
 
   if (mode === "off") {
     throw new FileFormatError(
@@ -185,11 +186,11 @@ export async function recognizeScannedPdf(
  */
 export async function recognizeImage(
   imageBuffer: Buffer,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  modeOverride?: OcrMode
 ): Promise<OcrServiceResult> {
   signal?.throwIfAborted();
-  const settings = readSettings();
-  const mode = (settings.ocr_mode || "auto") as OcrMode;
+  const mode = modeOverride ?? (readSettings().ocr_mode || "auto") as OcrMode;
 
   if (mode === "off") {
     throw new FileFormatError(

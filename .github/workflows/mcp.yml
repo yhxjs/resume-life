@@ -14,9 +14,12 @@ on:
       - 'src/app/api/reviews/**'
       - 'src/app/api/intros/**'
       - 'src/app/api/resumes/**'
+      - 'src/app/api/templates/**'
+      - 'src/app/api/upload/**'
       - 'src/app/api/tools/**'
       - 'examples/mcp/**'
       - 'docs/MCP.md'
+      - 'README.md'
       - 'package*.json'
       - 'tsconfig.json'
       - 'vitest*.mts'
@@ -34,7 +37,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -44,6 +47,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:mcp
+      - run: npm run check:mcp:contract
       - run: >-
           npx vitest run src/lib/__tests__/database-schema.test.ts
           src/lib/__tests__/backup-fixture-versions.integration.test.ts
@@ -59,8 +63,12 @@ jobs:
           src/lib/__tests__/project-drill-table-provenance.integration.test.ts
           src/lib/__tests__/salary-negotiation-stale-context.integration.test.ts
           src/lib/__tests__/salary-creation-requests.integration.test.ts
+          src/lib/__tests__/resume-creation-requests.integration.test.ts
           src/lib/__tests__/defense-drill-context.integration.test.ts
           src/lib/__tests__/series-context.integration.test.ts
           src/lib/__tests__/docs-capability-contract.test.ts
+          src/app/api/templates/__tests__/route.test.ts
+          src/app/api/upload/__tests__/route.test.ts
+          src/lib/__tests__/avatar-lifecycle.integration.test.ts
       - run: npm run example:mcp
       - run: npm run typecheck

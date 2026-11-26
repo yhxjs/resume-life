@@ -1,5 +1,13 @@
 /** Capability policy shared by doctor, the stdio handshake and tools/call. No DB or SDK imports. */
 export const toolAccess = Object.freeze({
+  search_records_page: "read",
+  get_repository_evidence_diff: "read", preview_repository_evidence_update: "read", save_repository_evidence_update: "write",
+  list_repository_evidence_history: "read", get_repository_evidence_version: "read",
+  get_resume_template_context: "read", create_resume_template: "write", preview_resume_template: "read", save_resume_template: "write", get_resume_avatar_context: "read", set_resume_avatar: "write",
+  begin_mcp_upload: "write", append_mcp_upload: "write", complete_mcp_upload: "write", get_mcp_upload: "read",
+  extract_uploaded_file: "write", get_file_extraction: "read", get_file_import_context: "read", submit_file_import: "write", preview_file_import: "read", save_file_import: "write",
+  start_mcp_job: "write", get_mcp_job: "read", list_mcp_jobs: "read", get_mcp_job_result: "read", cancel_mcp_job: "write",
+  preview_mcp_cache_cleanup: "read", cleanup_mcp_cache: "write",
   search_records: "read", list_resumes: "read", get_resume: "read", list_projects: "read", get_project: "read",
   list_applications: "read", get_application: "read", get_preparation_plan: "read", list_interviews: "read", get_interview: "read",
   list_interview_reviews: "read", list_practice_questions: "read", list_practice_sessions: "read", list_notebook: "read",
@@ -40,7 +48,7 @@ export const toolAccess = Object.freeze({
   get_resume_version_context: "read", compare_resume_versions: "read", publish_resume_version: "write", preview_resume_version_branch: "read", branch_resume_version: "write",
 });
 
-export const MCP_SERVER_VERSION = "1.4.0";
+export const MCP_SERVER_VERSION = "1.5.0";
 
 const reads = Object.keys(toolAccess).filter(name => toolAccess[name] === "read");
 const preparationWrites = ["create_application", "update_application", "generate_preparation_plan", "set_preparation_step",
@@ -48,6 +56,8 @@ const preparationWrites = ["create_application", "update_application", "generate
   "update_application_interview", "save_application_interview_questions", "set_preparation_resource"];
 const preset = (tools, writeEnabled) => Object.freeze({ tools: Object.freeze(tools), writeEnabled, llmEnabled: false });
 const commonReads = ["get_workflow_catalog", "search_records", "get_mcp_status", "read_record_section", "list_mcp_operations", "list_resumes", "get_resume", "list_resume_versions",
+  "search_records_page",
+  "get_mcp_job", "list_mcp_jobs", "get_mcp_job_result", "preview_mcp_cache_cleanup",
   "list_projects", "get_project", "list_project_materials"];
 const trainingTools = [...commonReads,
   "get_jargon_generation_context", "save_jargon_result",
@@ -60,6 +70,10 @@ const trainingTools = [...commonReads,
   "start_mock_interview", "answer_mock_interview", "finish_mock_interview", "save_interview_training_result",
   "save_interview_series_result", "answer_series_interview", "finish_series_interview", "save_career_result"];
 const authoringTools = [...commonReads,
+  "get_repository_evidence_diff", "preview_repository_evidence_update", "save_repository_evidence_update", "list_repository_evidence_history", "get_repository_evidence_version",
+  "get_resume_template_context", "create_resume_template", "preview_resume_template", "save_resume_template", "get_resume_avatar_context", "set_resume_avatar",
+  "begin_mcp_upload", "append_mcp_upload", "complete_mcp_upload", "get_mcp_upload", "extract_uploaded_file", "get_file_extraction", "get_file_import_context", "submit_file_import", "preview_file_import", "save_file_import",
+  "start_mcp_job", "cancel_mcp_job",
   "get_portfolio_sources", "get_portfolio_context", "export_portfolio", "get_jargon_generation_context", "save_jargon_result", "list_career_records", "get_career_record",
   "get_project_material_context", "preview_project_material_edit", "save_project_material_edit", "get_repository_catalog", "capture_project_repository", "get_repository_capture", "save_repository_evidence",
   "get_resume_export_context", "export_resume", "read_export_artifact",

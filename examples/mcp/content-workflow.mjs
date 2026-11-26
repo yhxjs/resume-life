@@ -1,19 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readContext } from "./helpers.mjs";
+export { readContext } from "./helpers.mjs";
 
 /** Concatenate every UTF-16 page before parsing or generating. A conflict requires a fresh first page. */
-export async function readContext(call, name, args, preview = false) {
-  const first = await call(name, args);
-  let part = first, text = first.text;
-  while (part.nextOffset !== null) {
-    const page = { offset: part.nextOffset, expectedRevision: first.revision };
-    part = await call(name, { ...args, ...(preview ? { page } : page) });
-    assert.equal(part.revision, first.revision);
-    text += part.text;
-  }
-  assert.equal(text.length, first.totalLength);
-  return { revision: first.revision, previewToken: first.previewToken, value: JSON.parse(text) };
-}
 
 // These are synthetic outputs for protocol verification, not generated advice or candidate facts.
 const scores = { depth: 8, structure: 7, authenticity: 9, completeness: 6 };

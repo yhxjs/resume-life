@@ -7,9 +7,13 @@ import { assertDataGeneration, withDataGenerationScope } from "@/lib/data-genera
 import { dataGeneration, getDb } from "@/lib/db";
 import { McpOperationError, classifyMcpError, type McpErrorCode } from "@/lib/mcp-errors";
 import { recordMcpOperation } from "@/lib/mcp-state";
+import { awaitFileExtraction } from "@/lib/mcp-file-extraction-state";
 import { logServerError } from "@/lib/server-errors";
 import { toolOutputSchema } from "./output-schemas";
 import { maintainMcpState } from "@/lib/mcp-generation";
+import { startMcpJob } from "@/lib/mcp-jobs";
+import { maintainMcpCache } from "@/lib/mcp-cache";
+import { MCP_JOB_OPERATIONS, recoverJobResult } from "./job-tools";
 
 type ToolConfig<T extends z.ZodType> = { title: string; description: string; inputSchema: T; annotations: ToolAnnotations };
 const schemaJson = (schema: ReturnType<typeof toolOutputSchema>) => z.toJSONSchema(schema);
@@ -50,7 +54,7 @@ export class McpTools {
     this.maintenanceTimer = setTimeout(() => {
       this.maintenanceTimer = undefined;
       if (this.closed) return;
-      try { withoutWaitingForLock(() => maintainMcpState()); }
+      try { withoutWaitingForLock(() => { maintainMcpState(); maintainMcpCache(); }); }
       catch (error) { logServerError("mcp.maintenance", error); }
       this.scheduleMaintenance(60_000);
     }, delay);
@@ -59,6 +63,27 @@ export class McpTools {
 
   permits(...names: (keyof typeof toolAccess)[]): boolean {
     return names.every(name => this.enabledNames.has(name));
+  }
+  serverModelsEnabled(): boolean { return this.config.llmEnabled; }
+
+  startJob(input: { operation: keyof typeof MCP_JOB_OPERATIONS; arguments: Record<string, unknown>; timeoutMs?: number }, ctx: ServerContext) {
+    const entry = this.entries.get(input.operation);
+    const requiredTools: (keyof typeof toolAccess)[] = [...MCP_JOB_OPERATIONS[input.operation]];
+    if (input.operation === "capture_project_repository" && input.arguments.baselineCaptureKey !== undefined) requiredTools.push("get_repository_capture");
+    if (input.operation === "extract_uploaded_file" && input.arguments.ocrMode === "vision" && !this.config.llmEnabled) throw new McpOperationError("FORBIDDEN", "视觉 OCR 需要显式启用服务端模型");
+    if (!entry?.enabled || !requiredTools.every(name => this.permits(name))) throw new McpOperationError("FORBIDDEN", "任务操作或来源工具未获授权");
+    if (!inputWithinBudget(input.arguments)) throw new McpOperationError("INVALID_ARGUMENT", "任务参数超过上限");
+    const parsed = entry.schema.safeParse(input.arguments);
+    if (!parsed.success) throw new McpOperationError("INVALID_ARGUMENT", "任务参数不符合原工具输入契约");
+    return startMcpJob({ operation: input.operation, payload: parsed.data as Record<string, unknown>, requiredTools, timeoutMs: input.timeoutMs ?? this.config.timeoutMs }, async signal => {
+      const run = () => entry.run(parsed.data, { ...ctx, mcpReq: { ...ctx.mcpReq, signal } });
+      const result = await (input.operation === "extract_uploaded_file" ? awaitFileExtraction(run, signal) : run());
+      if (result.isError) throw new McpOperationError("INTERNAL", "任务执行未返回有效结果");
+      const content = result.content.find(item => item.type === "text");
+      const data = JSON.parse(content?.type === "text" ? content.text : "{}");
+      entry.output.parse({ ok: true, data, meta: { requestId: randomUUID(), durationMs: 0 } });
+      return data as object;
+    }, recoverJobResult);
   }
 
   register<T extends z.ZodType>(name: keyof typeof toolAccess, config: ToolConfig<T>, run: (input: z.output<T>, ctx: ServerContext) => Promise<CallToolResult>) {

@@ -1,25 +1,10 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readContext } from "./content-workflow.mjs";
+import { readArtifact } from "./helpers.mjs";
+export { readArtifact } from "./helpers.mjs";
 
 /** Binary offsets count bytes; decode each base64 chunk before concatenating. */
-export async function readArtifact(call, artifact) {
-  const parts = [];
-  let offset = 0;
-  for (;;) {
-    const page = await call("read_export_artifact", { artifactId: artifact.artifactId, offset });
-    assert.equal(page.offset, offset);
-    assert.equal(page.sha256, artifact.sha256);
-    parts.push(Buffer.from(page.data, "base64"));
-    if (page.nextOffset === null) break;
-    assert.ok(page.nextOffset > offset);
-    offset = page.nextOffset;
-  }
-  const bytes = Buffer.concat(parts);
-  assert.equal(bytes.length, artifact.byteLength);
-  assert.equal(createHash("sha256").update(bytes).digest("hex"), artifact.sha256);
-  return bytes;
-}
 
 /** Synthetic candidate facts and model output; this example never calls a provider. */
 export async function runDeliveryWorkflow(call, { resumeId: originalId, projectId, prefix = randomUUID() }) {

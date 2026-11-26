@@ -386,7 +386,7 @@ it("exports the previewed anonymized portfolio ZIP and invalidates changed selec
 
 it("discovers all workflows with actionable missing permissions and matching presets", async () => {
   const catalog = await context("get_workflow_catalog", {});
-  expect(catalog.value.workflows).toHaveLength(9);
+  expect(catalog.value.workflows.map((row: { id: string }) => row.id)).toEqual(expect.arrayContaining(["intro-generation", "project-summary", "practice-generation", "review-practice", "series-create", "series-round", "series-advance", "series-finalize", "salary-training", "resume-delivery"]));
   expect(catalog.value.workflows.every((row: { available: boolean }) => row.available)).toBe(true);
   expect(catalog.value.workflows.find((row: { id: string }) => row.id === "resume-delivery").compatiblePresets).toContain("collaboration");
   await connect(null, false);

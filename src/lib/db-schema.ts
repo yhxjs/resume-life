@@ -1,10 +1,74 @@
 import { DatabaseSync } from "node:sqlite";
 import { createSearchIndexes, SEARCH_INDEX_OBJECT_NAMES } from "./search-index";
 
-export const CURRENT_DB_VERSION = 12;
+export const CURRENT_DB_VERSION = 13;
+
+/** Formal evidence history is included in encrypted user backups. */
+const PROJECT_REPOSITORY_EVIDENCE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS project_repository_evidence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  material_id INTEGER REFERENCES project_materials(id) ON DELETE SET NULL,
+  repository_key TEXT NOT NULL,
+  locator TEXT NOT NULL,
+  capture_key TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  change_kind TEXT NOT NULL CHECK (change_kind IN ('added','modified','deleted')),
+  sha256 TEXT NOT NULL,
+  truncated INTEGER NOT NULL CHECK (truncated IN (0,1)),
+  content TEXT NOT NULL,
+  material_snapshot TEXT NOT NULL CHECK (json_valid(material_snapshot)),
+  previous_material_snapshot TEXT CHECK (previous_material_snapshot IS NULL OR json_valid(previous_material_snapshot)),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_repository_evidence_source ON project_repository_evidence(project_id,repository_key,locator,id DESC);
+`;
 
 /** Local MCP receipts/drafts/audit metadata are deliberately excluded from user backups. */
 const MCP_STATE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS mcp_uploads (
+  upload_id TEXT PRIMARY KEY NOT NULL,
+  generation TEXT NOT NULL,
+  purpose TEXT NOT NULL CHECK (purpose IN ('resume','project','avatar')),
+  filename TEXT NOT NULL,
+  byte_length INTEGER NOT NULL CHECK (byte_length BETWEEN 1 AND 10485760),
+  sha256 TEXT NOT NULL,
+  received_bytes INTEGER NOT NULL DEFAULT 0 CHECK (received_bytes >= 0),
+  status TEXT NOT NULL CHECK (status IN ('uploading','complete')),
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mcp_upload_chunks (
+  upload_id TEXT NOT NULL REFERENCES mcp_uploads(upload_id) ON DELETE CASCADE,
+  offset INTEGER NOT NULL CHECK (offset >= 0),
+  bytes BLOB NOT NULL,
+  PRIMARY KEY(upload_id,offset)
+);
+CREATE TABLE IF NOT EXISTS mcp_jobs (
+  job_id TEXT PRIMARY KEY NOT NULL,
+  operation TEXT NOT NULL,
+  request_key TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  payload_json TEXT CHECK (payload_json IS NULL OR json_valid(payload_json)),
+  required_tools TEXT NOT NULL CHECK (json_valid(required_tools)),
+  status TEXT NOT NULL CHECK (status IN ('running','succeeded','failed','cancelled','interrupted')),
+  owner_token TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  deadline_at TEXT NOT NULL,
+  result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+  error_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(operation,request_key)
+);
+CREATE TABLE IF NOT EXISTS mcp_work_leases (
+  token TEXT PRIMARY KEY NOT NULL,
+  resource TEXT NOT NULL CHECK (resource IN ('render','capture','parse')),
+  generation TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  expires_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS mcp_creation_receipts (
   tool TEXT NOT NULL,
   request_key TEXT NOT NULL,
@@ -264,6 +328,8 @@ CREATE TABLE IF NOT EXISTS project_materials (
 );
 
 ${PROJECT_MATERIAL_TABLE_PROVENANCE_SCHEMA_SQL}
+
+${PROJECT_REPOSITORY_EVIDENCE_SCHEMA_SQL}
 
 CREATE TABLE IF NOT EXISTS project_summary_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -798,7 +864,8 @@ export function validateDatabaseSchema(database: DatabaseSync, version = CURRENT
     !(version < 9 && ["mcp_creation_receipts", "mcp_operation_logs", "mcp_drafts"].includes(table)) &&
     !(version < 10 && table === "mcp_generation_requests") &&
     !(version < 11 && ["notebook_notes", "mcp_generation_progress"].includes(table)) &&
-    !(version < 12 && table === "mcp_operation_results");
+    !(version < 12 && table === "mcp_operation_results") &&
+    !(version < 13 && ["mcp_jobs", "mcp_work_leases", "mcp_uploads", "mcp_upload_chunks", "project_repository_evidence"].includes(table));
   const expectedTables = [...EXPECTED_SCHEMA.keys()].filter(included);
   const actualTables = (database
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
@@ -861,7 +928,7 @@ export function rollbackIgnoringAutoRollback(
 
 export function initializeDatabase(database: DatabaseSync): void {
   const version = database.prepare("PRAGMA user_version").get() as { user_version: number };
-  if (![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, CURRENT_DB_VERSION].includes(version.user_version)) {
+  if (![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, CURRENT_DB_VERSION].includes(version.user_version)) {
     throw new Error(`不支持数据库版本 ${version.user_version}：仅支持数据库版本 ${CURRENT_DB_VERSION}`);
   }
   if (version.user_version !== 0) {
@@ -874,12 +941,13 @@ export function initializeDatabase(database: DatabaseSync): void {
     try {
       // 取得写锁后重验，支持多个进程同时打开同一份旧版本库。
       const locked = database.prepare("PRAGMA user_version").get() as { user_version: number };
-      if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
+      if (![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, CURRENT_DB_VERSION].includes(locked.user_version)) throw new Error("数据库版本已改变");
       validateDatabaseSchema(database, locked.user_version);
       database.exec(SALARY_REQUEST_SCHEMA_SQL);
       database.exec(RESUME_REQUEST_SCHEMA_SQL);
       database.exec(INTERVIEW_RECAP_CONTEXT_SCHEMA_SQL);
       database.exec(PROJECT_MATERIAL_TABLE_PROVENANCE_SCHEMA_SQL);
+      database.exec(PROJECT_REPOSITORY_EVIDENCE_SCHEMA_SQL);
       database.exec(RESUME_IMPORT_SOURCE_SCHEMA_SQL);
       database.exec(PREPARATION_PLAN_SCHEMA_SQL);
       database.exec(INTERVIEW_QUESTION_GRAPH_SCHEMA_SQL);

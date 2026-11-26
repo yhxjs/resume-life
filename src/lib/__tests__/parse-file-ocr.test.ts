@@ -89,4 +89,14 @@ describe("parse-file.ts 扫描版 PDF 与图片 OCR 触发集成", () => {
     const fakePdf = Buffer.from("scanned-pdf-data");
     await expect(extractTextFromFile("large.pdf", fakePdf)).rejects.toThrow("不得超过 200000 字符");
   });
+
+  it.each(["png", "pdf"])("保留 %s OCR 服务错误的 cause，同时保留网页格式错误提示", async extension => {
+    const failure = new Error("provider unavailable");
+    vi.spyOn(sandbox, "runInSandboxedProcess").mockRejectedValueOnce(new PdfNoTextError());
+    vi.mocked(ocrService.recognizeImage).mockRejectedValueOnce(failure);
+    vi.mocked(ocrService.recognizeScannedPdf).mockRejectedValueOnce(failure);
+    await expect(extractContentFromFile(`resume.${extension}`, Buffer.from("fixture"))).rejects.toMatchObject({
+      name: "FileFormatError", cause: failure, message: expect.stringContaining("识别失败：provider unavailable"),
+    });
+  });
 });

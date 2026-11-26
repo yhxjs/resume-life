@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readMcpRepositoryRoots } from "@/mcp/repository-config.mjs";
 import { getDb, inTransaction } from "./db";
 import { loadProjectRow } from "./projects";
-import { createProjectMaterial, iterateProjectMaterialSources, loadProjectMaterial, updateProjectMaterial } from "./project-materials";
+import { iterateProjectMaterialSources, loadProjectMaterial, updateProjectMaterial } from "./project-materials";
 import { assertProjectMaterial, assertProjectMaterialTitle } from "./request-limits";
 import { validateRepoPaths } from "./repo-scanner/path-validator";
 import { collectRepoSourceSnapshot } from "./repo-scanner/source-snapshot";
@@ -12,6 +12,10 @@ import { assertMcpContext, mcpContextPage, mcpContextRevision, type ContextPageI
 import { mcpRevision } from "./mcp-revision";
 import { mcpCreateOnce, mcpCreateWithResult, readMcpOperationResult } from "./mcp-state";
 import { McpOperationError } from "./mcp-errors";
+import { withMcpWorkLease } from "./mcp-work-leases";
+import { upsertRepositoryEvidence } from "./repository-evidence-store";
+import { observeMissingRepositoryFile } from "./repo-scanner/source-presence";
+import { repoRootPathError } from "./repo-scanner/path-policy";
 
 function capture(projectId: number, materialId?: number) {
   const project = loadProjectRow(projectId);
@@ -60,26 +64,38 @@ function repositoryCatalog() {
   return { repositories, instructions: "只能按配置目录的 index 采集。未配置时请在客户端环境中设置 RESUME_LIFE_MCP_REPO_ROOTS。采集复用受限源码读取器，不执行仓库程序或调用模型；扫描有篇幅、文件类型与目录边界，未采集部分不能视为不存在。" };
 }
 export function getRepositoryCatalog(page: ContextPageInput) { return mcpContextPage(repositoryCatalog(), page); }
-type RepositoryCapture = { id: number; root: string; repositoryName: string; capturedAt: string; snapshot: string;
+export type RepositoryCapture = { id: number; root: string; repositoryName: string; capturedAt: string; snapshot: string;
+  baselineCaptureKey?: string; missingFiles?: { locator: string; status: "deleted" | "not-captured" }[];
   files: { index: number; locator: string; content: string; sha256: string; truncated: boolean }[] };
-type CaptureInput = { projectId: number; repositoryIndex: number; expectedCatalogRevision: string; expectedProjectRevision: string; idempotencyKey: string };
+type CaptureInput = { projectId: number; repositoryIndex: number; expectedCatalogRevision: string; expectedProjectRevision: string; idempotencyKey: string; baselineCaptureKey?: string };
 function prepareCapture(input: CaptureInput) {
   const catalog = repositoryCatalog(); assertMcpContext(catalog, input.expectedCatalogRevision);
   assertMcpContext(capture(input.projectId), input.expectedProjectRevision);
   const repository = catalog.repositories[input.repositoryIndex];
   if (!repository) throw new McpOperationError("INVALID_ARGUMENT", "所选仓库不在配置目录中");
+  if (input.baselineCaptureKey) {
+    const baseline = readCapture(input.baselineCaptureKey);
+    if (baseline.id !== input.projectId || baseline.root !== repository.path) throw new McpOperationError("INVALID_ARGUMENT", "基准采集不属于同一项目和仓库");
+  }
   const checked = validateRepoPaths([repository.path]);
-  if (!checked.valid || checked.paths[0]?.normalizedPath !== repository.path) throw new McpOperationError("INVALID_ARGUMENT", "配置目录不是可采集的项目仓库");
+  const stat = input.baselineCaptureKey ? fs.lstatSync(repository.path) : null;
+  const knownRoot = !!input.baselineCaptureKey && !repoRootPathError(repository.path) && stat?.isDirectory() && !stat.isSymbolicLink();
+  if ((!checked.valid || checked.paths[0]?.normalizedPath !== repository.path) && !knownRoot) throw new McpOperationError("INVALID_ARGUMENT", "配置目录不是可采集的项目仓库");
   return repository;
 }
 export async function captureProjectRepository(input: CaptureInput, signal: AbortSignal) {
+  const replay = recoverRepositoryCapture(input.idempotencyKey);
+  if (!replay) return withMcpWorkLease("capture", signal, activeSignal => captureRepository(input, activeSignal));
+  return captureRepository(input, signal);
+}
+async function captureRepository(input: CaptureInput, signal: AbortSignal) {
   const { idempotencyKey, ...payload } = input;
   const replay = getDb().prepare("SELECT 1 FROM mcp_creation_receipts WHERE tool='capture_project_repository' AND request_key=?").get(idempotencyKey);
   let collected: RepositoryCapture | undefined;
   if (!replay) {
     const repository = inTransaction(() => prepareCapture(input));
     const snapshot = await collectRepoSourceSnapshot([{ path: repository.path }], signal);
-    if (!snapshot.trim()) throw new McpOperationError("INVALID_ARGUMENT", "仓库中没有可采集的非空源码或文档");
+    if (!snapshot.trim() && !input.baselineCaptureKey) throw new McpOperationError("INVALID_ARGUMENT", "仓库中没有可采集的非空源码或文档");
     const files: RepositoryCapture["files"] = [];
     for (const line of snapshot.split("\n").filter(Boolean)) {
       const row = JSON.parse(line) as { kind?: string; path?: string; content?: string; truncated?: boolean };
@@ -87,6 +103,16 @@ export async function captureProjectRepository(input: CaptureInput, signal: Abor
         locator: `${repository.name}/${row.path}`, content: row.content, truncated: row.truncated === true, sha256: createHash("sha256").update(row.content).digest("hex") });
     }
     collected = { id: input.projectId, root: repository.path, repositoryName: repository.name, capturedAt: new Date().toISOString(), snapshot, files };
+    if (input.baselineCaptureKey) {
+      const baseline = readCapture(input.baselineCaptureKey), captured = new Set(files.map(file => file.locator));
+      const missingFiles: NonNullable<RepositoryCapture["missingFiles"]> = [];
+      for (const file of baseline.files) if (!captured.has(file.locator)) {
+        signal.throwIfAborted();
+        const relative = file.locator.slice(baseline.repositoryName.length + 1);
+        missingFiles.push({ locator: file.locator, status: await observeMissingRepositoryFile(repository.path, relative) });
+      }
+      collected.baselineCaptureKey = input.baselineCaptureKey; collected.missingFiles = missingFiles;
+    }
   }
   const result = mcpCreateWithResult("capture_project_repository", idempotencyKey, payload, () => {
     signal.throwIfAborted(); prepareCapture(input);
@@ -104,6 +130,12 @@ function readCapture(key: string) {
   assertCaptureAllowed(result); return result;
 }
 export function getRepositoryCapture(key: string, page: ContextPageInput) { return inTransaction(() => mcpContextPage(readCapture(key), page)); }
+export function recoverRepositoryCapture(key: string) {
+  if (!getDb().prepare("SELECT 1 FROM mcp_creation_receipts WHERE tool='capture_project_repository' AND request_key=?").get(key)) return undefined;
+  const result = readCapture(key);
+  return { id: result.id, fileCount: result.files.length, capturedAt: result.capturedAt, capture: { tool: "get_repository_capture", idempotencyKey: key } };
+}
+export { readCapture as readRepositoryCapture, capture as captureProjectMaterialContext };
 export function saveRepositoryEvidence(input: { projectId: number; captureKey: string; fileIndexes: number[]; expectedCaptureRevision: string; expectedProjectRevision: string; idempotencyKey: string }) {
   const { idempotencyKey, ...payload } = input;
   const result = mcpCreateWithResult("save_repository_evidence", idempotencyKey, payload, () => {
@@ -111,13 +143,13 @@ export function saveRepositoryEvidence(input: { projectId: number; captureKey: s
     assertMcpContext(capture(input.projectId), input.expectedProjectRevision);
     if (source.id !== input.projectId) throw new McpOperationError("INVALID_ARGUMENT", "采集记录不属于该项目");
     if (new Set(input.fileIndexes).size !== input.fileIndexes.length) throw new McpOperationError("INVALID_ARGUMENT", "文件索引不能重复");
+    const baseline = source.baselineCaptureKey ? readCapture(source.baselineCaptureKey) : source;
     const materialIds = input.fileIndexes.map(index => {
       const file = source.files[index];
       if (!file) throw new McpOperationError("INVALID_ARGUMENT", "所选文件不存在");
-      const content = `仓库证据：${file.locator}\n采集时间：${source.capturedAt}\n片段 SHA-256：${file.sha256}\n范围：${file.truncated ? "已截断，仅包含所采集片段" : "本次采集的文件正文"}。该记录不能证明个人贡献或未采集部分。\n\n${file.content}`;
-      assertProjectMaterial(content);
-      const existing = getDb().prepare("SELECT id FROM project_materials WHERE project_id=? AND filename=? AND content=? ORDER BY id LIMIT 1").get(input.projectId, file.locator, content) as { id: number } | undefined;
-      return existing?.id ?? createProjectMaterial(input.projectId, { title: `代码证据 · ${file.locator}`.slice(0, 200), content, source: "file", filename: file.locator })!;
+      const baselineFile = baseline.files.find(previous => previous.locator === file.locator);
+      return upsertRepositoryEvidence({ projectId: input.projectId, root: source.root, captureKey: input.captureKey, capturedAt: source.capturedAt, file,
+        baseline: baselineFile ? { file: baselineFile, capturedAt: baseline.capturedAt, captureKey: source.baselineCaptureKey ?? input.captureKey } : undefined, allowReplace: false });
     });
     return { id: input.projectId, materialIds };
   }, id => !!loadProjectRow(id));

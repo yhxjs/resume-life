@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { examplePortrait, runApplicationWorkflow } from "../../examples/mcp/workflow.mjs";
+import { toolAccess } from "./config.mjs";
 
 let directory: string;
 let db: import("node:sqlite").DatabaseSync;
@@ -84,7 +85,7 @@ it("runs the reusable complete preparation and interview workflow without server
 
 it("publishes explicit contracts for all tools and mutually exclusive success/failure envelopes", async () => {
   const tools = (await client.listTools()).tools;
-  expect(tools).toHaveLength(136);
+  expect(tools.map(tool => tool.name).sort()).toEqual(Object.keys(toolAccess).sort());
   for (const tool of tools) {
     expect(tool.outputSchema?.type, tool.name).toBe("object");
     expect(tool.outputSchema?.oneOf, tool.name).toHaveLength(2);
@@ -235,7 +236,7 @@ it.each(["jd", "diagnosis", "review"])("requires source read permissions when su
 
 it("keeps the read-only configuration from invoking any of the new writes", async () => {
   await connect(undefined, false, false);
-  expect((await client.listTools()).tools).toHaveLength(83);
+  expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual(Object.keys(toolAccess).filter(name => toolAccess[name as keyof typeof toolAccess] === "read").sort());
   for (const name of ["submit_ai_draft", "set_preparation_resource", "update_application_interview", "bookmark_practice_question", "save_notebook_note", "submit_review", "maintain_mcp_state"]) {
     expect((await call(name)).structuredContent, name).toMatchObject({ error: { code: "FORBIDDEN" } });
   }

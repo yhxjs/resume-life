@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 
-type Limits = { deadline?: number; signal?: AbortSignal; maxLockWaitMs?: number };
+type Limits = { deadline?: number; signal?: AbortSignal; maxLockWaitMs?: number; validate?: () => void };
 const limits = new AsyncLocalStorage<Limits>();
 
 export class OperationTimeoutError extends Error {
@@ -12,10 +12,17 @@ export function withOperationLimits<T>(value: Limits, fn: () => T): T {
   return limits.run(value, fn);
 }
 
+/** Add a durable cancellation/lease check to every committing transaction. */
+export function withOperationGuard<T>(validate: () => void, fn: () => T): T {
+  const current = limits.getStore();
+  return limits.run({ ...current, validate: () => { current?.validate?.(); validate(); } }, fn);
+}
+
 export function assertOperationActive(): void {
   const scope = limits.getStore();
   scope?.signal?.throwIfAborted();
   if (scope?.deadline !== undefined && performance.now() >= scope.deadline) throw new OperationTimeoutError();
+  scope?.validate?.();
 }
 
 export function remainingOperationTimeMs(): number {

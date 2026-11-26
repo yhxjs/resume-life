@@ -9,6 +9,7 @@ import { ResumeLifeClient } from "./client.mjs";
 import { runTrainingWorkflow, resumeTrainingWorkflow } from "./training-workflow.mjs";
 import { runAuthoringWorkflow, runExtendedTrainingWorkflow, resumeContentWorkflow } from "./content-workflow.mjs";
 import { runDeliveryWorkflow, resumeDeliveryWorkflow, verifyConcurrentDelivery } from "./delivery-workflow.mjs";
+import { runRuntimeWorkflow, resumeRuntimeWorkflow } from "./runtime-workflow.mjs";
 
 // Synthetic example results. A real Agent supplies its own model's output after reading the context.
 export const examplePortrait = { role: "本地工具集成工程师", must_skills: [{ name: "SQLite", weight: 8, why: "JD 要求维护本地数据库" }],
@@ -88,9 +89,14 @@ async function main() {
     const peer = await ResumeLifeClient.connect(options);
     try { await verifyConcurrentDelivery((name, args) => client.call(name, args), (name, args) => peer.call(name, args), delivery); }
     finally { await peer.close(); }
+    const runtime = await runRuntimeWorkflow((name, args) => client.call(name, args), { projectId: authoring.projectId,
+      advanceRepository: async () => fs.appendFileSync(path.join(fixture.repositoryRoot, "src", "transaction.ts"), "\nexport const transactionMode = 'immediate';\n") });
+    await client.close(); client = await ResumeLifeClient.connect(options);
+    await resumeRuntimeWorkflow((name, args) => client.call(name, args), runtime);
     console.log(JSON.stringify({ ok: true, isolatedDemo: true, ...result, practiceSessionId: training.session.id, mockInterviewId: training.mock.id,
       authoringPreset: true, trainingPreset: true, seriesId: extended.seriesId, salaryId: extended.salaryId,
-      resumeDelivery: true, repositoryEvidence: true, portfolioExport: true, independentProcessConcurrency: true }, null, 2));
+      resumeDelivery: true, repositoryEvidence: true, portfolioExport: true, independentProcessConcurrency: true,
+      fileImport: true, customTemplate: true, avatarUpload: true, persistentJobs: true, evidenceUpdate: true, pagedSearch: true }, null, 2));
   } finally {
     await client?.close();
     if (path.dirname(path.resolve(temporary)) !== path.resolve(os.tmpdir()) || !path.basename(temporary).startsWith("resume-life-mcp-example-")) throw new Error("Unsafe demo cleanup path");

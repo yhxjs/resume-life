@@ -13,6 +13,7 @@ import { examplePortrait, runApplicationWorkflow } from "../examples/mcp/workflo
 import { resumeTrainingWorkflow, runTrainingWorkflow } from "../examples/mcp/training-workflow.mjs";
 import { runAuthoringWorkflow, runExtendedTrainingWorkflow, resumeContentWorkflow, readContext } from "../examples/mcp/content-workflow.mjs";
 import { runDeliveryWorkflow, resumeDeliveryWorkflow } from "../examples/mcp/delivery-workflow.mjs";
+import { runRuntimeWorkflow, resumeRuntimeWorkflow } from "../examples/mcp/runtime-workflow.mjs";
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -146,12 +147,15 @@ async function main() {
     authoring = await runAuthoringWorkflow(async (name, args) => toolData(await host.call(name, args)), { ...trainingFixture, prefix: "codex-authoring" });
     extended = await runExtendedTrainingWorkflow(async (name, args) => toolData(await host.call(name, args)), { ...trainingFixture, projectId: authoring.projectId, prefix: "codex-extended-training" });
     delivery = await runDeliveryWorkflow(async (name, args) => toolData(await host.call(name, args)), { resumeId: authoring.draftId, projectId: authoring.projectId, prefix: "codex-delivery" });
+    delivery.runtime = await runRuntimeWorkflow(async (name, args) => toolData(await host.call(name, args)), { projectId: authoring.projectId, prefix: "codex-runtime",
+      advanceRepository: async () => fs.appendFileSync(path.join(trainingFixture.repositoryRoot, "src", "transaction.ts"), "\nexport const newMode = 'immediate';\n") });
   } finally { await host.stop(); }
   const recovered = await startCodex(collaboration, "reconnected-client");
   try {
     await resumeTrainingWorkflow(async (name, args) => toolData(await recovered.call(name, args)), training);
     await resumeContentWorkflow(async (name, args) => toolData(await recovered.call(name, args)), authoring, extended);
     await resumeDeliveryWorkflow(async (name, args) => toolData(await recovered.call(name, args)), delivery);
+    await resumeRuntimeWorkflow(async (name, args) => toolData(await recovered.call(name, args)), delivery.runtime);
     const applicationId = result.applicationId;
     const receipt = toolData(await recovered.call("get_ai_generation_request", { idempotencyKey: "codex-full-workflow:portrait" }));
     assert.equal(receipt.phase, "saved");
@@ -194,6 +198,7 @@ async function main() {
       introCreation: true, projectSummary: true, generatedPractice: true, interviewTraining: true, interviewSeries: true, resumeDraft: true, careerTools: true,
       diagnosisAdoption: true, resumePublication: true, resumeFiles: true, resumeLayout: true, bankImport: true,
       notebookOrganization: true, repositoryEvidence: true, jargonDecoding: true, portfolioExport: true,
+      fileImport: true, customTemplate: true, avatarUpload: true, persistentJobs: true, evidenceUpdate: true, pagedSearch: true,
       reconnect: true, revisionConflict: true, backupRestore: backup }, null, 2));
   } finally { await recovered.stop(); }
 }

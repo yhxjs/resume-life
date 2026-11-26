@@ -43,6 +43,7 @@ export const TABLES_CLEAR_ORDER = [
   "intro_versions",
   "intros",
   "project_material_table_provenance",
+  "project_repository_evidence",
   "project_materials",
   "project_summary_history",
   "resume_modules",
@@ -67,7 +68,8 @@ export function backupTablesForDbVersion(version: number, tables: readonly strin
     !(version < 5 && table === "project_material_table_provenance") &&
     !(version < 7 && table === "application_preparation_plans") &&
     !(version < 8 && table === "interview_question_graphs") &&
-    !(version < 11 && table === "notebook_notes"));
+    !(version < 11 && table === "notebook_notes") &&
+    !(version < 13 && table === "project_repository_evidence"));
 }
 
 /** 拥有 AUTOINCREMENT 自增主键的表清单 */
@@ -92,6 +94,7 @@ export const AUTOINCREMENT_TABLES = [
   "resume_modules",
   "projects",
   "project_materials",
+  "project_repository_evidence",
   "project_summary_history",
   "drills",
   "drill_questions",
@@ -376,6 +379,9 @@ export function restoreAllData(
     // Keep creation/generation request tombstones; the new data generation invalidates them.
     db.exec("DELETE FROM mcp_drafts");
     db.exec("DELETE FROM mcp_operation_results");
+    db.exec("UPDATE mcp_jobs SET payload_json=NULL,result_json=NULL,status=CASE WHEN status='running' THEN 'interrupted' ELSE status END,error_code=CASE WHEN status='running' THEN 'CONFLICT' ELSE error_code END");
+    db.exec("DELETE FROM mcp_work_leases");
+    db.exec("DELETE FROM mcp_upload_chunks");
     db.exec("UPDATE mcp_generation_requests SET response_json=NULL");
     // 逆序清空所有数据表。
     for (const table of TABLES_CLEAR_ORDER) {

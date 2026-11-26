@@ -7,8 +7,8 @@ export const UNPARSEABLE_MESSAGE = "文件内容无法解析，请确认文件�
 
 /** 文件解析失败（格式不支持、内容损坏、超出资源上限或超时）时抛出的统一错误 */
 export class FileFormatError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "FileFormatError";
   }
 }
