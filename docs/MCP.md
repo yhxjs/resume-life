@@ -2,7 +2,7 @@
 
 resume-life 提供本机 **stdio MCP Server**，使同一台机器上的 MCP Agent 能在获得用户配置后读取简历和求职数据。当前版本 **1.6.0，共 169 个工具**（102 个只读、64 个业务写入、3 个可选服务端模型工具），数据库 v14。默认只注册只读工具、资源和提示词；不会新增网络监听端口，也不接收浏览器登录 Cookie。
 
-本轮功能和验证范围见 [1.6 实施计划](MCP-1.6-PLAN.md)、[发布验收](MCP-1.6-ACCEPTANCE.md) 与 [Host 兼容说明](MCP-COMPATIBILITY.md)。官方 Tasks 扩展已评估，当前未实现或声明支持；长操作继续使用本文的持久 job 工具。
+Host 兼容性与协议扩展评估见 [Host 兼容说明](MCP-COMPATIBILITY.md)。官方 Tasks 扩展已评估，当前未实现或声明支持；长操作继续使用本文的持久 job 工具。
 
 ## 启动与 MCP Host 配置
 

@@ -145,7 +145,7 @@ npm run check:page-coverage
 
 `npm ci` 会执行固定哈希的 picomatch 安装期补丁，保留上游身份和许可证。`npm run audit:dependencies` 保存原始审计报告并核对补丁与精确政策。2026-11-18 的原始完整报告有 **14 个 high 开发依赖传播节点**，生产依赖为零；限时例外于 **2026-12-18 08:00（香港时间）**到期。新增公告、依赖图变化、哈希漂移或到期均会阻断，详情见 [安全政策](SECURITY.md)。
 
-2026-11-26 的本地验收使用 Windows 与 WSL Ubuntu / Node.js 24.21.0，包含 Linux 全量覆盖率、生产构建与完整网页回归；E2E 夹具修复及复验结果见 [MCP 1.6 验收记录](docs/MCP-1.6-ACCEPTANCE.md)。[GitHub Actions](https://github.com/yhxjs/resume-life/actions/workflows/check.yml) 配置 Linux 完整发布检查及 Windows 检查，本地实跑不代表远端 CI 已执行。
+2026-11-26 的本地验收使用 Windows 与 WSL Ubuntu / Node.js 24.21.0，包含 Linux 全量覆盖率、生产构建与完整网页回归。[GitHub Actions](https://github.com/yhxjs/resume-life/actions/workflows/check.yml) 配置 Linux 完整发布检查及 Windows 检查，本地实跑不代表远端 CI 已执行。
 
 ## 文档
 
